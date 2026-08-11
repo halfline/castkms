@@ -169,6 +169,9 @@ int castkms_create(struct castkms_config *config)
 	struct castkms_device *castkms_device;
 	const char *dev_name;
 
+	if (config->dev)
+		return -EBUSY;
+
 	dev_name = castkms_config_get_device_name(config);
 	fdev = faux_device_create(dev_name, NULL, NULL);
 	if (!fdev)
