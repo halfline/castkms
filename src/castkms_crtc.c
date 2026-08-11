@@ -209,7 +209,7 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 {
 	struct castkms_output *castkms_out;
 	struct drm_crtc *crtc;
-	int ret;
+	int err;
 
 	castkms_out = drmm_crtc_alloc_with_planes(dev, struct castkms_output, crtc,
 					       primary, cursor,
@@ -223,10 +223,10 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 
 	drm_crtc_helper_add(crtc, &castkms_crtc_helper_funcs);
 
-	ret = drm_mode_crtc_set_gamma_size(crtc, CASTKMS_LUT_SIZE);
-	if (ret) {
+	err = drm_mode_crtc_set_gamma_size(crtc, CASTKMS_LUT_SIZE);
+	if (err) {
 		DRM_ERROR("Failed to set gamma size\n");
-		return ERR_PTR(ret);
+		return ERR_PTR(err);
 	}
 
 	drm_crtc_enable_color_mgmt(crtc, 0, false, CASTKMS_LUT_SIZE);
