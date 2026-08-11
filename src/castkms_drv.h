@@ -209,7 +209,7 @@ struct castkms_crtc_state {
  * @period_ns: vblank period, in nanoseconds, used to configure @vblank_hrtimer and to compute
  *	       vblank timestamps
  * @composer_workq: Ordered workqueue for @composer_state.composer_work.
- * @lock: Lock used to protect concurrent access to the composer
+ * @lock: Lock used to protect the current composer state and scheduling
  * @composer_enabled: Protected by @lock, true when the CASTKMS composer is active (crc needed or
  *		      writeback)
  * @composer_state: Protected by @lock, current state of this CASTKMS output

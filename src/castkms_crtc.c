@@ -27,8 +27,6 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 		DRM_ERROR("castkms failure on handling vblank");
 
 	state = output->composer_state;
-	spin_unlock(&output->lock);
-
 	if (state && output->composer_enabled) {
 		u64 frame = drm_crtc_accurate_vblank_count(crtc);
 
@@ -49,6 +47,7 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 		if (!ret)
 			DRM_DEBUG_DRIVER("Composer worker already queued\n");
 	}
+	spin_unlock(&output->lock);
 
 	dma_fence_end_signalling(fence_cookie);
 
