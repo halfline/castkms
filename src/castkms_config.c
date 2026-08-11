@@ -177,7 +177,7 @@ static bool valid_plane_number(const struct castkms_config *config)
 	size_t n_planes;
 
 	n_planes = list_count_nodes((struct list_head *)&config->planes);
-	if (n_planes <= 0 || n_planes >= 32) {
+	if (!n_planes || n_planes >= 32) {
 		drm_info(dev, "The number of planes must be between 1 and 31\n");
 		return false;
 	}
@@ -251,7 +251,7 @@ static bool valid_crtc_number(const struct castkms_config *config)
 	size_t n_crtcs;
 
 	n_crtcs = list_count_nodes((struct list_head *)&config->crtcs);
-	if (n_crtcs <= 0 || n_crtcs >= 32) {
+	if (!n_crtcs || n_crtcs >= 32) {
 		drm_info(dev, "The number of CRTCs must be between 1 and 31\n");
 		return false;
 	}
@@ -265,7 +265,7 @@ static bool valid_encoder_number(const struct castkms_config *config)
 	size_t n_encoders;
 
 	n_encoders = list_count_nodes((struct list_head *)&config->encoders);
-	if (n_encoders <= 0 || n_encoders >= 32) {
+	if (!n_encoders || n_encoders >= 32) {
 		drm_info(dev, "The number of encoders must be between 1 and 31\n");
 		return false;
 	}
@@ -315,7 +315,7 @@ static bool valid_connector_number(const struct castkms_config *config)
 	size_t n_connectors;
 
 	n_connectors = list_count_nodes((struct list_head *)&config->connectors);
-	if (n_connectors <= 0 || n_connectors >= 32) {
+	if (!n_connectors || n_connectors >= 32) {
 		drm_info(dev, "The number of connectors must be between 1 and 31\n");
 		return false;
 	}
