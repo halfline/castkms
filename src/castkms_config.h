@@ -481,7 +481,7 @@ void castkms_config_connector_detach_encoder(struct castkms_config_connector *co
 static inline enum drm_connector_status
 castkms_config_connector_get_status(struct castkms_config_connector *connector_cfg)
 {
-	return connector_cfg->status;
+	return READ_ONCE(connector_cfg->status);
 }
 
 /**
@@ -493,7 +493,7 @@ static inline void
 castkms_config_connector_set_status(struct castkms_config_connector *connector_cfg,
 				 enum drm_connector_status status)
 {
-	connector_cfg->status = status;
+	WRITE_ONCE(connector_cfg->status, status);
 }
 
 #endif /* _CASTKMS_CONFIG_H_ */
