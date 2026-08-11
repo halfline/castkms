@@ -41,72 +41,89 @@ struct castkms_config *castkms_config_default_create(bool enable_cursor,
 	struct castkms_config_crtc *crtc_cfg;
 	struct castkms_config_encoder *encoder_cfg;
 	struct castkms_config_connector *connector_cfg;
-	int n;
+	int n, ret;
 
 	config = castkms_config_create(DEFAULT_DEVICE_NAME);
 	if (IS_ERR(config))
 		return config;
 
 	plane_cfg = castkms_config_create_plane(config);
-	if (IS_ERR(plane_cfg))
+	if (IS_ERR(plane_cfg)) {
+		ret = PTR_ERR(plane_cfg);
 		goto err_alloc;
+	}
 	castkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_PRIMARY);
 
 	crtc_cfg = castkms_config_create_crtc(config);
-	if (IS_ERR(crtc_cfg))
+	if (IS_ERR(crtc_cfg)) {
+		ret = PTR_ERR(crtc_cfg);
 		goto err_alloc;
+	}
 	castkms_config_crtc_set_writeback(crtc_cfg, enable_writeback);
 
-	if (castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg))
+	ret = castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
+	if (ret)
 		goto err_alloc;
 	castkms_config_plane_set_default_pipeline(plane_cfg, enable_plane_pipeline);
 
 	if (enable_overlay) {
 		for (n = 0; n < NUM_OVERLAY_PLANES; n++) {
 			plane_cfg = castkms_config_create_plane(config);
-			if (IS_ERR(plane_cfg))
+			if (IS_ERR(plane_cfg)) {
+				ret = PTR_ERR(plane_cfg);
 				goto err_alloc;
+			}
 
 			castkms_config_plane_set_type(plane_cfg,
 						   DRM_PLANE_TYPE_OVERLAY);
 			castkms_config_plane_set_default_pipeline(plane_cfg, enable_plane_pipeline);
 
-			if (castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg))
+			ret = castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
+			if (ret)
 				goto err_alloc;
 		}
 	}
 
 	if (enable_cursor) {
 		plane_cfg = castkms_config_create_plane(config);
-		if (IS_ERR(plane_cfg))
+		if (IS_ERR(plane_cfg)) {
+			ret = PTR_ERR(plane_cfg);
 			goto err_alloc;
+		}
 
 		castkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_CURSOR);
 		castkms_config_plane_set_default_pipeline(plane_cfg, enable_plane_pipeline);
 
-		if (castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg))
+		ret = castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
+		if (ret)
 			goto err_alloc;
 	}
 
 	encoder_cfg = castkms_config_create_encoder(config);
-	if (IS_ERR(encoder_cfg))
+	if (IS_ERR(encoder_cfg)) {
+		ret = PTR_ERR(encoder_cfg);
 		goto err_alloc;
+	}
 
-	if (castkms_config_encoder_attach_crtc(encoder_cfg, crtc_cfg))
+	ret = castkms_config_encoder_attach_crtc(encoder_cfg, crtc_cfg);
+	if (ret)
 		goto err_alloc;
 
 	connector_cfg = castkms_config_create_connector(config);
-	if (IS_ERR(connector_cfg))
+	if (IS_ERR(connector_cfg)) {
+		ret = PTR_ERR(connector_cfg);
 		goto err_alloc;
+	}
 
-	if (castkms_config_connector_attach_encoder(connector_cfg, encoder_cfg))
+	ret = castkms_config_connector_attach_encoder(connector_cfg, encoder_cfg);
+	if (ret)
 		goto err_alloc;
 
 	return config;
 
 err_alloc:
 	castkms_config_destroy(config);
-	return ERR_PTR(-ENOMEM);
+	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_default_create);
 
