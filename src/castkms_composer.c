@@ -14,8 +14,8 @@
 #include <linux/minmax.h>
 #include <kunit/visibility.h>
 
-#include "vkms_composer.h"
-#include "vkms_luts.h"
+#include "castkms_composer.h"
+#include "castkms_luts.h"
 
 static u16 pre_mul_blend_channel(u16 src, u16 dst, u16 alpha)
 {
@@ -64,7 +64,7 @@ static void fill_background(const struct pixel_argb_u16 *background_color,
 }
 
 // lerp(a, b, t) = a + (b - a) * t
-VISIBLE_IF_KUNIT u16 lerp_u16(u16 a, u16 b, s64 t)
+VISIBLE_IF_KUNIT u16 castkms_lerp_u16(u16 a, u16 b, s64 t)
 {
 	s64 a_fp = drm_int2fixp(a);
 	s64 b_fp = drm_int2fixp(b);
@@ -73,20 +73,20 @@ VISIBLE_IF_KUNIT u16 lerp_u16(u16 a, u16 b, s64 t)
 
 	return drm_fixp2int_round(a_fp + delta);
 }
-EXPORT_SYMBOL_IF_KUNIT(lerp_u16);
+EXPORT_SYMBOL_IF_KUNIT(castkms_lerp_u16);
 
-VISIBLE_IF_KUNIT s64 get_lut_index(const struct vkms_color_lut *lut, u16 channel_value)
+VISIBLE_IF_KUNIT s64 castkms_get_lut_index(const struct castkms_color_lut *lut, u16 channel_value)
 {
 	s64 color_channel_fp = drm_int2fixp(channel_value);
 
 	return drm_fixp_mul(color_channel_fp, lut->channel_value2index_ratio);
 }
-EXPORT_SYMBOL_IF_KUNIT(get_lut_index);
+EXPORT_SYMBOL_IF_KUNIT(castkms_get_lut_index);
 
-VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut, u16 channel_value,
+VISIBLE_IF_KUNIT u16 castkms_apply_lut_to_channel_value(const struct castkms_color_lut *lut, u16 channel_value,
 						enum lut_channel channel)
 {
-	s64 lut_index = get_lut_index(lut, channel_value);
+	s64 lut_index = castkms_get_lut_index(lut, channel_value);
 	u16 *floor_lut_value, *ceil_lut_value;
 	u16 floor_channel_value, ceil_channel_value;
 
@@ -106,13 +106,13 @@ VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut
 	floor_channel_value = floor_lut_value[channel];
 	ceil_channel_value = ceil_lut_value[channel];
 
-	return lerp_u16(floor_channel_value, ceil_channel_value,
+	return castkms_lerp_u16(floor_channel_value, ceil_channel_value,
 			lut_index & DRM_FIXED_DECIMAL_MASK);
 }
-EXPORT_SYMBOL_IF_KUNIT(apply_lut_to_channel_value);
+EXPORT_SYMBOL_IF_KUNIT(castkms_apply_lut_to_channel_value);
 
 
-static void apply_lut(const struct vkms_crtc_state *crtc_state, struct line_buffer *output_buffer)
+static void apply_lut(const struct castkms_crtc_state *crtc_state, struct line_buffer *output_buffer)
 {
 	if (!crtc_state->gamma_lut.base)
 		return;
@@ -123,13 +123,13 @@ static void apply_lut(const struct vkms_crtc_state *crtc_state, struct line_buff
 	for (size_t x = 0; x < output_buffer->n_pixels; x++) {
 		struct pixel_argb_u16 *pixel = &output_buffer->pixels[x];
 
-		pixel->r = apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->r, LUT_RED);
-		pixel->g = apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->g, LUT_GREEN);
-		pixel->b = apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->b, LUT_BLUE);
+		pixel->r = castkms_apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->r, LUT_RED);
+		pixel->g = castkms_apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->g, LUT_GREEN);
+		pixel->b = castkms_apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->b, LUT_BLUE);
 	}
 }
 
-VISIBLE_IF_KUNIT void apply_3x4_matrix(struct pixel_argb_s32 *pixel,
+VISIBLE_IF_KUNIT void castkms_apply_3x4_matrix(struct pixel_argb_s32 *pixel,
 				       const struct drm_color_ctm_3x4 *matrix)
 {
 	s64 rf, gf, bf;
@@ -158,7 +158,7 @@ VISIBLE_IF_KUNIT void apply_3x4_matrix(struct pixel_argb_s32 *pixel,
 	pixel->g = drm_fixp2int_round(gf);
 	pixel->b = drm_fixp2int_round(bf);
 }
-EXPORT_SYMBOL_IF_KUNIT(apply_3x4_matrix);
+EXPORT_SYMBOL_IF_KUNIT(castkms_apply_3x4_matrix);
 
 static void apply_colorop(struct pixel_argb_s32 *pixel, struct drm_colorop *colorop)
 {
@@ -168,14 +168,14 @@ static void apply_colorop(struct pixel_argb_s32 *pixel, struct drm_colorop *colo
 	if (colorop->type == DRM_COLOROP_1D_CURVE) {
 		switch (colorop_state->curve_1d_type) {
 		case DRM_COLOROP_1D_CURVE_SRGB_INV_EOTF:
-			pixel->r = apply_lut_to_channel_value(&srgb_inv_eotf, pixel->r, LUT_RED);
-			pixel->g = apply_lut_to_channel_value(&srgb_inv_eotf, pixel->g, LUT_GREEN);
-			pixel->b = apply_lut_to_channel_value(&srgb_inv_eotf, pixel->b, LUT_BLUE);
+			pixel->r = castkms_apply_lut_to_channel_value(&castkms_srgb_inv_eotf, pixel->r, LUT_RED);
+			pixel->g = castkms_apply_lut_to_channel_value(&castkms_srgb_inv_eotf, pixel->g, LUT_GREEN);
+			pixel->b = castkms_apply_lut_to_channel_value(&castkms_srgb_inv_eotf, pixel->b, LUT_BLUE);
 			break;
 		case DRM_COLOROP_1D_CURVE_SRGB_EOTF:
-			pixel->r = apply_lut_to_channel_value(&srgb_eotf, pixel->r, LUT_RED);
-			pixel->g = apply_lut_to_channel_value(&srgb_eotf, pixel->g, LUT_GREEN);
-			pixel->b = apply_lut_to_channel_value(&srgb_eotf, pixel->b, LUT_BLUE);
+			pixel->r = castkms_apply_lut_to_channel_value(&castkms_srgb_eotf, pixel->r, LUT_RED);
+			pixel->g = castkms_apply_lut_to_channel_value(&castkms_srgb_eotf, pixel->g, LUT_GREEN);
+			pixel->b = castkms_apply_lut_to_channel_value(&castkms_srgb_eotf, pixel->b, LUT_BLUE);
 			break;
 		default:
 			drm_WARN_ONCE(dev, true,
@@ -185,12 +185,12 @@ static void apply_colorop(struct pixel_argb_s32 *pixel, struct drm_colorop *colo
 		}
 	} else if (colorop->type == DRM_COLOROP_CTM_3X4) {
 		if (colorop_state->data)
-			apply_3x4_matrix(pixel,
+			castkms_apply_3x4_matrix(pixel,
 					 (struct drm_color_ctm_3x4 *)colorop_state->data->data);
 	}
 }
 
-static void pre_blend_color_transform(const struct vkms_plane_state *plane_state,
+static void pre_blend_color_transform(const struct castkms_plane_state *plane_state,
 				      struct line_buffer *output_buffer)
 {
 	struct pixel_argb_s32 pixel;
@@ -298,7 +298,7 @@ static enum pixel_read_direction direction_for_rotation(unsigned int rotation)
  * be dead code.
  */
 static void clamp_line_coordinates(enum pixel_read_direction direction,
-				   const struct vkms_plane_state *current_plane,
+				   const struct castkms_plane_state *current_plane,
 				   const struct drm_rect *src_line, int *src_x_start,
 				   int *src_y_start, int *dst_x_start, int *pixel_count)
 {
@@ -360,7 +360,7 @@ static void clamp_line_coordinates(enum pixel_read_direction direction,
  * @stage_buffer: temporary buffer to convert the pixel line from the source buffer
  * @output_buffer: buffer to blend the read line into.
  */
-static void blend_line(struct vkms_plane_state *current_plane, int y,
+static void blend_line(struct castkms_plane_state *current_plane, int y,
 		       int crtc_x_limit, struct line_buffer *stage_buffer,
 		       struct line_buffer *output_buffer)
 {
@@ -468,12 +468,12 @@ static void blend_line(struct vkms_plane_state *current_plane, int y,
  * from all planes, calculates the crc32 of the output from the former step,
  * and, if necessary, convert and store the output to the writeback buffer.
  */
-static void blend(struct vkms_writeback_job *wb,
-		  struct vkms_crtc_state *crtc_state,
+static void blend(struct castkms_writeback_job *wb,
+		  struct castkms_crtc_state *crtc_state,
 		  u32 *crc32, struct line_buffer *stage_buffer,
 		  struct line_buffer *output_buffer, size_t row_size)
 {
-	struct vkms_plane_state **plane = crtc_state->active_planes;
+	struct castkms_plane_state **plane = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
 	u64 bgcolor = crtc_state->base.background_color;
 
@@ -507,14 +507,14 @@ static void blend(struct vkms_writeback_job *wb,
 		*crc32 = crc32_le(*crc32, (void *)output_buffer->pixels, row_size);
 
 		if (wb)
-			vkms_writeback_row(wb, output_buffer, y);
+			castkms_writeback_row(wb, output_buffer, y);
 	}
 }
 
-static int check_format_funcs(struct vkms_crtc_state *crtc_state,
-			      struct vkms_writeback_job *active_wb)
+static int check_format_funcs(struct castkms_crtc_state *crtc_state,
+			      struct castkms_writeback_job *active_wb)
 {
-	struct vkms_plane_state **planes = crtc_state->active_planes;
+	struct castkms_plane_state **planes = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
 
 	for (size_t i = 0; i < n_active_planes; i++)
@@ -527,9 +527,9 @@ static int check_format_funcs(struct vkms_crtc_state *crtc_state,
 	return 0;
 }
 
-static int check_iosys_map(struct vkms_crtc_state *crtc_state)
+static int check_iosys_map(struct castkms_crtc_state *crtc_state)
 {
-	struct vkms_plane_state **plane_state = crtc_state->active_planes;
+	struct castkms_plane_state **plane_state = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
 
 	for (size_t i = 0; i < n_active_planes; i++)
@@ -539,8 +539,8 @@ static int check_iosys_map(struct vkms_crtc_state *crtc_state)
 	return 0;
 }
 
-static int compose_active_planes(struct vkms_writeback_job *active_wb,
-				 struct vkms_crtc_state *crtc_state,
+static int compose_active_planes(struct castkms_writeback_job *active_wb,
+				 struct castkms_crtc_state *crtc_state,
 				 u32 *crc32)
 {
 	size_t line_width, pixel_size = sizeof(struct pixel_argb_u16);
@@ -589,22 +589,22 @@ free_stage_buffer:
 }
 
 /**
- * vkms_composer_worker - ordered work_struct to compute CRC
+ * castkms_composer_worker - ordered work_struct to compute CRC
  *
  * @work: work_struct
  *
  * Work handler for composing and computing CRCs. work_struct scheduled in
  * an ordered workqueue that's periodically scheduled to run by
- * vkms_vblank_simulate() and flushed at vkms_atomic_commit_tail().
+ * castkms_vblank_simulate() and flushed at castkms_atomic_commit_tail().
  */
-void vkms_composer_worker(struct work_struct *work)
+void castkms_composer_worker(struct work_struct *work)
 {
-	struct vkms_crtc_state *crtc_state = container_of(work,
-							  struct vkms_crtc_state,
+	struct castkms_crtc_state *crtc_state = container_of(work,
+							  struct castkms_crtc_state,
 							  composer_work);
 	struct drm_crtc *crtc = crtc_state->base.crtc;
-	struct vkms_writeback_job *active_wb = crtc_state->active_writeback;
-	struct vkms_output *out = drm_crtc_to_vkms_output(crtc);
+	struct castkms_writeback_job *active_wb = crtc_state->active_writeback;
+	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
 	bool crc_pending, wb_pending;
 	u64 frame_start, frame_end;
 	u32 crc32 = 0;
@@ -667,14 +667,14 @@ void vkms_composer_worker(struct work_struct *work)
 
 static const char *const pipe_crc_sources[] = { "auto" };
 
-const char *const *vkms_get_crc_sources(struct drm_crtc *crtc,
+const char *const *castkms_get_crc_sources(struct drm_crtc *crtc,
 					size_t *count)
 {
 	*count = ARRAY_SIZE(pipe_crc_sources);
 	return pipe_crc_sources;
 }
 
-static int vkms_crc_parse_source(const char *src_name, bool *enabled)
+static int castkms_crc_parse_source(const char *src_name, bool *enabled)
 {
 	int ret = 0;
 
@@ -690,12 +690,12 @@ static int vkms_crc_parse_source(const char *src_name, bool *enabled)
 	return ret;
 }
 
-int vkms_verify_crc_source(struct drm_crtc *crtc, const char *src_name,
+int castkms_verify_crc_source(struct drm_crtc *crtc, const char *src_name,
 			   size_t *values_cnt)
 {
 	bool enabled;
 
-	if (vkms_crc_parse_source(src_name, &enabled) < 0) {
+	if (castkms_crc_parse_source(src_name, &enabled) < 0) {
 		DRM_DEBUG_DRIVER("unknown source %s\n", src_name);
 		return -EINVAL;
 	}
@@ -705,7 +705,7 @@ int vkms_verify_crc_source(struct drm_crtc *crtc, const char *src_name,
 	return 0;
 }
 
-void vkms_set_composer(struct vkms_output *out, bool enabled)
+void castkms_set_composer(struct castkms_output *out, bool enabled)
 {
 	bool old_enabled;
 
@@ -721,15 +721,15 @@ void vkms_set_composer(struct vkms_output *out, bool enabled)
 		drm_crtc_vblank_put(&out->crtc);
 }
 
-int vkms_set_crc_source(struct drm_crtc *crtc, const char *src_name)
+int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name)
 {
-	struct vkms_output *out = drm_crtc_to_vkms_output(crtc);
+	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
 	bool enabled = false;
 	int ret = 0;
 
-	ret = vkms_crc_parse_source(src_name, &enabled);
+	ret = castkms_crc_parse_source(src_name, &enabled);
 
-	vkms_set_composer(out, enabled);
+	castkms_set_composer(out, enabled);
 
 	return ret;
 }

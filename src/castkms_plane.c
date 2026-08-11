@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include "vkms_config.h"
+#include "castkms_config.h"
 #include <linux/iosys-map.h>
 
 #include <drm/drm_atomic.h>
@@ -11,10 +11,10 @@
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
 
-#include "vkms_drv.h"
-#include "vkms_formats.h"
+#include "castkms_drv.h"
+#include "castkms_formats.h"
 
-static const u32 vkms_formats[] = {
+static const u32 castkms_formats[] = {
 	DRM_FORMAT_ARGB8888,
 	DRM_FORMAT_ABGR8888,
 	DRM_FORMAT_BGRA8888,
@@ -51,95 +51,95 @@ static const u32 vkms_formats[] = {
 };
 
 static struct drm_plane_state *
-vkms_plane_duplicate_state(struct drm_plane *plane)
+castkms_plane_duplicate_state(struct drm_plane *plane)
 {
-	struct vkms_plane_state *vkms_state;
-	struct vkms_frame_info *frame_info;
+	struct castkms_plane_state *castkms_state;
+	struct castkms_frame_info *frame_info;
 
-	vkms_state = kzalloc_obj(*vkms_state);
-	if (!vkms_state)
+	castkms_state = kzalloc_obj(*castkms_state);
+	if (!castkms_state)
 		return NULL;
 
 	frame_info = kzalloc_obj(*frame_info);
 	if (!frame_info) {
 		DRM_DEBUG_KMS("Couldn't allocate frame_info\n");
-		kfree(vkms_state);
+		kfree(castkms_state);
 		return NULL;
 	}
 
-	vkms_state->frame_info = frame_info;
+	castkms_state->frame_info = frame_info;
 
-	__drm_gem_duplicate_shadow_plane_state(plane, &vkms_state->base);
+	__drm_gem_duplicate_shadow_plane_state(plane, &castkms_state->base);
 
-	return &vkms_state->base.base;
+	return &castkms_state->base.base;
 }
 
-static void vkms_plane_destroy_state(struct drm_plane *plane,
+static void castkms_plane_destroy_state(struct drm_plane *plane,
 				     struct drm_plane_state *old_state)
 {
-	struct vkms_plane_state *vkms_state = to_vkms_plane_state(old_state);
-	struct drm_crtc *crtc = vkms_state->base.base.crtc;
+	struct castkms_plane_state *castkms_state = to_castkms_plane_state(old_state);
+	struct drm_crtc *crtc = castkms_state->base.base.crtc;
 
-	if (crtc && vkms_state->frame_info->fb) {
+	if (crtc && castkms_state->frame_info->fb) {
 		/* dropping the reference we acquired in
-		 * vkms_primary_plane_update()
+		 * castkms_primary_plane_update()
 		 */
-		if (drm_framebuffer_read_refcount(vkms_state->frame_info->fb))
-			drm_framebuffer_put(vkms_state->frame_info->fb);
+		if (drm_framebuffer_read_refcount(castkms_state->frame_info->fb))
+			drm_framebuffer_put(castkms_state->frame_info->fb);
 	}
 
-	kfree(vkms_state->frame_info);
-	vkms_state->frame_info = NULL;
+	kfree(castkms_state->frame_info);
+	castkms_state->frame_info = NULL;
 
-	__drm_gem_destroy_shadow_plane_state(&vkms_state->base);
-	kfree(vkms_state);
+	__drm_gem_destroy_shadow_plane_state(&castkms_state->base);
+	kfree(castkms_state);
 }
 
-static void vkms_plane_reset(struct drm_plane *plane)
+static void castkms_plane_reset(struct drm_plane *plane)
 {
-	struct vkms_plane_state *vkms_state;
+	struct castkms_plane_state *castkms_state;
 
 	if (plane->state) {
-		vkms_plane_destroy_state(plane, plane->state);
+		castkms_plane_destroy_state(plane, plane->state);
 		plane->state = NULL; /* must be set to NULL here */
 	}
 
-	vkms_state = kzalloc_obj(*vkms_state);
-	if (!vkms_state) {
-		DRM_ERROR("Cannot allocate vkms_plane_state\n");
+	castkms_state = kzalloc_obj(*castkms_state);
+	if (!castkms_state) {
+		DRM_ERROR("Cannot allocate castkms_plane_state\n");
 		return;
 	}
 
-	__drm_gem_reset_shadow_plane(plane, &vkms_state->base);
+	__drm_gem_reset_shadow_plane(plane, &castkms_state->base);
 }
 
-static const struct drm_plane_funcs vkms_plane_funcs = {
+static const struct drm_plane_funcs castkms_plane_funcs = {
 	.update_plane		= drm_atomic_helper_update_plane,
 	.disable_plane		= drm_atomic_helper_disable_plane,
-	.reset			= vkms_plane_reset,
-	.atomic_duplicate_state = vkms_plane_duplicate_state,
-	.atomic_destroy_state	= vkms_plane_destroy_state,
+	.reset			= castkms_plane_reset,
+	.atomic_duplicate_state = castkms_plane_duplicate_state,
+	.atomic_destroy_state	= castkms_plane_destroy_state,
 };
 
-static void vkms_plane_atomic_update(struct drm_plane *plane,
+static void castkms_plane_atomic_update(struct drm_plane *plane,
 				     struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state,
 									   plane);
-	struct vkms_plane_state *vkms_plane_state;
+	struct castkms_plane_state *castkms_plane_state;
 	struct drm_shadow_plane_state *shadow_plane_state;
 	struct drm_framebuffer *fb = new_state->fb;
-	struct vkms_frame_info *frame_info;
+	struct castkms_frame_info *frame_info;
 	u32 fmt;
 
 	if (!new_state->crtc || !fb)
 		return;
 
 	fmt = fb->format->format;
-	vkms_plane_state = to_vkms_plane_state(new_state);
-	shadow_plane_state = &vkms_plane_state->base;
+	castkms_plane_state = to_castkms_plane_state(new_state);
+	shadow_plane_state = &castkms_plane_state->base;
 
-	frame_info = vkms_plane_state->frame_info;
+	frame_info = castkms_plane_state->frame_info;
 	memcpy(&frame_info->src, &new_state->src, sizeof(struct drm_rect));
 	memcpy(&frame_info->dst, &new_state->dst, sizeof(struct drm_rect));
 	frame_info->fb = fb;
@@ -147,12 +147,12 @@ static void vkms_plane_atomic_update(struct drm_plane *plane,
 	drm_framebuffer_get(frame_info->fb);
 	frame_info->rotation = new_state->rotation;
 
-	vkms_plane_state->pixel_read_line = get_pixel_read_line_function(fmt);
-	get_conversion_matrix_to_argb_u16(fmt, new_state->color_encoding, new_state->color_range,
-					  &vkms_plane_state->conversion_matrix);
+	castkms_plane_state->pixel_read_line = castkms_get_pixel_read_line_function(fmt);
+	castkms_get_conversion_matrix_to_argb_u16(fmt, new_state->color_encoding, new_state->color_range,
+					  &castkms_plane_state->conversion_matrix);
 }
 
-static int vkms_plane_atomic_check(struct drm_plane *plane,
+static int castkms_plane_atomic_check(struct drm_plane *plane,
 				   struct drm_atomic_state *state)
 {
 	struct drm_plane_state *new_plane_state = drm_atomic_get_new_plane_state(state,
@@ -178,7 +178,7 @@ static int vkms_plane_atomic_check(struct drm_plane *plane,
 	return 0;
 }
 
-static int vkms_prepare_fb(struct drm_plane *plane,
+static int castkms_prepare_fb(struct drm_plane *plane,
 			   struct drm_plane_state *state)
 {
 	struct drm_shadow_plane_state *shadow_plane_state;
@@ -197,7 +197,7 @@ static int vkms_prepare_fb(struct drm_plane *plane,
 	return drm_gem_fb_vmap(fb, shadow_plane_state->map, shadow_plane_state->data);
 }
 
-static void vkms_cleanup_fb(struct drm_plane *plane,
+static void castkms_cleanup_fb(struct drm_plane *plane,
 			    struct drm_plane_state *state)
 {
 	struct drm_shadow_plane_state *shadow_plane_state;
@@ -211,28 +211,28 @@ static void vkms_cleanup_fb(struct drm_plane *plane,
 	drm_gem_fb_vunmap(fb, shadow_plane_state->map);
 }
 
-static const struct drm_plane_helper_funcs vkms_plane_helper_funcs = {
-	.atomic_update		= vkms_plane_atomic_update,
-	.atomic_check		= vkms_plane_atomic_check,
-	.prepare_fb		= vkms_prepare_fb,
-	.cleanup_fb		= vkms_cleanup_fb,
+static const struct drm_plane_helper_funcs castkms_plane_helper_funcs = {
+	.atomic_update		= castkms_plane_atomic_update,
+	.atomic_check		= castkms_plane_atomic_check,
+	.prepare_fb		= castkms_prepare_fb,
+	.cleanup_fb		= castkms_cleanup_fb,
 };
 
-struct vkms_plane *vkms_plane_init(struct vkms_device *vkmsdev,
-				   struct vkms_config_plane *plane_cfg)
+struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
+				   struct castkms_config_plane *plane_cfg)
 {
-	struct drm_device *dev = &vkmsdev->drm;
-	struct vkms_plane *plane;
+	struct drm_device *dev = &castkmsdev->drm;
+	struct castkms_plane *plane;
 
-	plane = drmm_universal_plane_alloc(dev, struct vkms_plane, base, 0,
-					   &vkms_plane_funcs,
-					   vkms_formats, ARRAY_SIZE(vkms_formats),
-					   NULL, vkms_config_plane_get_type(plane_cfg),
+	plane = drmm_universal_plane_alloc(dev, struct castkms_plane, base, 0,
+					   &castkms_plane_funcs,
+					   castkms_formats, ARRAY_SIZE(castkms_formats),
+					   NULL, castkms_config_plane_get_type(plane_cfg),
 					   NULL);
 	if (IS_ERR(plane))
 		return plane;
 
-	drm_plane_helper_add(&plane->base, &vkms_plane_helper_funcs);
+	drm_plane_helper_add(&plane->base, &castkms_plane_helper_funcs);
 
 	drm_plane_create_rotation_property(&plane->base, DRM_MODE_ROTATE_0,
 					   DRM_MODE_ROTATE_MASK | DRM_MODE_REFLECT_MASK);
@@ -246,8 +246,8 @@ struct vkms_plane *vkms_plane_init(struct vkms_device *vkmsdev,
 					  DRM_COLOR_YCBCR_BT601,
 					  DRM_COLOR_YCBCR_FULL_RANGE);
 
-	if (vkms_config_plane_get_default_pipeline(plane_cfg))
-		vkms_initialize_colorops(&plane->base);
+	if (castkms_config_plane_get_default_pipeline(plane_cfg))
+		castkms_initialize_colorops(&plane->base);
 
 	return plane;
 }

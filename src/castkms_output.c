@@ -1,39 +1,39 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include "vkms_config.h"
-#include "vkms_connector.h"
-#include "vkms_drv.h"
+#include "castkms_config.h"
+#include "castkms_connector.h"
+#include "castkms_drv.h"
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 
-int vkms_output_init(struct vkms_device *vkmsdev)
+int castkms_output_init(struct castkms_device *castkmsdev)
 {
-	struct drm_device *dev = &vkmsdev->drm;
-	struct vkms_config_plane *plane_cfg;
-	struct vkms_config_crtc *crtc_cfg;
-	struct vkms_config_encoder *encoder_cfg;
-	struct vkms_config_connector *connector_cfg;
+	struct drm_device *dev = &castkmsdev->drm;
+	struct castkms_config_plane *plane_cfg;
+	struct castkms_config_crtc *crtc_cfg;
+	struct castkms_config_encoder *encoder_cfg;
+	struct castkms_config_connector *connector_cfg;
 	int ret;
 	int writeback;
 
-	if (!vkms_config_is_valid(vkmsdev->config))
+	if (!castkms_config_is_valid(castkmsdev->config))
 		return -EINVAL;
 
-	vkms_config_for_each_plane(vkmsdev->config, plane_cfg) {
-		plane_cfg->plane = vkms_plane_init(vkmsdev, plane_cfg);
+	castkms_config_for_each_plane(castkmsdev->config, plane_cfg) {
+		plane_cfg->plane = castkms_plane_init(castkmsdev, plane_cfg);
 		if (IS_ERR(plane_cfg->plane)) {
-			DRM_DEV_ERROR(dev->dev, "Failed to init vkms plane\n");
+			DRM_DEV_ERROR(dev->dev, "Failed to init castkms plane\n");
 			return PTR_ERR(plane_cfg->plane);
 		}
 	}
 
-	vkms_config_for_each_crtc(vkmsdev->config, crtc_cfg) {
-		struct vkms_config_plane *primary, *cursor;
+	castkms_config_for_each_crtc(castkmsdev->config, crtc_cfg) {
+		struct castkms_config_plane *primary, *cursor;
 
-		primary = vkms_config_crtc_primary_plane(vkmsdev->config, crtc_cfg);
-		cursor = vkms_config_crtc_cursor_plane(vkmsdev->config, crtc_cfg);
+		primary = castkms_config_crtc_primary_plane(castkmsdev->config, crtc_cfg);
+		cursor = castkms_config_crtc_cursor_plane(castkmsdev->config, crtc_cfg);
 
-		crtc_cfg->crtc = vkms_crtc_init(dev, &primary->plane->base,
+		crtc_cfg->crtc = castkms_crtc_init(dev, &primary->plane->base,
 						cursor ? &cursor->plane->base : NULL);
 		if (IS_ERR(crtc_cfg->crtc)) {
 			DRM_ERROR("Failed to allocate CRTC\n");
@@ -41,25 +41,25 @@ int vkms_output_init(struct vkms_device *vkmsdev)
 		}
 
 		/* Initialize the writeback component */
-		if (vkms_config_crtc_get_writeback(crtc_cfg)) {
-			writeback = vkms_enable_writeback_connector(vkmsdev, crtc_cfg->crtc);
+		if (castkms_config_crtc_get_writeback(crtc_cfg)) {
+			writeback = castkms_enable_writeback_connector(castkmsdev, crtc_cfg->crtc);
 			if (writeback)
 				DRM_ERROR("Failed to init writeback connector\n");
 		}
 	}
 
-	vkms_config_for_each_plane(vkmsdev->config, plane_cfg) {
-		struct vkms_config_crtc *possible_crtc;
+	castkms_config_for_each_plane(castkmsdev->config, plane_cfg) {
+		struct castkms_config_crtc *possible_crtc;
 		unsigned long idx = 0;
 
-		vkms_config_plane_for_each_possible_crtc(plane_cfg, idx, possible_crtc) {
+		castkms_config_plane_for_each_possible_crtc(plane_cfg, idx, possible_crtc) {
 			plane_cfg->plane->base.possible_crtcs |=
 				drm_crtc_mask(&possible_crtc->crtc->crtc);
 		}
 	}
 
-	vkms_config_for_each_encoder(vkmsdev->config, encoder_cfg) {
-		struct vkms_config_crtc *possible_crtc;
+	castkms_config_for_each_encoder(castkmsdev->config, encoder_cfg) {
+		struct castkms_config_crtc *possible_crtc;
 		unsigned long idx = 0;
 
 		encoder_cfg->encoder = drmm_kzalloc(dev, sizeof(*encoder_cfg->encoder), GFP_KERNEL);
@@ -77,11 +77,11 @@ int vkms_output_init(struct vkms_device *vkmsdev)
 		encoder_cfg->encoder->possible_clones |=
 			drm_encoder_mask(encoder_cfg->encoder);
 
-		vkms_config_encoder_for_each_possible_crtc(encoder_cfg, idx, possible_crtc) {
+		castkms_config_encoder_for_each_possible_crtc(encoder_cfg, idx, possible_crtc) {
 			encoder_cfg->encoder->possible_crtcs |=
 				drm_crtc_mask(&possible_crtc->crtc->crtc);
 
-			if (vkms_config_crtc_get_writeback(possible_crtc)) {
+			if (castkms_config_crtc_get_writeback(possible_crtc)) {
 				struct drm_encoder *wb_encoder =
 					&possible_crtc->crtc->wb_encoder;
 
@@ -93,17 +93,17 @@ int vkms_output_init(struct vkms_device *vkmsdev)
 		}
 	}
 
-	vkms_config_for_each_connector(vkmsdev->config, connector_cfg) {
-		struct vkms_config_encoder *possible_encoder;
+	castkms_config_for_each_connector(castkmsdev->config, connector_cfg) {
+		struct castkms_config_encoder *possible_encoder;
 		unsigned long idx = 0;
 
-		connector_cfg->connector = vkms_connector_init(vkmsdev);
+		connector_cfg->connector = castkms_connector_init(castkmsdev);
 		if (IS_ERR(connector_cfg->connector)) {
 			DRM_ERROR("Failed to init connector\n");
 			return PTR_ERR(connector_cfg->connector);
 		}
 
-		vkms_config_connector_for_each_possible_encoder(connector_cfg,
+		castkms_config_connector_for_each_possible_encoder(connector_cfg,
 								idx,
 								possible_encoder) {
 			ret = drm_connector_attach_encoder(&connector_cfg->connector->base,

@@ -9,7 +9,7 @@
 
 #include <kunit/visibility.h>
 
-#include "vkms_formats.h"
+#include "castkms_formats.h"
 
 /**
  * packed_pixels_offset() - Get the offset of the block containing the pixel at coordinates x/y
@@ -31,7 +31,7 @@
  *
  * With this function, the caller just have to extract the correct pixel from the block.
  */
-static void packed_pixels_offset(const struct vkms_frame_info *frame_info, int x, int y,
+static void packed_pixels_offset(const struct castkms_frame_info *frame_info, int x, int y,
 				 int plane_index, int *offset, int *rem_x, int *rem_y)
 {
 	struct drm_framebuffer *fb = frame_info->fb;
@@ -71,7 +71,7 @@ static void packed_pixels_offset(const struct vkms_frame_info *frame_info, int x
  *
  * See @packed_pixels_offset for details about rem_x/rem_y behavior.
  */
-static void packed_pixels_addr(const struct vkms_frame_info *frame_info,
+static void packed_pixels_addr(const struct castkms_frame_info *frame_info,
 			       int x, int y, int plane_index, u8 **addr, int *rem_x,
 			       int *rem_y)
 {
@@ -125,7 +125,7 @@ static int get_block_step_bytes(struct drm_framebuffer *fb, enum pixel_read_dire
  *
  * This function can only be used with format where block_h == block_w == 1.
  */
-static void packed_pixels_addr_1x1(const struct vkms_frame_info *frame_info,
+static void packed_pixels_addr_1x1(const struct castkms_frame_info *frame_info,
 				   int x, int y, int plane_index, u8 **addr)
 {
 	int offset, rem_x, rem_y;
@@ -270,7 +270,7 @@ static struct pixel_argb_u16 argb_u16_from_BGR565(const __le16 *pixel)
 }
 
 VISIBLE_IF_KUNIT
-struct pixel_argb_u16 argb_u16_from_yuv161616(const struct conversion_matrix *matrix,
+struct pixel_argb_u16 castkms_argb_u16_from_yuv161616(const struct conversion_matrix *matrix,
 					      u16 y, u16 channel_1, u16 channel_2)
 {
 	u16 r, g, b;
@@ -301,7 +301,7 @@ struct pixel_argb_u16 argb_u16_from_yuv161616(const struct conversion_matrix *ma
 
 	return argb_u16_from_u16161616(0xffff, r, g, b);
 }
-EXPORT_SYMBOL_IF_KUNIT(argb_u16_from_yuv161616);
+EXPORT_SYMBOL_IF_KUNIT(castkms_argb_u16_from_yuv161616);
 
 /**
  * READ_LINE() - Generic generator for a read_line function which can be used for format with one
@@ -316,7 +316,7 @@ EXPORT_SYMBOL_IF_KUNIT(argb_u16_from_yuv161616);
  *  pixel.
  */
 #define READ_LINE(function_name, pixel_name, pixel_type, callback, ...)				\
-static void function_name(const struct vkms_plane_state *plane, int x_start,			\
+static void function_name(const struct castkms_plane_state *plane, int x_start,			\
 			      int y_start, enum pixel_read_direction direction, int count,	\
 			      struct pixel_argb_u16 out_pixel[])				\
 {												\
@@ -362,7 +362,7 @@ static void function_name(const struct vkms_plane_state *plane, int x_start,			\
 	READ_LINE(function_name, pixel_name, __le16, argb_u16_from_le16161616, a, r, g, b)
 
 /*
- * The following functions are read_line function for each pixel format supported by VKMS.
+ * The following functions are read_line function for each pixel format supported by CASTKMS.
  *
  * They read a line starting at the point @x_start,@y_start following the @direction. The result
  * is stored in @out_pixel and in a 64 bits format, see struct pixel_argb_u16.
@@ -374,7 +374,7 @@ static void function_name(const struct vkms_plane_state *plane, int x_start,			\
  * [1]: https://lore.kernel.org/dri-devel/d258c8dc-78e9-4509-9037-a98f7f33b3a3@riseup.net/
  */
 
-static void Rx_read_line(const struct vkms_plane_state *plane, int x_start,
+static void Rx_read_line(const struct castkms_plane_state *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
@@ -426,21 +426,21 @@ static void Rx_read_line(const struct vkms_plane_state *plane, int x_start,
 	}
 }
 
-static void R1_read_line(const struct vkms_plane_state *plane, int x_start,
+static void R1_read_line(const struct castkms_plane_state *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
 	Rx_read_line(plane, x_start, y_start, direction, count, out_pixel);
 }
 
-static void R2_read_line(const struct vkms_plane_state *plane, int x_start,
+static void R2_read_line(const struct castkms_plane_state *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
 	Rx_read_line(plane, x_start, y_start, direction, count, out_pixel);
 }
 
-static void R4_read_line(const struct vkms_plane_state *plane, int x_start,
+static void R4_read_line(const struct castkms_plane_state *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
@@ -496,7 +496,7 @@ READ_LINE(R8_read_line, px, u8, argb_u16_from_gray8, *px)
  */
 #define READ_LINE_YUV_SEMIPLANAR(function_name, pixel_1_name, pixel_2_name, pixel_1_type,	\
 				 pixel_2_type, callback, ...)					\
-static void function_name(const struct vkms_plane_state *plane, int x_start,			\
+static void function_name(const struct castkms_plane_state *plane, int x_start,			\
 		 int y_start, enum pixel_read_direction direction, int count,			\
 		 struct pixel_argb_u16 out_pixel[])						\
 {												\
@@ -526,9 +526,9 @@ static void function_name(const struct vkms_plane_state *plane, int x_start,			\
 	}											\
 }
 
-READ_LINE_YUV_SEMIPLANAR(YUV888_semiplanar_read_line, y, uv, u8, u8, argb_u16_from_yuv161616,
+READ_LINE_YUV_SEMIPLANAR(YUV888_semiplanar_read_line, y, uv, u8, u8, castkms_argb_u16_from_yuv161616,
 			 y[0] * 257, uv[0] * 257, uv[1] * 257)
-READ_LINE_YUV_SEMIPLANAR(YUV161616_semiplanar_read_line, y, uv, u16, u16, argb_u16_from_yuv161616,
+READ_LINE_YUV_SEMIPLANAR(YUV161616_semiplanar_read_line, y, uv, u16, u16, castkms_argb_u16_from_yuv161616,
 			 y[0], uv[0], uv[1])
 /*
  * This callback can be used for YUV format where each color component is
@@ -540,7 +540,7 @@ READ_LINE_YUV_SEMIPLANAR(YUV161616_semiplanar_read_line, y, uv, u16, u16, argb_u
  * - Convert YUV and YVU with the same function (a column swap is needed when setting up
  * plane->conversion_matrix)
  */
-static void planar_yuv_read_line(const struct vkms_plane_state *plane, int x_start,
+static void planar_yuv_read_line(const struct castkms_plane_state *plane, int x_start,
 				 int y_start, enum pixel_read_direction direction, int count,
 				 struct pixel_argb_u16 out_pixel[])
 {
@@ -566,7 +566,7 @@ static void planar_yuv_read_line(const struct vkms_plane_state *plane, int x_sta
 	const struct conversion_matrix *conversion_matrix = &plane->conversion_matrix;
 
 	for (int i = 0; i < count; i++) {
-		*out_pixel = argb_u16_from_yuv161616(conversion_matrix,
+		*out_pixel = castkms_argb_u16_from_yuv161616(conversion_matrix,
 						     *y_plane * 257, *channel_1_plane * 257,
 						     *channel_2_plane * 257);
 		out_pixel += 1;
@@ -582,7 +582,7 @@ static void planar_yuv_read_line(const struct vkms_plane_state *plane, int x_sta
  * The following functions take one &struct pixel_argb_u16 and convert it to a specific format.
  * The result is stored in @out_pixel.
  *
- * They are used in vkms_writeback_row() to convert and store a pixel from the src_buffer to
+ * They are used in castkms_writeback_row() to convert and store a pixel from the src_buffer to
  * the writeback buffer.
  */
 static void argb_u16_to_ARGB8888(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel)
@@ -658,17 +658,17 @@ static void argb_u16_to_RGB565(u8 *out_pixel, const struct pixel_argb_u16 *in_pi
 }
 
 /**
- * vkms_writeback_row() - Generic loop for all supported writeback format. It is executed just
+ * castkms_writeback_row() - Generic loop for all supported writeback format. It is executed just
  * after the blending to write a line in the writeback buffer.
  *
  * @wb: Job where to insert the final image
  * @src_buffer: Line to write
  * @y: Row to write in the writeback buffer
  */
-void vkms_writeback_row(struct vkms_writeback_job *wb,
+void castkms_writeback_row(struct castkms_writeback_job *wb,
 			const struct line_buffer *src_buffer, int y)
 {
-	struct vkms_frame_info *frame_info = &wb->wb_frame_info;
+	struct castkms_frame_info *frame_info = &wb->wb_frame_info;
 	int x_dst = frame_info->dst.x1;
 	u8 *dst_pixels;
 	int rem_x, rem_y;
@@ -682,13 +682,13 @@ void vkms_writeback_row(struct vkms_writeback_job *wb,
 }
 
 /**
- * get_pixel_read_line_function() - Retrieve the correct read_line function for a specific
+ * castkms_get_pixel_read_line_function() - Retrieve the correct read_line function for a specific
  * format. The returned pointer is NULL for unsupported pixel formats. The caller must ensure that
- * the pointer is valid before using it in a vkms_plane_state.
+ * the pointer is valid before using it in a castkms_plane_state.
  *
  * @format: DRM_FORMAT_* value for which to obtain a conversion function (see [drm_fourcc.h])
  */
-pixel_read_line_t get_pixel_read_line_function(u32 format)
+pixel_read_line_t castkms_get_pixel_read_line_function(u32 format)
 {
 	switch (format) {
 	case DRM_FORMAT_ARGB8888:
@@ -747,12 +747,12 @@ pixel_read_line_t get_pixel_read_line_function(u32 format)
 		return &R8_read_line;
 	default:
 		/*
-		 * This is a bug in vkms_plane_atomic_check(). All the supported
+		 * This is a bug in castkms_plane_atomic_check(). All the supported
 		 * format must:
-		 * - Be listed in vkms_formats in vkms_plane.c
+		 * - Be listed in castkms_formats in castkms_plane.c
 		 * - Have a pixel_read callback defined here
 		 */
-		pr_err("Pixel format %p4cc is not supported by VKMS planes. This is a kernel bug, atomic check must forbid this configuration.\n",
+		pr_err("Pixel format %p4cc is not supported by CASTKMS planes. This is a kernel bug, atomic check must forbid this configuration.\n",
 		       &format);
 		BUG();
 	}
@@ -870,7 +870,7 @@ static void swap_uv_columns(struct conversion_matrix *matrix)
 }
 
 /**
- * get_conversion_matrix_to_argb_u16() - Retrieve the correct yuv to rgb conversion matrix for a
+ * castkms_get_conversion_matrix_to_argb_u16() - Retrieve the correct yuv to rgb conversion matrix for a
  * given encoding and range.
  *
  * @format: DRM_FORMAT_* value for which to obtain a conversion function (see [drm_fourcc.h])
@@ -878,7 +878,7 @@ static void swap_uv_columns(struct conversion_matrix *matrix)
  * @range: DRM_COLOR_*_RANGE value for which to obtain a conversion matrix
  * @matrix: Pointer to store the value into
  */
-void get_conversion_matrix_to_argb_u16(u32 format,
+void castkms_get_conversion_matrix_to_argb_u16(u32 format,
 				       enum drm_color_encoding encoding,
 				       enum drm_color_range range,
 				       struct conversion_matrix *matrix)
@@ -933,16 +933,16 @@ void get_conversion_matrix_to_argb_u16(u32 format,
 		break;
 	}
 }
-EXPORT_SYMBOL(get_conversion_matrix_to_argb_u16);
+EXPORT_SYMBOL(castkms_get_conversion_matrix_to_argb_u16);
 
 /**
- * get_pixel_write_function() - Retrieve the correct write_pixel function for a specific format.
+ * castkms_get_pixel_write_function() - Retrieve the correct write_pixel function for a specific format.
  * The returned pointer is NULL for unsupported pixel formats. The caller must ensure that the
- * pointer is valid before using it in a vkms_writeback_job.
+ * pointer is valid before using it in a castkms_writeback_job.
  *
  * @format: DRM_FORMAT_* value for which to obtain a conversion function (see [drm_fourcc.h])
  */
-pixel_write_t get_pixel_write_function(u32 format)
+pixel_write_t castkms_get_pixel_write_function(u32 format)
 {
 	switch (format) {
 	case DRM_FORMAT_ARGB8888:
@@ -959,12 +959,12 @@ pixel_write_t get_pixel_write_function(u32 format)
 		return &argb_u16_to_RGB565;
 	default:
 		/*
-		 * This is a bug in vkms_writeback_atomic_check. All the supported
+		 * This is a bug in castkms_writeback_atomic_check. All the supported
 		 * format must:
-		 * - Be listed in vkms_wb_formats in vkms_writeback.c
+		 * - Be listed in castkms_wb_formats in castkms_writeback.c
 		 * - Have a pixel_write callback defined here
 		 */
-		pr_err("Pixel format %p4cc is not supported by VKMS writeback. This is a kernel bug, atomic check must forbid this configuration.\n",
+		pr_err("Pixel format %p4cc is not supported by CASTKMS writeback. This is a kernel bug, atomic check must forbid this configuration.\n",
 		       &format);
 		BUG();
 	}

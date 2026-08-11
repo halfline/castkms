@@ -4,9 +4,9 @@
 
 #include <drm/drm_fixed.h>
 #include <drm/drm_mode.h>
-#include "../vkms_composer.h"
-#include "../vkms_drv.h"
-#include "../vkms_luts.h"
+#include "../castkms_composer.h"
+#include "../castkms_drv.h"
+#include "../castkms_luts.h"
 
 #define TEST_LUT_SIZE 16
 
@@ -32,7 +32,7 @@ static struct drm_color_lut test_linear_array[TEST_LUT_SIZE] = {
 };
 
 /* lerp test parameters */
-struct vkms_color_test_lerp_params {
+struct castkms_color_test_lerp_params {
 	s64 t;
 	__u16 a;
 	__u16 b;
@@ -40,7 +40,7 @@ struct vkms_color_test_lerp_params {
 };
 
 /* lerp test cases */
-static const struct vkms_color_test_lerp_params color_test_lerp_cases[] = {
+static const struct castkms_color_test_lerp_params color_test_lerp_cases[] = {
 	/* Half-way round down */
 	{ 0x80000000 - 1, 0x0, 0x10, 0x8 },
 	{ 0x80000000 - 1, 0x1, 0x10, 0x8 },	/* Odd a */
@@ -82,66 +82,66 @@ static const struct vkms_color_test_lerp_params color_test_lerp_cases[] = {
 	{ 0x80000000, 0x0, 0x1, 0x1 },
 };
 
-static const struct vkms_color_lut test_linear_lut = {
+static const struct castkms_color_lut test_linear_lut = {
 	.base = test_linear_array,
 	.lut_length = TEST_LUT_SIZE,
 	.channel_value2index_ratio = 0xf000fll
 };
 
-static void vkms_color_test_get_lut_index(struct kunit *test)
+static void castkms_color_test_get_lut_index(struct kunit *test)
 {
 	s64 lut_index;
 	int i;
 
-	lut_index = get_lut_index(&test_linear_lut, test_linear_array[0].red);
+	lut_index = castkms_get_lut_index(&test_linear_lut, test_linear_array[0].red);
 	KUNIT_EXPECT_EQ(test, drm_fixp2int(lut_index), 0);
 
 	for (i = 0; i < TEST_LUT_SIZE; i++) {
-		lut_index = get_lut_index(&test_linear_lut, test_linear_array[i].red);
+		lut_index = castkms_get_lut_index(&test_linear_lut, test_linear_array[i].red);
 		KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(lut_index), i);
 	}
 
-	KUNIT_EXPECT_EQ(test, drm_fixp2int(get_lut_index(&srgb_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0x101)), 0x1);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0x202)), 0x2);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int(castkms_get_lut_index(&castkms_srgb_eotf, 0x0)), 0x0);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_eotf, 0x0)), 0x0);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_eotf, 0x101)), 0x1);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_eotf, 0x202)), 0x2);
 
-	KUNIT_EXPECT_EQ(test, drm_fixp2int(get_lut_index(&srgb_inv_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_inv_eotf, 0x0)), 0x0);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_inv_eotf, 0x101)), 0x1);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_inv_eotf, 0x202)), 0x2);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int(castkms_get_lut_index(&castkms_srgb_inv_eotf, 0x0)), 0x0);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_inv_eotf, 0x0)), 0x0);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_inv_eotf, 0x101)), 0x1);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_inv_eotf, 0x202)), 0x2);
 
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0xfefe)), 0xfe);
-	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(get_lut_index(&srgb_eotf, 0xffff)), 0xff);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_eotf, 0xfefe)), 0xfe);
+	KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(castkms_get_lut_index(&castkms_srgb_eotf, 0xffff)), 0xff);
 }
 
-static void vkms_color_test_lerp(struct kunit *test)
+static void castkms_color_test_lerp(struct kunit *test)
 {
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(color_test_lerp_cases); i++) {
-		const struct vkms_color_test_lerp_params *params = &color_test_lerp_cases[i];
+		const struct castkms_color_test_lerp_params *params = &color_test_lerp_cases[i];
 
-		KUNIT_EXPECT_EQ(test, lerp_u16(params->a, params->b, params->t), params->expected);
+		KUNIT_EXPECT_EQ(test, castkms_lerp_u16(params->a, params->b, params->t), params->expected);
 	}
 }
 
-static void vkms_color_test_linear(struct kunit *test)
+static void castkms_color_test_linear(struct kunit *test)
 {
 	for (int i = 0; i < LUT_SIZE; i++) {
-		int linear = apply_lut_to_channel_value(&linear_eotf, i * 0x101, LUT_RED);
+		int linear = castkms_apply_lut_to_channel_value(&castkms_linear_eotf, i * 0x101, LUT_RED);
 
 		KUNIT_EXPECT_EQ(test, DIV_ROUND_CLOSEST(linear, 0x101), i);
 	}
 }
 
-static void vkms_color_srgb_inv_srgb(struct kunit *test)
+static void castkms_color_srgb_inv_srgb(struct kunit *test)
 {
 	u16 srgb, final;
 
 	for (int i = 0; i < LUT_SIZE; i++) {
-		srgb = apply_lut_to_channel_value(&srgb_eotf, i * 0x101, LUT_RED);
-		final = apply_lut_to_channel_value(&srgb_inv_eotf, srgb, LUT_RED);
+		srgb = castkms_apply_lut_to_channel_value(&castkms_srgb_eotf, i * 0x101, LUT_RED);
+		final = castkms_apply_lut_to_channel_value(&castkms_srgb_inv_eotf, srgb, LUT_RED);
 
 		KUNIT_EXPECT_GE(test, final / 0x101, i - 1);
 		KUNIT_EXPECT_LE(test, final / 0x101, i + 1);
@@ -157,7 +157,7 @@ static const struct drm_color_ctm_3x4 test_matrix_3x4_50_desat = { {
 	FIXPT_QUARTER, FIXPT_QUARTER, FIXPT_HALF, 0
 } };
 
-static void vkms_color_ctm_3x4_50_desat(struct kunit *test)
+static void castkms_color_ctm_3x4_50_desat(struct kunit *test)
 {
 	struct pixel_argb_s32 ref, out;
 
@@ -168,7 +168,7 @@ static void vkms_color_ctm_3x4_50_desat(struct kunit *test)
 	ref.b = 0xffff;
 
 	memcpy(&out, &ref, sizeof(out));
-	apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
 
 	KUNIT_EXPECT_MEMEQ(test, &ref, &out, sizeof(out));
 
@@ -179,7 +179,7 @@ static void vkms_color_ctm_3x4_50_desat(struct kunit *test)
 	ref.b = 0x0;
 
 	memcpy(&out, &ref, sizeof(out));
-	apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
 
 	KUNIT_EXPECT_MEMEQ(test, &ref, &out, sizeof(out));
 
@@ -190,7 +190,7 @@ static void vkms_color_ctm_3x4_50_desat(struct kunit *test)
 	ref.b = 0x8000;
 
 	memcpy(&out, &ref, sizeof(out));
-	apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
 
 	KUNIT_EXPECT_MEMEQ(test, &ref, &out, sizeof(out));
 
@@ -205,7 +205,7 @@ static void vkms_color_ctm_3x4_50_desat(struct kunit *test)
 	out.g = 0x0;
 	out.b = 0x0;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_50_desat);
 
 	KUNIT_EXPECT_MEMEQ(test, &ref, &out, sizeof(out));
 }
@@ -223,7 +223,7 @@ static const struct drm_color_ctm_3x4 test_matrix_3x4_bt709_enc = { {
 	0x000000009d70a400ull, 0x800000008f011100ull, 0x800000000e6f9330ull, 0
 } };
 
-static void vkms_color_ctm_3x4_bt709(struct kunit *test)
+static void castkms_color_ctm_3x4_bt709(struct kunit *test)
 {
 	struct pixel_argb_s32 out;
 
@@ -233,7 +233,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0xffff;
 	out.b = 0xffff;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 255 */
 	KUNIT_EXPECT_GT(test, out.r, 0xfe00);
@@ -251,7 +251,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0x0;
 	out.b = 0x0;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 0 */
 	KUNIT_EXPECT_LT(test, out.r, 0x100);
@@ -268,7 +268,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0x7fff;
 	out.b = 0x7fff;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 127 */
 	KUNIT_EXPECT_GT(test, out.r, 0x7e00);
@@ -286,7 +286,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0x0;
 	out.b = 0x0;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 54 */
 	KUNIT_EXPECT_GT(test, out.r, 0x3500);
@@ -305,7 +305,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0xffff;
 	out.b = 0x0;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 182 */
 	KUNIT_EXPECT_GT(test, out.r, 0xB500);
@@ -323,7 +323,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0x0;
 	out.b = 0xffff;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 18 */
 	KUNIT_EXPECT_GT(test, out.r, 0x1100);
@@ -342,7 +342,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0x0;
 	out.b = 0x0;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 30 */
 	KUNIT_EXPECT_GT(test, out.r, 0x1D00);
@@ -361,7 +361,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0x8c8c;
 	out.b = 0x0;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 30 */
 	KUNIT_EXPECT_GT(test, out.r, 0x6400);
@@ -379,7 +379,7 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	out.g = 0x0;
 	out.b = 0x8c8c;
 
-	apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
+	castkms_apply_3x4_matrix(&out, &test_matrix_3x4_bt709_enc);
 
 	/* Y 30 */
 	KUNIT_EXPECT_GT(test, out.r, 0x900);
@@ -393,22 +393,22 @@ static void vkms_color_ctm_3x4_bt709(struct kunit *test)
 	KUNIT_EXPECT_LT(test, out.b, 0x100);
 }
 
-static struct kunit_case vkms_color_test_cases[] = {
-	KUNIT_CASE(vkms_color_test_get_lut_index),
-	KUNIT_CASE(vkms_color_test_lerp),
-	KUNIT_CASE(vkms_color_test_linear),
-	KUNIT_CASE(vkms_color_srgb_inv_srgb),
-	KUNIT_CASE(vkms_color_ctm_3x4_50_desat),
-	KUNIT_CASE(vkms_color_ctm_3x4_bt709),
+static struct kunit_case castkms_color_test_cases[] = {
+	KUNIT_CASE(castkms_color_test_get_lut_index),
+	KUNIT_CASE(castkms_color_test_lerp),
+	KUNIT_CASE(castkms_color_test_linear),
+	KUNIT_CASE(castkms_color_srgb_inv_srgb),
+	KUNIT_CASE(castkms_color_ctm_3x4_50_desat),
+	KUNIT_CASE(castkms_color_ctm_3x4_bt709),
 	{}
 };
 
-static struct kunit_suite vkms_color_test_suite = {
-	.name = "vkms-color",
-	.test_cases = vkms_color_test_cases,
+static struct kunit_suite castkms_color_test_suite = {
+	.name = "castkms-color",
+	.test_cases = castkms_color_test_cases,
 };
 
-kunit_test_suite(vkms_color_test_suite);
+kunit_test_suite(castkms_color_test_suite);
 
-MODULE_DESCRIPTION("Kunit test for VKMS LUT handling");
+MODULE_DESCRIPTION("Kunit test for CASTKMS LUT handling");
 MODULE_LICENSE("GPL");
