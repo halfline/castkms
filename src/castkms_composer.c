@@ -603,7 +603,7 @@ void castkms_composer_worker(struct work_struct *work)
 							  struct castkms_crtc_state,
 							  composer_work);
 	struct drm_crtc *crtc = crtc_state->base.crtc;
-	struct castkms_writeback_job *active_wb = crtc_state->active_writeback;
+	struct castkms_writeback_job *active_wb;
 	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
 	bool crc_pending, wb_pending;
 	u64 frame_start, frame_end;
@@ -615,6 +615,7 @@ void castkms_composer_worker(struct work_struct *work)
 	frame_end = crtc_state->frame_end;
 	crc_pending = crtc_state->crc_pending;
 	wb_pending = crtc_state->wb_pending;
+	active_wb = crtc_state->active_writeback;
 	crtc_state->frame_start = 0;
 	crtc_state->frame_end = 0;
 	crtc_state->crc_pending = false;
