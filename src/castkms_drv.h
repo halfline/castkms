@@ -242,7 +242,7 @@ struct castkms_config_plane;
 struct castkms_device {
 	struct drm_device drm;
 	struct faux_device *faux_dev;
-	const struct castkms_config *config;
+	struct castkms_config *config;
 };
 
 /*
