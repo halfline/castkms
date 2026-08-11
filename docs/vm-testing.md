@@ -29,10 +29,11 @@ into that kernel. Re-running it is safe and idempotent.
 4. verifies independent `vkms` and `castkms` configfs roots;
 5. creates a device through configfs and verifies topology removal safely
    disables it before detaching configuration;
-6. creates a default `castkms` DRM card with optional planes disabled;
+6. creates a default `castkms` DRM card with a color pipeline;
 7. performs a bounded preferred-mode, vsynced page-flip test;
-8. records `modetest` and `drm_info` output;
-9. unloads every module it loaded and verifies cleanup.
+8. captures three frame CRCs to exercise the composition worker;
+9. records `modetest`, `drm_info`, and CRC output;
+10. unloads every module it loaded and verifies cleanup.
 
 Results are copied to:
 

@@ -118,7 +118,7 @@ sudo insmod ./castkms.ko \
 	enable_cursor=0 \
 	enable_overlay=0 \
 	enable_writeback=0 \
-	enable_plane_pipeline=0
+	enable_plane_pipeline=1
 cast_loaded=1
 
 sudo udevadm settle
@@ -150,6 +150,17 @@ if ! sudo drm_info > "$result_dir/drm-info.txt" 2>&1; then
 	cat "$result_dir/drm-info.txt" >&2
 	exit 1
 fi
+
+if ! mountpoint -q /sys/kernel/debug; then
+	sudo mount -t debugfs none /sys/kernel/debug
+fi
+castkms_debugfs=/sys/kernel/debug/dri/castkms
+test "$(sudo sed -n 's/ .*//p' "$castkms_debugfs/name")" = castkms
+printf 'auto\n' | sudo tee "$castkms_debugfs/crtc-0/crc/control" >/dev/null
+sudo timeout 5s dd if="$castkms_debugfs/crtc-0/crc/data" bs=23 count=3 \
+	status=none | tr -d '\000' | tee "$result_dir/crc.txt"
+test "$(wc -l < "$result_dir/crc.txt")" -eq 3
+printf '%s\n' 'composer_crc=pass' | tee -a "$result_dir/summary.txt"
 
 sudo rmmod castkms
 cast_loaded=0
