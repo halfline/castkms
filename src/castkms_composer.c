@@ -514,32 +514,32 @@ static void blend(struct castkms_writeback_job *wb,
 	}
 }
 
-static int check_format_funcs(struct castkms_crtc_state *crtc_state,
-			      struct castkms_writeback_job *active_wb)
+static bool format_funcs_are_valid(struct castkms_crtc_state *crtc_state,
+				   struct castkms_writeback_job *active_wb)
 {
 	struct castkms_plane_state **planes = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
 
 	for (size_t i = 0; i < n_active_planes; i++)
 		if (!planes[i]->pixel_read_line)
-			return -1;
+			return false;
 
 	if (active_wb && !active_wb->pixel_write)
-		return -1;
+		return false;
 
-	return 0;
+	return true;
 }
 
-static int check_iosys_map(struct castkms_crtc_state *crtc_state)
+static bool iosys_maps_are_valid(struct castkms_crtc_state *crtc_state)
 {
 	struct castkms_plane_state **plane_state = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
 
 	for (size_t i = 0; i < n_active_planes; i++)
 		if (iosys_map_is_null(&plane_state[i]->frame_info->map[0]))
-			return -1;
+			return false;
 
-	return 0;
+	return true;
 }
 
 static int compose_active_planes(struct castkms_writeback_job *active_wb,
@@ -558,10 +558,10 @@ static int compose_active_planes(struct castkms_writeback_job *active_wb,
 	 */
 	static_assert(sizeof(struct pixel_argb_u16) == 8);
 
-	if (WARN_ON(check_iosys_map(crtc_state)))
+	if (WARN_ON(!iosys_maps_are_valid(crtc_state)))
 		return -EINVAL;
 
-	if (WARN_ON(check_format_funcs(crtc_state, active_wb)))
+	if (WARN_ON(!format_funcs_are_valid(crtc_state, active_wb)))
 		return -EINVAL;
 
 	line_width = crtc_state->base.mode.hdisplay;
