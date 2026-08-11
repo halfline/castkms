@@ -41,13 +41,25 @@ test "$running_release" = "$expected_release"
 printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
 
 make clean
-make W=1 2>&1 | tee "$result_dir/build.log"
+make kunit W=1 2>&1 | tee "$result_dir/build.log"
 
 test "$(modinfo -F name ./castkms.ko)" = castkms
 case "$(modinfo -F vermagic ./castkms.ko)" in
 	"$expected_release "*) ;;
 	*) printf '%s\n' 'module vermagic does not match the guest kernel' >&2; exit 1 ;;
 esac
+
+test "$(modinfo -F name ./src/tests/castkms-kunit-tests.ko)" = \
+	castkms_kunit_tests
+case "$(modinfo -F vermagic ./src/tests/castkms-kunit-tests.ko)" in
+	"$expected_release "*) ;;
+	*) printf '%s\n' 'KUnit module vermagic does not match the guest kernel' >&2; exit 1 ;;
+esac
+case ",$(modinfo -F depends ./src/tests/castkms-kunit-tests.ko)," in
+	*,castkms,*kunit,*|*,kunit,*castkms,*) ;;
+	*) printf '%s\n' 'KUnit module dependencies are incomplete' >&2; exit 1 ;;
+esac
+printf '%s\n' 'kunit_build=pass' | tee -a "$result_dir/summary.txt"
 
 if strings ./castkms.ko | grep -qi vkms; then
 	printf '%s\n' 'legacy VKMS identity remains in castkms.ko' >&2

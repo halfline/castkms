@@ -5,8 +5,6 @@
 #include <drm/drm_fixed.h>
 #include <drm/drm_fourcc.h>
 
-#include "../../drm_crtc_internal.h"
-
 #include "../castkms_formats.h"
 
 #define TEST_BUFF_SIZE 50
@@ -256,7 +254,9 @@ static void castkms_format_test_yuv_u16_to_argb_u16_case_desc(struct yuv_u16_to_
 							   char *desc)
 {
 	snprintf(desc, KUNIT_PARAM_DESC_SIZE, "%s - %s",
-		 drm_get_color_encoding_name(t->encoding), drm_get_color_range_name(t->range));
+		 t->encoding == DRM_COLOR_YCBCR_BT601 ? "BT.601" :
+		 t->encoding == DRM_COLOR_YCBCR_BT709 ? "BT.709" : "BT.2020",
+		 t->range == DRM_COLOR_YCBCR_FULL_RANGE ? "full" : "limited");
 }
 
 KUNIT_ARRAY_PARAM(yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_cases,
