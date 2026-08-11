@@ -412,7 +412,10 @@ static int castkms_config_show(struct seq_file *m, void *data)
 }
 
 static const struct drm_debugfs_info castkms_config_debugfs_list[] = {
-	{ "castkms_config", castkms_config_show, 0 },
+	{
+		.name = "castkms_config",
+		.show = castkms_config_show,
+	},
 };
 
 void castkms_config_register_debugfs(struct castkms_device *castkms_device)
