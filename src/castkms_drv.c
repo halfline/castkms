@@ -219,6 +219,8 @@ int castkms_create(struct castkms_config *config)
 	return 0;
 
 out_devres:
+	castkms_config_clear_runtime_objects(config);
+	config->dev = NULL;
 	devres_release_group(&fdev->dev, NULL);
 out_unregister:
 	faux_device_destroy(fdev);
@@ -272,6 +274,7 @@ void castkms_destroy(struct castkms_config *config)
 
 	drm_dev_unregister(&config->dev->drm);
 	drm_atomic_helper_shutdown(&config->dev->drm);
+	castkms_config_clear_runtime_objects(config);
 	devres_release_group(&fdev->dev, NULL);
 	faux_device_destroy(fdev);
 

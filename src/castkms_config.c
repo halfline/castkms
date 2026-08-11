@@ -151,6 +151,26 @@ void castkms_config_destroy(struct castkms_config *config)
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_destroy);
 
+void castkms_config_clear_runtime_objects(struct castkms_config *config)
+{
+	struct castkms_config_plane *plane_cfg;
+	struct castkms_config_crtc *crtc_cfg;
+	struct castkms_config_encoder *encoder_cfg;
+	struct castkms_config_connector *connector_cfg;
+
+	castkms_config_for_each_plane(config, plane_cfg)
+		plane_cfg->plane = NULL;
+
+	castkms_config_for_each_crtc(config, crtc_cfg)
+		crtc_cfg->crtc = NULL;
+
+	castkms_config_for_each_encoder(config, encoder_cfg)
+		encoder_cfg->encoder = NULL;
+
+	castkms_config_for_each_connector(config, connector_cfg)
+		connector_cfg->connector = NULL;
+}
+
 static bool valid_plane_number(const struct castkms_config *config)
 {
 	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;

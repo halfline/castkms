@@ -214,6 +214,16 @@ struct castkms_config *castkms_config_default_create(bool enable_cursor,
 void castkms_config_destroy(struct castkms_config *config);
 
 /**
+ * castkms_config_clear_runtime_objects() - Clear instantiated DRM object bindings
+ * @config: Configuration whose runtime bindings should be cleared
+ *
+ * Configuration nodes are reused when a configfs device is disabled and later
+ * enabled again. Call this after failed device creation and before releasing an
+ * instantiated device's managed resources.
+ */
+void castkms_config_clear_runtime_objects(struct castkms_config *config);
+
+/**
  * castkms_config_get_device_name() - Return the name of the device
  * @config: Configuration to get the device name from
  *
