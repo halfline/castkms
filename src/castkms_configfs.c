@@ -101,6 +101,22 @@ struct castkms_configfs_connector {
 	struct castkms_config_connector *config;
 };
 
+/*
+ * Configfs cannot reject removal of an existing item or link. Tear down a live
+ * DRM device before its topology changes so it never retains pointers to
+ * configuration nodes that are about to be freed or detached.
+ */
+static void castkms_configfs_device_disable(struct castkms_configfs_device *dev)
+{
+	lockdep_assert_held(&dev->lock);
+
+	if (!dev->enabled)
+		return;
+
+	castkms_destroy(dev->config);
+	dev->enabled = false;
+}
+
 #define device_item_to_castkms_configfs_device(item) \
 	container_of(to_config_group((item)), struct castkms_configfs_device, \
 		     group)
@@ -184,6 +200,7 @@ static void crtc_release(struct config_item *item)
 	lock = &crtc->dev->lock;
 
 	scoped_guard(mutex, lock) {
+		castkms_configfs_device_disable(crtc->dev);
 		castkms_config_destroy_crtc(crtc->dev->config, crtc->config);
 		kfree(crtc);
 	}
@@ -272,8 +289,10 @@ static void plane_possible_crtcs_drop_link(struct config_item *src,
 	plane = plane_possible_crtcs_item_to_castkms_configfs_plane(src);
 	crtc = crtc_item_to_castkms_configfs_crtc(target);
 
-	scoped_guard(mutex, &plane->dev->lock)
+	scoped_guard(mutex, &plane->dev->lock) {
+		castkms_configfs_device_disable(plane->dev);
 		castkms_config_plane_detach_crtc(plane->config, crtc->config);
+	}
 }
 
 static struct configfs_item_operations plane_possible_crtcs_item_operations = {
@@ -340,6 +359,7 @@ static void plane_release(struct config_item *item)
 	lock = &plane->dev->lock;
 
 	scoped_guard(mutex, lock) {
+		castkms_configfs_device_disable(plane->dev);
 		castkms_config_destroy_plane(plane->config);
 		kfree(plane);
 	}
@@ -434,8 +454,10 @@ static void encoder_possible_crtcs_drop_link(struct config_item *src,
 	encoder = encoder_possible_crtcs_item_to_castkms_configfs_encoder(src);
 	crtc = crtc_item_to_castkms_configfs_crtc(target);
 
-	scoped_guard(mutex, &encoder->dev->lock)
+	scoped_guard(mutex, &encoder->dev->lock) {
+		castkms_configfs_device_disable(encoder->dev);
 		castkms_config_encoder_detach_crtc(encoder->config, crtc->config);
+	}
 }
 
 static struct configfs_item_operations encoder_possible_crtcs_item_operations = {
@@ -457,6 +479,7 @@ static void encoder_release(struct config_item *item)
 	lock = &encoder->dev->lock;
 
 	scoped_guard(mutex, lock) {
+		castkms_configfs_device_disable(encoder->dev);
 		castkms_config_destroy_encoder(encoder->dev->config, encoder->config);
 		kfree(encoder);
 	}
@@ -574,6 +597,7 @@ static void connector_release(struct config_item *item)
 	lock = &connector->dev->lock;
 
 	scoped_guard(mutex, lock) {
+		castkms_configfs_device_disable(connector->dev);
 		castkms_config_destroy_connector(connector->config);
 		kfree(connector);
 	}
@@ -623,6 +647,7 @@ static void connector_possible_encoders_drop_link(struct config_item *src,
 	encoder = encoder_item_to_castkms_configfs_encoder(target);
 
 	scoped_guard(mutex, &connector->dev->lock) {
+		castkms_configfs_device_disable(connector->dev);
 		castkms_config_connector_detach_encoder(connector->config,
 						     encoder->config);
 	}
@@ -720,7 +745,7 @@ static ssize_t device_enabled_store(struct config_item *item, const char *page,
 			if (ret)
 				return ret;
 		} else if (dev->enabled && !enabled) {
-			castkms_destroy(dev->config);
+			castkms_configfs_device_disable(dev);
 		}
 
 		dev->enabled = enabled;
@@ -742,8 +767,9 @@ static void device_release(struct config_item *item)
 
 	dev = device_item_to_castkms_configfs_device(item);
 
-	if (dev->enabled)
-		castkms_destroy(dev->config);
+	mutex_lock(&dev->lock);
+	castkms_configfs_device_disable(dev);
+	mutex_unlock(&dev->lock);
 
 	mutex_destroy(&dev->lock);
 	castkms_config_destroy(dev->config);

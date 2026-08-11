@@ -27,10 +27,12 @@ into that kernel. Re-running it is safe and idempotent.
 2. verifies the module name, vermagic, legacy strings, and exported symbols;
 3. loads stock `vkms` and `castkms` together without default devices;
 4. verifies independent `vkms` and `castkms` configfs roots;
-5. creates a default `castkms` DRM card with optional planes disabled;
-6. performs a bounded preferred-mode, vsynced page-flip test;
-7. records `modetest` and `drm_info` output;
-8. unloads every module it loaded and verifies cleanup.
+5. creates a device through configfs and verifies topology removal safely
+   disables it before detaching configuration;
+6. creates a default `castkms` DRM card with optional planes disabled;
+7. performs a bounded preferred-mode, vsynced page-flip test;
+8. records `modetest` and `drm_info` output;
+9. unloads every module it loaded and verifies cleanup.
 
 Results are copied to:
 
