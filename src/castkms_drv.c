@@ -239,18 +239,24 @@ static int __init castkms_init(void)
 
 	config = castkms_config_default_create(enable_cursor, enable_writeback,
 					    enable_overlay, enable_plane_pipeline);
-	if (IS_ERR(config))
-		return PTR_ERR(config);
+	if (IS_ERR(config)) {
+		ret = PTR_ERR(config);
+		goto err_configfs;
+	}
 
 	ret = castkms_create(config);
 	if (ret) {
 		castkms_config_destroy(config);
-		return ret;
+		goto err_configfs;
 	}
 
 	default_config = config;
 
 	return 0;
+
+err_configfs:
+	castkms_configfs_unregister();
+	return ret;
 }
 
 void castkms_destroy(struct castkms_config *config)
