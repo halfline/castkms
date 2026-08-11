@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 /**
- * DOC: vkms (Virtual Kernel Modesetting)
+ * DOC: castkms (Virtual Kernel Modesetting)
  *
- * VKMS is a software-only model of a KMS driver that is useful for testing
- * and for running X (or similar) on headless machines. VKMS aims to enable
+ * CASTKMS is a software-only model of a KMS driver that is useful for testing
+ * and for running X (or similar) on headless machines. CASTKMS aims to enable
  * a virtual display with no need of a hardware display capability, releasing
  * the GPU in DRM API tests.
  */
@@ -29,16 +29,16 @@
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_vblank.h>
 
-#include "vkms_config.h"
-#include "vkms_configfs.h"
-#include "vkms_drv.h"
+#include "castkms_config.h"
+#include "castkms_configfs.h"
+#include "castkms_drv.h"
 
-#define DRIVER_NAME	"vkms"
-#define DRIVER_DESC	"Virtual Kernel Mode Setting"
+#define DRIVER_NAME	"castkms"
+#define DRIVER_DESC	"CASTKMS Virtual Kernel Mode Setting"
 #define DRIVER_MAJOR	1
 #define DRIVER_MINOR	0
 
-static struct vkms_config *default_config;
+static struct castkms_config *default_config;
 
 static bool enable_cursor = true;
 module_param_named(enable_cursor, enable_cursor, bool, 0444);
@@ -58,11 +58,11 @@ MODULE_PARM_DESC(enable_plane_pipeline, "Enable/Disable plane pipeline support")
 
 static bool create_default_dev = true;
 module_param_named(create_default_dev, create_default_dev, bool, 0444);
-MODULE_PARM_DESC(create_default_dev, "Create or not the default VKMS device");
+MODULE_PARM_DESC(create_default_dev, "Create or not the default CASTKMS device");
 
-DEFINE_DRM_GEM_FOPS(vkms_driver_fops);
+DEFINE_DRM_GEM_FOPS(castkms_driver_fops);
 
-static void vkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
+static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 {
 	struct drm_device *dev = old_state->dev;
 	struct drm_crtc *crtc;
@@ -82,17 +82,17 @@ static void vkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 	drm_atomic_helper_wait_for_flip_done(dev, old_state);
 
 	for_each_old_crtc_in_state(old_state, crtc, old_crtc_state, i) {
-		struct vkms_crtc_state *vkms_state = to_vkms_crtc_state(old_crtc_state);
+		struct castkms_crtc_state *castkms_state = to_castkms_crtc_state(old_crtc_state);
 
-		flush_work(&vkms_state->composer_work);
+		flush_work(&castkms_state->composer_work);
 	}
 
 	drm_atomic_helper_cleanup_planes(dev, old_state);
 }
 
-static const struct drm_driver vkms_driver = {
+static const struct drm_driver castkms_driver = {
 	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM,
-	.fops			= &vkms_driver_fops,
+	.fops			= &castkms_driver_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 
@@ -102,7 +102,7 @@ static const struct drm_driver vkms_driver = {
 	.minor			= DRIVER_MINOR,
 };
 
-static int vkms_atomic_check(struct drm_device *dev, struct drm_atomic_commit *state)
+static int castkms_atomic_check(struct drm_device *dev, struct drm_atomic_commit *state)
 {
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *new_crtc_state;
@@ -113,33 +113,33 @@ static int vkms_atomic_check(struct drm_device *dev, struct drm_atomic_commit *s
 			continue;
 
 		if (new_crtc_state->gamma_lut->length / sizeof(struct drm_color_lut *)
-		    > VKMS_LUT_SIZE)
+		    > CASTKMS_LUT_SIZE)
 			return -EINVAL;
 	}
 
 	return drm_atomic_helper_check(dev, state);
 }
 
-static const struct drm_mode_config_funcs vkms_mode_funcs = {
+static const struct drm_mode_config_funcs castkms_mode_funcs = {
 	.fb_create = drm_gem_fb_create,
-	.atomic_check = vkms_atomic_check,
+	.atomic_check = castkms_atomic_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
 
-static const struct drm_mode_config_helper_funcs vkms_mode_config_helpers = {
-	.atomic_commit_tail = vkms_atomic_commit_tail,
+static const struct drm_mode_config_helper_funcs castkms_mode_config_helpers = {
+	.atomic_commit_tail = castkms_atomic_commit_tail,
 };
 
-static int vkms_modeset_init(struct vkms_device *vkmsdev)
+static int castkms_modeset_init(struct castkms_device *castkmsdev)
 {
-	struct drm_device *dev = &vkmsdev->drm;
+	struct drm_device *dev = &castkmsdev->drm;
 	int ret;
 
 	ret = drmm_mode_config_init(dev);
 	if (ret)
 		return ret;
 
-	dev->mode_config.funcs = &vkms_mode_funcs;
+	dev->mode_config.funcs = &castkms_mode_funcs;
 	dev->mode_config.min_width = XRES_MIN;
 	dev->mode_config.min_height = YRES_MIN;
 	dev->mode_config.max_width = XRES_MAX;
@@ -152,19 +152,19 @@ static int vkms_modeset_init(struct vkms_device *vkmsdev)
 	 * which is XRGB8888 in all cases.
 	 */
 	dev->mode_config.preferred_depth = 0;
-	dev->mode_config.helper_private = &vkms_mode_config_helpers;
+	dev->mode_config.helper_private = &castkms_mode_config_helpers;
 
-	return vkms_output_init(vkmsdev);
+	return castkms_output_init(castkmsdev);
 }
 
-int vkms_create(struct vkms_config *config)
+int castkms_create(struct castkms_config *config)
 {
 	int ret;
 	struct faux_device *fdev;
-	struct vkms_device *vkms_device;
+	struct castkms_device *castkms_device;
 	const char *dev_name;
 
-	dev_name = vkms_config_get_device_name(config);
+	dev_name = castkms_config_get_device_name(config);
 	fdev = faux_device_create(dev_name, NULL, NULL);
 	if (!fdev)
 		return -ENODEV;
@@ -174,17 +174,17 @@ int vkms_create(struct vkms_config *config)
 		goto out_unregister;
 	}
 
-	vkms_device = devm_drm_dev_alloc(&fdev->dev, &vkms_driver,
-					 struct vkms_device, drm);
-	if (IS_ERR(vkms_device)) {
-		ret = PTR_ERR(vkms_device);
+	castkms_device = devm_drm_dev_alloc(&fdev->dev, &castkms_driver,
+					 struct castkms_device, drm);
+	if (IS_ERR(castkms_device)) {
+		ret = PTR_ERR(castkms_device);
 		goto out_devres;
 	}
-	vkms_device->faux_dev = fdev;
-	vkms_device->config = config;
-	config->dev = vkms_device;
+	castkms_device->faux_dev = fdev;
+	castkms_device->config = config;
+	config->dev = castkms_device;
 
-	ret = dma_coerce_mask_and_coherent(vkms_device->drm.dev,
+	ret = dma_coerce_mask_and_coherent(castkms_device->drm.dev,
 					   DMA_BIT_MASK(64));
 
 	if (ret) {
@@ -192,24 +192,24 @@ int vkms_create(struct vkms_config *config)
 		goto out_devres;
 	}
 
-	ret = drm_vblank_init(&vkms_device->drm,
-			      vkms_config_get_num_crtcs(config));
+	ret = drm_vblank_init(&castkms_device->drm,
+			      castkms_config_get_num_crtcs(config));
 	if (ret) {
 		DRM_ERROR("Failed to vblank\n");
 		goto out_devres;
 	}
 
-	ret = vkms_modeset_init(vkms_device);
+	ret = castkms_modeset_init(castkms_device);
 	if (ret)
 		goto out_devres;
 
-	vkms_config_register_debugfs(vkms_device);
+	castkms_config_register_debugfs(castkms_device);
 
-	ret = drm_dev_register(&vkms_device->drm, 0);
+	ret = drm_dev_register(&castkms_device->drm, 0);
 	if (ret)
 		goto out_devres;
 
-	drm_client_setup(&vkms_device->drm, NULL);
+	drm_client_setup(&castkms_device->drm, NULL);
 
 	return 0;
 
@@ -220,26 +220,26 @@ out_unregister:
 	return ret;
 }
 
-static int __init vkms_init(void)
+static int __init castkms_init(void)
 {
 	int ret;
-	struct vkms_config *config;
+	struct castkms_config *config;
 
-	ret = vkms_configfs_register();
+	ret = castkms_configfs_register();
 	if (ret)
 		return ret;
 
 	if (!create_default_dev)
 		return 0;
 
-	config = vkms_config_default_create(enable_cursor, enable_writeback,
+	config = castkms_config_default_create(enable_cursor, enable_writeback,
 					    enable_overlay, enable_plane_pipeline);
 	if (IS_ERR(config))
 		return PTR_ERR(config);
 
-	ret = vkms_create(config);
+	ret = castkms_create(config);
 	if (ret) {
-		vkms_config_destroy(config);
+		castkms_config_destroy(config);
 		return ret;
 	}
 
@@ -248,12 +248,12 @@ static int __init vkms_init(void)
 	return 0;
 }
 
-void vkms_destroy(struct vkms_config *config)
+void castkms_destroy(struct castkms_config *config)
 {
 	struct faux_device *fdev;
 
 	if (!config->dev) {
-		DRM_INFO("vkms_device is NULL.\n");
+		DRM_INFO("castkms_device is NULL.\n");
 		return;
 	}
 
@@ -267,19 +267,19 @@ void vkms_destroy(struct vkms_config *config)
 	config->dev = NULL;
 }
 
-static void __exit vkms_exit(void)
+static void __exit castkms_exit(void)
 {
-	vkms_configfs_unregister();
+	castkms_configfs_unregister();
 
 	if (!default_config)
 		return;
 
-	vkms_destroy(default_config);
-	vkms_config_destroy(default_config);
+	castkms_destroy(default_config);
+	castkms_config_destroy(default_config);
 }
 
-module_init(vkms_init);
-module_exit(vkms_exit);
+module_init(castkms_init);
+module_exit(castkms_exit);
 
 MODULE_AUTHOR("Haneen Mohammed <hamohammed.sa@gmail.com>");
 MODULE_AUTHOR("Rodrigo Siqueira <rodrigosiqueiramelo@gmail.com>");

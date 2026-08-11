@@ -2,8 +2,8 @@
 
 #include <drm/drm_mode.h>
 
-#include "vkms_drv.h"
-#include "vkms_luts.h"
+#include "castkms_drv.h"
+#include "castkms_luts.h"
 
 /*
  * These luts were generated with a LUT generated based on
@@ -271,12 +271,12 @@ static struct drm_color_lut linear_array[LUT_SIZE] = {
 	{ 0xffff, 0xffff, 0xffff, 0 },
 };
 
-const struct vkms_color_lut linear_eotf = {
+const struct castkms_color_lut castkms_linear_eotf = {
 	.base = linear_array,
 	.lut_length = LUT_SIZE,
 	.channel_value2index_ratio = 0xff00ffll
 };
-EXPORT_SYMBOL(linear_eotf);
+EXPORT_SYMBOL(castkms_linear_eotf);
 
 static struct drm_color_lut srgb_array[LUT_SIZE] = {
 	{ 0x0, 0x0, 0x0, 0 },
@@ -537,12 +537,12 @@ static struct drm_color_lut srgb_array[LUT_SIZE] = {
 	{ 0xffff, 0xffff, 0xffff, 0 },
 };
 
-const struct vkms_color_lut srgb_eotf = {
+const struct castkms_color_lut castkms_srgb_eotf = {
 	.base = srgb_array,
 	.lut_length = LUT_SIZE,
 	.channel_value2index_ratio = 0xff00ffll
 };
-EXPORT_SYMBOL(srgb_eotf);
+EXPORT_SYMBOL(castkms_srgb_eotf);
 
 static struct drm_color_lut srgb_inv_array[LUT_SIZE] = {
 	{ 0x0, 0x0, 0x0, 0 },
@@ -803,9 +803,9 @@ static struct drm_color_lut srgb_inv_array[LUT_SIZE] = {
 	{ 0xffff, 0xffff, 0xffff, 0 },
 };
 
-const struct vkms_color_lut srgb_inv_eotf = {
+const struct castkms_color_lut castkms_srgb_inv_eotf = {
 	.base = srgb_inv_array,
 	.lut_length = LUT_SIZE,
 	.channel_value2index_ratio = 0xff00ffll
 };
-EXPORT_SYMBOL(srgb_inv_eotf);
+EXPORT_SYMBOL(castkms_srgb_inv_eotf);

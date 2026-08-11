@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 
-#ifndef _VKMS_DRV_H_
-#define _VKMS_DRV_H_
+#ifndef _CASTKMS_DRV_H_
+#define _CASTKMS_DRV_H_
 
 #include <linux/hrtimer.h>
 
@@ -12,7 +12,7 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_writeback.h>
 
-#define DEFAULT_DEVICE_NAME "vkms"
+#define DEFAULT_DEVICE_NAME "castkms"
 
 #define XRES_MIN    10
 #define YRES_MIN    10
@@ -25,10 +25,10 @@
 
 #define NUM_OVERLAY_PLANES 8
 
-#define VKMS_LUT_SIZE 256
+#define CASTKMS_LUT_SIZE 256
 
 /**
- * struct vkms_frame_info - Structure to store the state of a frame
+ * struct castkms_frame_info - Structure to store the state of a frame
  *
  * @fb: backing drm framebuffer
  * @src: source rectangle of this frame in the source framebuffer, stored in 16.16 fixed-point form
@@ -38,7 +38,7 @@
  *
  * @src and @dst should have the same size modulo the rotation.
  */
-struct vkms_frame_info {
+struct castkms_frame_info {
 	struct drm_framebuffer *fb;
 	struct drm_rect src, dst;
 	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
@@ -61,7 +61,7 @@ struct pixel_argb_s32 {
  *     machine endianness
  *
  * The goal of this structure is to keep enough precision to ensure
- * correct composition results in VKMS and simplifying color
+ * correct composition results in CASTKMS and simplifying color
  * manipulation by splitting each component into its own field.
  * Caution: the byte ordering of this structure is machine-dependent,
  * you can't cast it directly to AR48 or xR48.
@@ -85,14 +85,14 @@ struct line_buffer {
  */
 typedef void (*pixel_write_t)(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel);
 
-struct vkms_writeback_job {
+struct castkms_writeback_job {
 	struct iosys_map data[DRM_FORMAT_MAX_PLANES];
-	struct vkms_frame_info wb_frame_info;
+	struct castkms_frame_info wb_frame_info;
 	pixel_write_t pixel_write;
 };
 
 /**
- * enum pixel_read_direction - Enum used internally by VKMS to represent a reading direction in a
+ * enum pixel_read_direction - Enum used internally by CASTKMS to represent a reading direction in a
  * plane.
  */
 enum pixel_read_direction {
@@ -102,7 +102,7 @@ enum pixel_read_direction {
 	READ_LEFT_TO_RIGHT
 };
 
-struct vkms_plane_state;
+struct castkms_plane_state;
 
 /**
  * typedef pixel_read_line_t - These functions are used to read a pixel line in the source frame,
@@ -119,7 +119,7 @@ struct vkms_plane_state;
  * (included) to @out_pixel[@count] (excluded). The caller must ensure that out_pixel have a
  * length of at least @count.
  */
-typedef void (*pixel_read_line_t)(const struct vkms_plane_state *plane, int x_start,
+typedef void (*pixel_read_line_t)(const struct castkms_plane_state *plane, int x_start,
 				  int y_start, enum pixel_read_direction direction, int count,
 				  struct pixel_argb_u16 out_pixel[]);
 
@@ -140,32 +140,32 @@ struct conversion_matrix {
 };
 
 /**
- * struct vkms_plane_state - Driver specific plane state
+ * struct castkms_plane_state - Driver specific plane state
  * @base: base plane state
  * @frame_info: data required for composing computation
  * @pixel_read_line: function to read a pixel line in this plane. The creator of a
- *		     struct vkms_plane_state must ensure that this pointer is valid
+ *		     struct castkms_plane_state must ensure that this pointer is valid
  * @conversion_matrix: matrix used for yuv formats to convert to rgb
  */
-struct vkms_plane_state {
+struct castkms_plane_state {
 	struct drm_shadow_plane_state base;
-	struct vkms_frame_info *frame_info;
+	struct castkms_frame_info *frame_info;
 	pixel_read_line_t pixel_read_line;
 	struct conversion_matrix conversion_matrix;
 };
 
-struct vkms_plane {
+struct castkms_plane {
 	struct drm_plane base;
 };
 
-struct vkms_color_lut {
+struct castkms_color_lut {
 	struct drm_color_lut *base;
 	size_t lut_length;
 	s64 channel_value2index_ratio;
 };
 
 /**
- * struct vkms_crtc_state - Driver specific CRTC state
+ * struct castkms_crtc_state - Driver specific CRTC state
  *
  * @base: base CRTC state
  * @composer_work: work struct to compose and add CRC entries
@@ -175,22 +175,22 @@ struct vkms_color_lut {
  *		   @num_active_planes). They should be stored in z-order.
  * @active_writeback: Current active writeback job
  * @gamma_lut: Look up table for gamma used in this CRTC
- * @crc_pending: Protected by @vkms_output.composer_lock, true when the frame CRC is not computed
+ * @crc_pending: Protected by @castkms_output.composer_lock, true when the frame CRC is not computed
  *		 yet. Used by vblank to detect if the composer is too slow.
- * @wb_pending: Protected by @vkms_output.composer_lock, true when a writeback frame is requested.
- * @frame_start: Protected by @vkms_output.composer_lock, saves the frame number before the start
+ * @wb_pending: Protected by @castkms_output.composer_lock, true when a writeback frame is requested.
+ * @frame_start: Protected by @castkms_output.composer_lock, saves the frame number before the start
  *		 of the composition process.
- * @frame_end: Protected by @vkms_output.composer_lock, saves the last requested frame number.
+ * @frame_end: Protected by @castkms_output.composer_lock, saves the last requested frame number.
  *	       This is used to generate enough CRC entries when the composition worker is too slow.
  */
-struct vkms_crtc_state {
+struct castkms_crtc_state {
 	struct drm_crtc_state base;
 	struct work_struct composer_work;
 
 	int num_active_planes;
-	struct vkms_plane_state **active_planes;
-	struct vkms_writeback_job *active_writeback;
-	struct vkms_color_lut gamma_lut;
+	struct castkms_plane_state **active_planes;
+	struct castkms_writeback_job *active_writeback;
+	struct castkms_color_lut gamma_lut;
 
 	bool crc_pending;
 	bool wb_pending;
@@ -199,7 +199,7 @@ struct vkms_crtc_state {
 };
 
 /**
- * struct vkms_output - Internal representation of all output components in VKMS
+ * struct castkms_output - Internal representation of all output components in CASTKMS
  *
  * @crtc: Base CRTC in DRM
  * @encoder: DRM encoder used for this output
@@ -210,12 +210,12 @@ struct vkms_crtc_state {
  *	       vblank timestamps
  * @composer_workq: Ordered workqueue for @composer_state.composer_work.
  * @lock: Lock used to protect concurrent access to the composer
- * @composer_enabled: Protected by @lock, true when the VKMS composer is active (crc needed or
+ * @composer_enabled: Protected by @lock, true when the CASTKMS composer is active (crc needed or
  *		      writeback)
- * @composer_state: Protected by @lock, current state of this VKMS output
+ * @composer_state: Protected by @lock, current state of this CASTKMS output
  * @composer_lock: Lock used internally to protect @composer_state members
  */
-struct vkms_output {
+struct castkms_output {
 	struct drm_crtc crtc;
 	struct drm_writeback_connector wb_connector;
 	struct drm_encoder wb_encoder;
@@ -223,107 +223,107 @@ struct vkms_output {
 	spinlock_t lock;
 
 	bool composer_enabled;
-	struct vkms_crtc_state *composer_state;
+	struct castkms_crtc_state *composer_state;
 
 	spinlock_t composer_lock;
 };
 
-struct vkms_config;
-struct vkms_config_plane;
+struct castkms_config;
+struct castkms_config_plane;
 
 /**
- * struct vkms_device - Description of a VKMS device
+ * struct castkms_device - Description of a CASTKMS device
  *
  * @drm - Base device in DRM
  * @faux_dev - Associated faux device
- * @output - Configuration and sub-components of the VKMS device
- * @config: Configuration used in this VKMS device
+ * @output - Configuration and sub-components of the CASTKMS device
+ * @config: Configuration used in this CASTKMS device
  */
-struct vkms_device {
+struct castkms_device {
 	struct drm_device drm;
 	struct faux_device *faux_dev;
-	const struct vkms_config *config;
+	const struct castkms_config *config;
 };
 
 /*
  * The following helpers are used to convert a member of a struct into its parent.
  */
 
-#define drm_crtc_to_vkms_output(target) \
-	container_of(target, struct vkms_output, crtc)
+#define drm_crtc_to_castkms_output(target) \
+	container_of(target, struct castkms_output, crtc)
 
-#define drm_device_to_vkms_device(target) \
-	container_of(target, struct vkms_device, drm)
+#define drm_device_to_castkms_device(target) \
+	container_of(target, struct castkms_device, drm)
 
-#define to_vkms_crtc_state(target)\
-	container_of(target, struct vkms_crtc_state, base)
+#define to_castkms_crtc_state(target)\
+	container_of(target, struct castkms_crtc_state, base)
 
-#define to_vkms_plane_state(target)\
-	container_of(target, struct vkms_plane_state, base.base)
+#define to_castkms_plane_state(target)\
+	container_of(target, struct castkms_plane_state, base.base)
 
 /**
- * vkms_create() - Create a device from a configuration
+ * castkms_create() - Create a device from a configuration
  * @config: Config used to configure the new device
  *
- * A pointer to the created vkms_device is stored in @config
+ * A pointer to the created castkms_device is stored in @config
  *
  * Returns:
  * 0 on success or an error.
  */
-int vkms_create(struct vkms_config *config);
+int castkms_create(struct castkms_config *config);
 
 /**
- * vkms_destroy() - Destroy a device
+ * castkms_destroy() - Destroy a device
  * @config: Config from which the device was created
  *
  * The device is completely removed, but the @config is not freed. It can be
- * reused or destroyed with vkms_config_destroy().
+ * reused or destroyed with castkms_config_destroy().
  */
-void vkms_destroy(struct vkms_config *config);
+void castkms_destroy(struct castkms_config *config);
 
 /**
- * vkms_crtc_init() - Initialize a CRTC for VKMS
- * @dev: DRM device associated with the VKMS buffer
+ * castkms_crtc_init() - Initialize a CRTC for CASTKMS
+ * @dev: DRM device associated with the CASTKMS buffer
  * @crtc: uninitialized CRTC device
  * @primary: primary plane to attach to the CRTC
  * @cursor: plane to attach to the CRTC
  */
-struct vkms_output *vkms_crtc_init(struct drm_device *dev,
+struct castkms_output *castkms_crtc_init(struct drm_device *dev,
 				   struct drm_plane *primary,
 				   struct drm_plane *cursor);
 
 /**
- * vkms_output_init() - Initialize all sub-components needed for a VKMS device.
+ * castkms_output_init() - Initialize all sub-components needed for a CASTKMS device.
  *
- * @vkmsdev: VKMS device to initialize
+ * @castkmsdev: CASTKMS device to initialize
  */
-int vkms_output_init(struct vkms_device *vkmsdev);
+int castkms_output_init(struct castkms_device *castkmsdev);
 
 /**
- * vkms_plane_init() - Initialize a plane
+ * castkms_plane_init() - Initialize a plane
  *
- * @vkmsdev: VKMS device containing the plane
+ * @castkmsdev: CASTKMS device containing the plane
  * @plane_cfg: plane configuration
  */
-struct vkms_plane *vkms_plane_init(struct vkms_device *vkmsdev,
-				   struct vkms_config_plane *plane_cfg);
+struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
+				   struct castkms_config_plane *plane_cfg);
 
 /* CRC Support */
-const char *const *vkms_get_crc_sources(struct drm_crtc *crtc,
+const char *const *castkms_get_crc_sources(struct drm_crtc *crtc,
 					size_t *count);
-int vkms_set_crc_source(struct drm_crtc *crtc, const char *src_name);
-int vkms_verify_crc_source(struct drm_crtc *crtc, const char *source_name,
+int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name);
+int castkms_verify_crc_source(struct drm_crtc *crtc, const char *source_name,
 			   size_t *values_cnt);
 
 /* Composer Support */
-void vkms_composer_worker(struct work_struct *work);
-void vkms_set_composer(struct vkms_output *out, bool enabled);
-void vkms_writeback_row(struct vkms_writeback_job *wb, const struct line_buffer *src_buffer, int y);
+void castkms_composer_worker(struct work_struct *work);
+void castkms_set_composer(struct castkms_output *out, bool enabled);
+void castkms_writeback_row(struct castkms_writeback_job *wb, const struct line_buffer *src_buffer, int y);
 
 /* Writeback */
-int vkms_enable_writeback_connector(struct vkms_device *vkmsdev, struct vkms_output *vkms_out);
+int castkms_enable_writeback_connector(struct castkms_device *castkmsdev, struct castkms_output *castkms_out);
 
 /* Colorops */
-int vkms_initialize_colorops(struct drm_plane *plane);
+int castkms_initialize_colorops(struct drm_plane *plane);
 
-#endif /* _VKMS_DRV_H_ */
+#endif /* _CASTKMS_DRV_H_ */

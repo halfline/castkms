@@ -12,10 +12,10 @@
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
 
-#include "vkms_drv.h"
-#include "vkms_formats.h"
+#include "castkms_drv.h"
+#include "castkms_formats.h"
 
-static const u32 vkms_wb_formats[] = {
+static const u32 castkms_wb_formats[] = {
 	DRM_FORMAT_ARGB8888,
 	DRM_FORMAT_XRGB8888,
 	DRM_FORMAT_ABGR8888,
@@ -24,14 +24,14 @@ static const u32 vkms_wb_formats[] = {
 	DRM_FORMAT_RGB565
 };
 
-static const struct drm_connector_funcs vkms_wb_connector_funcs = {
+static const struct drm_connector_funcs castkms_wb_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.reset = drm_atomic_helper_connector_reset,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
-static int vkms_wb_atomic_check(struct drm_connector *connector,
+static int castkms_wb_atomic_check(struct drm_connector *connector,
 				struct drm_atomic_commit *state)
 {
 	struct drm_connector_state *conn_state =
@@ -64,7 +64,7 @@ static int vkms_wb_atomic_check(struct drm_connector *connector,
 	return 0;
 }
 
-static int vkms_wb_connector_get_modes(struct drm_connector *connector)
+static int castkms_wb_connector_get_modes(struct drm_connector *connector)
 {
 	struct drm_device *dev = connector->dev;
 
@@ -72,76 +72,76 @@ static int vkms_wb_connector_get_modes(struct drm_connector *connector)
 				    dev->mode_config.max_height);
 }
 
-static int vkms_wb_prepare_job(struct drm_writeback_connector *wb_connector,
+static int castkms_wb_prepare_job(struct drm_writeback_connector *wb_connector,
 			       struct drm_writeback_job *job)
 {
-	struct vkms_writeback_job *vkmsjob;
+	struct castkms_writeback_job *castkmsjob;
 	int ret;
 
 	if (!job->fb)
 		return 0;
 
-	vkmsjob = kzalloc_obj(*vkmsjob);
-	if (!vkmsjob)
+	castkmsjob = kzalloc_obj(*castkmsjob);
+	if (!castkmsjob)
 		return -ENOMEM;
 
-	ret = drm_gem_fb_vmap(job->fb, vkmsjob->wb_frame_info.map, vkmsjob->data);
+	ret = drm_gem_fb_vmap(job->fb, castkmsjob->wb_frame_info.map, castkmsjob->data);
 	if (ret) {
 		DRM_ERROR("vmap failed: %d\n", ret);
 		goto err_kfree;
 	}
 
-	vkmsjob->wb_frame_info.fb = job->fb;
-	drm_framebuffer_get(vkmsjob->wb_frame_info.fb);
+	castkmsjob->wb_frame_info.fb = job->fb;
+	drm_framebuffer_get(castkmsjob->wb_frame_info.fb);
 
-	job->priv = vkmsjob;
+	job->priv = castkmsjob;
 
 	return 0;
 
 err_kfree:
-	kfree(vkmsjob);
+	kfree(castkmsjob);
 	return ret;
 }
 
-static void vkms_wb_cleanup_job(struct drm_writeback_connector *connector,
+static void castkms_wb_cleanup_job(struct drm_writeback_connector *connector,
 				struct drm_writeback_job *job)
 {
-	struct vkms_writeback_job *vkmsjob = job->priv;
-	struct vkms_output *vkms_output = container_of(connector,
-						       struct vkms_output,
+	struct castkms_writeback_job *castkmsjob = job->priv;
+	struct castkms_output *castkms_output = container_of(connector,
+						       struct castkms_output,
 						       wb_connector);
 
 	if (!job->fb)
 		return;
 
-	drm_gem_fb_vunmap(job->fb, vkmsjob->wb_frame_info.map);
+	drm_gem_fb_vunmap(job->fb, castkmsjob->wb_frame_info.map);
 
-	drm_framebuffer_put(vkmsjob->wb_frame_info.fb);
+	drm_framebuffer_put(castkmsjob->wb_frame_info.fb);
 
-	vkms_set_composer(vkms_output, false);
-	kfree(vkmsjob);
+	castkms_set_composer(castkms_output, false);
+	kfree(castkmsjob);
 }
 
-static void vkms_wb_atomic_commit(struct drm_connector *conn,
+static void castkms_wb_atomic_commit(struct drm_connector *conn,
 				  struct drm_atomic_commit *state)
 {
 	struct drm_connector_state *connector_state = drm_atomic_get_new_connector_state(state,
 											 conn);
-	struct vkms_output *output = drm_crtc_to_vkms_output(connector_state->crtc);
+	struct castkms_output *output = drm_crtc_to_castkms_output(connector_state->crtc);
 	struct drm_writeback_connector *wb_conn = &output->wb_connector;
 	struct drm_connector_state *conn_state = wb_conn->base.state;
-	struct vkms_crtc_state *crtc_state = output->composer_state;
+	struct castkms_crtc_state *crtc_state = output->composer_state;
 	struct drm_framebuffer *fb = connector_state->writeback_job->fb;
 	u16 crtc_height = crtc_state->base.mode.vdisplay;
 	u16 crtc_width = crtc_state->base.mode.hdisplay;
-	struct vkms_writeback_job *active_wb;
-	struct vkms_frame_info *wb_frame_info;
+	struct castkms_writeback_job *active_wb;
+	struct castkms_frame_info *wb_frame_info;
 	u32 wb_format = fb->format->format;
 
 	if (!conn_state)
 		return;
 
-	vkms_set_composer(output, true);
+	castkms_set_composer(output, true);
 
 	active_wb = conn_state->writeback_job->priv;
 	wb_frame_info = &active_wb->wb_frame_info;
@@ -151,38 +151,38 @@ static void vkms_wb_atomic_commit(struct drm_connector *conn,
 	crtc_state->wb_pending = true;
 	spin_unlock_irq(&output->composer_lock);
 	drm_writeback_queue_job(wb_conn, connector_state);
-	active_wb->pixel_write = get_pixel_write_function(wb_format);
+	active_wb->pixel_write = castkms_get_pixel_write_function(wb_format);
 	drm_rect_init(&wb_frame_info->src, 0, 0, crtc_width, crtc_height);
 	drm_rect_init(&wb_frame_info->dst, 0, 0, crtc_width, crtc_height);
 }
 
-static const struct drm_connector_helper_funcs vkms_wb_conn_helper_funcs = {
-	.get_modes = vkms_wb_connector_get_modes,
-	.prepare_writeback_job = vkms_wb_prepare_job,
-	.cleanup_writeback_job = vkms_wb_cleanup_job,
-	.atomic_commit = vkms_wb_atomic_commit,
-	.atomic_check = vkms_wb_atomic_check,
+static const struct drm_connector_helper_funcs castkms_wb_conn_helper_funcs = {
+	.get_modes = castkms_wb_connector_get_modes,
+	.prepare_writeback_job = castkms_wb_prepare_job,
+	.cleanup_writeback_job = castkms_wb_cleanup_job,
+	.atomic_commit = castkms_wb_atomic_commit,
+	.atomic_check = castkms_wb_atomic_check,
 };
 
-int vkms_enable_writeback_connector(struct vkms_device *vkmsdev,
-				    struct vkms_output *vkms_output)
+int castkms_enable_writeback_connector(struct castkms_device *castkmsdev,
+				    struct castkms_output *castkms_output)
 {
-	struct drm_writeback_connector *wb = &vkms_output->wb_connector;
+	struct drm_writeback_connector *wb = &castkms_output->wb_connector;
 	int ret;
 
-	ret = drmm_encoder_init(&vkmsdev->drm, &vkms_output->wb_encoder,
+	ret = drmm_encoder_init(&castkmsdev->drm, &castkms_output->wb_encoder,
 				NULL, DRM_MODE_ENCODER_VIRTUAL, NULL);
 	if (ret)
 		return ret;
-	vkms_output->wb_encoder.possible_crtcs |= drm_crtc_mask(&vkms_output->crtc);
-	vkms_output->wb_encoder.possible_clones |=
-		drm_encoder_mask(&vkms_output->wb_encoder);
+	castkms_output->wb_encoder.possible_crtcs |= drm_crtc_mask(&castkms_output->crtc);
+	castkms_output->wb_encoder.possible_clones |=
+		drm_encoder_mask(&castkms_output->wb_encoder);
 
-	drm_connector_helper_add(&wb->base, &vkms_wb_conn_helper_funcs);
+	drm_connector_helper_add(&wb->base, &castkms_wb_conn_helper_funcs);
 
-	return drmm_writeback_connector_init(&vkmsdev->drm, wb,
-					     &vkms_wb_connector_funcs,
-					     &vkms_output->wb_encoder,
-					     vkms_wb_formats,
-					     ARRAY_SIZE(vkms_wb_formats));
+	return drmm_writeback_connector_init(&castkmsdev->drm, wb,
+					     &castkms_wb_connector_funcs,
+					     &castkms_output->wb_encoder,
+					     castkms_wb_formats,
+					     ARRAY_SIZE(castkms_wb_formats));
 }

@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
+
+#ifndef _CASTKMS_CONNECTOR_H_
+#define _CASTKMS_CONNECTOR_H_
+
+#include "castkms_drv.h"
+
+#define drm_connector_to_castkms_connector(target) \
+	container_of(target, struct castkms_connector, base)
+
+/**
+ * struct castkms_connector - CASTKMS custom type wrapping around the DRM connector
+ *
+ * @drm: Base DRM connector
+ */
+struct castkms_connector {
+	struct drm_connector base;
+};
+
+/**
+ * castkms_connector_init() - Initialize a connector
+ * @castkmsdev: CASTKMS device containing the connector
+ *
+ * Returns:
+ * The connector or an error on failure.
+ */
+struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsdev);
+
+/**
+ * castkms_trigger_connector_hotplug() - Update the device's connectors status
+ * @castkmsdev: CASTKMS device to update
+ */
+void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev);
+
+#endif /* _CASTKMS_CONNECTOR_H_ */

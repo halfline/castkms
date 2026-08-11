@@ -7,7 +7,7 @@
 
 #include "../../drm_crtc_internal.h"
 
-#include "../vkms_formats.h"
+#include "../castkms_formats.h"
 
 #define TEST_BUFF_SIZE 50
 
@@ -28,7 +28,7 @@ struct pixel_yuv_u16 {
 
 /*
  * struct yuv_u16_to_argb_u16_case - Reference values to test the color
- * conversions in VKMS between YUV to ARGB
+ * conversions in CASTKMS between YUV to ARGB
  *
  * @encoding: Encoding used to convert RGB to YUV
  * @range: Range used to convert RGB to YUV
@@ -212,17 +212,17 @@ static struct yuv_u16_to_argb_u16_case yuv_u16_to_argb_u16_cases[] = {
 };
 
 /*
- * vkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
- * colors to ARGB colors in VKMS
+ * castkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
+ * colors to ARGB colors in CASTKMS
  *
- * This test will use the functions get_conversion_matrix_to_argb_u16 and
- * argb_u16_from_yuv161616 to convert YUV colors (stored in
+ * This test will use the functions castkms_get_conversion_matrix_to_argb_u16 and
+ * castkms_argb_u16_from_yuv161616 to convert YUV colors (stored in
  * yuv_u16_to_argb_u16_cases) into ARGB colors.
  *
  * The conversion between YUV and RGB is not totally reversible, so there may be
  * some difference between the expected value and the result.
  */
-static void vkms_format_test_yuv_u16_to_argb_u16(struct kunit *test)
+static void castkms_format_test_yuv_u16_to_argb_u16(struct kunit *test)
 {
 	const struct yuv_u16_to_argb_u16_case *param = test->param_value;
 	struct pixel_argb_u16 argb;
@@ -231,10 +231,10 @@ static void vkms_format_test_yuv_u16_to_argb_u16(struct kunit *test)
 		const struct format_pair *color = &param->colors[i];
 		struct conversion_matrix matrix;
 
-		get_conversion_matrix_to_argb_u16
+		castkms_get_conversion_matrix_to_argb_u16
 			(DRM_FORMAT_NV12, param->encoding, param->range, &matrix);
 
-		argb = argb_u16_from_yuv161616(&matrix, color->yuv.y, color->yuv.u,
+		argb = castkms_argb_u16_from_yuv161616(&matrix, color->yuv.y, color->yuv.u,
 					       color->yuv.v);
 
 		KUNIT_EXPECT_LE_MSG(test, abs_diff(argb.a, color->argb.a), 0x1ff,
@@ -252,7 +252,7 @@ static void vkms_format_test_yuv_u16_to_argb_u16(struct kunit *test)
 	}
 }
 
-static void vkms_format_test_yuv_u16_to_argb_u16_case_desc(struct yuv_u16_to_argb_u16_case *t,
+static void castkms_format_test_yuv_u16_to_argb_u16_case_desc(struct yuv_u16_to_argb_u16_case *t,
 							   char *desc)
 {
 	snprintf(desc, KUNIT_PARAM_DESC_SIZE, "%s - %s",
@@ -260,20 +260,20 @@ static void vkms_format_test_yuv_u16_to_argb_u16_case_desc(struct yuv_u16_to_arg
 }
 
 KUNIT_ARRAY_PARAM(yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_cases,
-		  vkms_format_test_yuv_u16_to_argb_u16_case_desc
+		  castkms_format_test_yuv_u16_to_argb_u16_case_desc
 );
 
-static struct kunit_case vkms_format_test_cases[] = {
-	KUNIT_CASE_PARAM(vkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
+static struct kunit_case castkms_format_test_cases[] = {
+	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
 };
 
-static struct kunit_suite vkms_format_test_suite = {
-	.name = "vkms-format",
-	.test_cases = vkms_format_test_cases,
+static struct kunit_suite castkms_format_test_suite = {
+	.name = "castkms-format",
+	.test_cases = castkms_format_test_cases,
 };
 
-kunit_test_suite(vkms_format_test_suite);
+kunit_test_suite(castkms_format_test_suite);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Kunit test for vkms format conversion");
+MODULE_DESCRIPTION("Kunit test for castkms format conversion");
