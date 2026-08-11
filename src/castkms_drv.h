@@ -159,7 +159,7 @@ struct castkms_plane {
 };
 
 struct castkms_color_lut {
-	struct drm_color_lut *base;
+	const struct drm_color_lut *base;
 	size_t lut_length;
 	s64 channel_value2index_ratio;
 };

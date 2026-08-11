@@ -12,7 +12,7 @@
  * https://gitlab.freedesktop.org/hwentland/lutgen
  */
 
-static struct drm_color_lut linear_array[LUT_SIZE] = {
+static const struct drm_color_lut linear_array[LUT_SIZE] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0x101, 0x101, 0x101, 0 },
 	{ 0x202, 0x202, 0x202, 0 },
@@ -278,7 +278,7 @@ const struct castkms_color_lut castkms_linear_eotf = {
 };
 EXPORT_SYMBOL(castkms_linear_eotf);
 
-static struct drm_color_lut srgb_array[LUT_SIZE] = {
+static const struct drm_color_lut srgb_array[LUT_SIZE] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0x13, 0x13, 0x13, 0 },
 	{ 0x27, 0x27, 0x27, 0 },
@@ -544,7 +544,7 @@ const struct castkms_color_lut castkms_srgb_eotf = {
 };
 EXPORT_SYMBOL(castkms_srgb_eotf);
 
-static struct drm_color_lut srgb_inv_array[LUT_SIZE] = {
+static const struct drm_color_lut srgb_inv_array[LUT_SIZE] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0xcc2, 0xcc2, 0xcc2, 0 },
 	{ 0x15be, 0x15be, 0x15be, 0 },
