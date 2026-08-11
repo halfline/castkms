@@ -645,23 +645,26 @@ void castkms_composer_worker(struct work_struct *work)
 	 * We raced with the vblank hrtimer and previous work already computed
 	 * the crc, nothing to do.
 	 */
-	if (!crc_pending)
+	if (!crc_pending && !wb_pending)
 		return;
 
-	if (wb_pending)
+	if (WARN_ON(wb_pending && !active_wb))
+		ret = -EINVAL;
+	else if (wb_pending)
 		ret = compose_active_planes(active_wb, crtc_state, &crc32);
 	else
 		ret = compose_active_planes(NULL, crtc_state, &crc32);
 
-	if (ret)
-		return;
-
 	if (wb_pending) {
-		drm_writeback_signal_completion(&out->wb_connector, 0);
 		spin_lock_irq(&out->composer_lock);
 		crtc_state->wb_pending = false;
+		crtc_state->active_writeback = NULL;
 		spin_unlock_irq(&out->composer_lock);
+		drm_writeback_signal_completion(&out->wb_connector, ret);
 	}
+
+	if (ret || !crc_pending)
+		return;
 
 	/*
 	 * The worker can fall behind the vblank hrtimer, make sure we catch up.
