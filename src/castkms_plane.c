@@ -78,14 +78,12 @@ static void castkms_plane_destroy_state(struct drm_plane *plane,
 				     struct drm_plane_state *old_state)
 {
 	struct castkms_plane_state *castkms_state = to_castkms_plane_state(old_state);
-	struct drm_crtc *crtc = castkms_state->base.base.crtc;
 
-	if (crtc && castkms_state->frame_info->fb) {
+	if (castkms_state->frame_info && castkms_state->frame_info->fb) {
 		/* dropping the reference we acquired in
-		 * castkms_primary_plane_update()
+		 * castkms_plane_atomic_update()
 		 */
-		if (drm_framebuffer_read_refcount(castkms_state->frame_info->fb))
-			drm_framebuffer_put(castkms_state->frame_info->fb);
+		drm_framebuffer_put(castkms_state->frame_info->fb);
 	}
 
 	kfree(castkms_state->frame_info);
