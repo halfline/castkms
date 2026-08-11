@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+
+set -euo pipefail
+
+repo_dir=${1:-$HOME/castkms}
+expected_release=${2:?missing expected kernel release}
+result_dir=$repo_dir/test-results/vm-smoke
+stock_loaded=0
+cast_loaded=0
+
+cleanup()
+{
+	if test "$cast_loaded" -eq 1; then
+		sudo rmmod castkms || true
+	fi
+	if test "$stock_loaded" -eq 1; then
+		sudo rmmod vkms || true
+	fi
+}
+
+trap cleanup EXIT
+
+mkdir -p "$result_dir"
+cd "$repo_dir"
+
+running_release=$(uname -r)
+test "$running_release" = "$expected_release"
+printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
+
+make clean
+make W=1 2>&1 | tee "$result_dir/build.log"
+
+test "$(modinfo -F name ./castkms.ko)" = castkms
+case "$(modinfo -F vermagic ./castkms.ko)" in
+	"$expected_release "*) ;;
+	*) printf '%s\n' 'module vermagic does not match the guest kernel' >&2; exit 1 ;;
+esac
+
+if strings ./castkms.ko | grep -qi vkms; then
+	printf '%s\n' 'legacy VKMS identity remains in castkms.ko' >&2
+	exit 1
+fi
+
+if awk '{ print $2 }' Module.symvers | grep -Ev '^castkms_' > "$result_dir/non-castkms-exports.txt"; then
+	printf '%s\n' 'module contains non-namespaced exports' >&2
+	exit 1
+fi
+
+if lsmod | grep -Eq '^(vkms|castkms)\b'; then
+	printf '%s\n' 'refusing to disturb a pre-existing vkms or castkms module' >&2
+	exit 1
+fi
+
+if ! mountpoint -q /sys/kernel/config; then
+	sudo mount -t configfs none /sys/kernel/config
+fi
+
+sudo modprobe vkms create_default_dev=0
+stock_loaded=1
+sudo insmod ./castkms.ko create_default_dev=0
+cast_loaded=1
+
+test -d /sys/kernel/config/vkms
+test -d /sys/kernel/config/castkms
+lsmod | grep -E '^(vkms|castkms)\b' | tee "$result_dir/coexistence-modules.txt"
+ls -ld /sys/kernel/config/vkms /sys/kernel/config/castkms | \
+	tee "$result_dir/coexistence-configfs.txt"
+
+sudo rmmod castkms
+cast_loaded=0
+sudo rmmod vkms
+stock_loaded=0
+
+sudo insmod ./castkms.ko \
+	create_default_dev=1 \
+	enable_cursor=0 \
+	enable_overlay=0 \
+	enable_writeback=0 \
+	enable_plane_pipeline=0
+cast_loaded=1
+
+sudo udevadm settle
+ls -l /dev/dri | tee "$result_dir/dev-dri.txt"
+if ! sudo modetest -M castkms -c -p -e > "$result_dir/modetest.txt" 2>&1; then
+	cat "$result_dir/modetest.txt" >&2
+	exit 1
+fi
+
+# Keep stdin open so noninteractive SSH does not end the flip loop immediately.
+page_flip_input_dir=$(mktemp -d)
+mkfifo "$page_flip_input_dir/input"
+exec 3<> "$page_flip_input_dir/input"
+rm "$page_flip_input_dir/input"
+rmdir "$page_flip_input_dir"
+
+page_flip_status=0
+sudo timeout --signal=INT --kill-after=2s 5s \
+	stdbuf --output=L --error=L modetest -M castkms -r -v \
+	<&3 > "$result_dir/page-flip.txt" 2>&1 || \
+	page_flip_status=$?
+exec 3>&-
+if test "$page_flip_status" -ne 124 ||
+	! grep -q '^freq:' "$result_dir/page-flip.txt"; then
+	cat "$result_dir/page-flip.txt" >&2
+	exit 1
+fi
+if ! sudo drm_info > "$result_dir/drm-info.txt" 2>&1; then
+	cat "$result_dir/drm-info.txt" >&2
+	exit 1
+fi
+
+sudo rmmod castkms
+cast_loaded=0
+if lsmod | grep -Eq '^(vkms|castkms)\b'; then
+	printf '%s\n' 'module cleanup check failed' >&2
+	exit 1
+fi
+test ! -e /sys/kernel/config/vkms
+test ! -e /sys/kernel/config/castkms
+
+printf '%s\n' 'cleanup=pass' | tee -a "$result_dir/summary.txt"
+printf '%s\n' 'result=pass' | tee -a "$result_dir/summary.txt"
