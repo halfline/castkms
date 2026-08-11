@@ -202,12 +202,8 @@ struct castkms_crtc_state {
  * struct castkms_output - Internal representation of all output components in CASTKMS
  *
  * @crtc: Base CRTC in DRM
- * @encoder: DRM encoder used for this output
- * @connector: DRM connector used for this output
- * @wb_connecter: DRM writeback connector used for this output
- * @vblank_hrtimer: Timer used to trigger the vblank
- * @period_ns: vblank period, in nanoseconds, used to configure @vblank_hrtimer and to compute
- *	       vblank timestamps
+ * @wb_connector: DRM writeback connector used for this output
+ * @wb_encoder: DRM encoder used by @wb_connector
  * @composer_workq: Ordered workqueue for @composer_state.composer_work.
  * @lock: Lock used to protect the current composer state and scheduling
  * @composer_enabled: Protected by @lock, true when the CASTKMS composer is active (crc needed or
