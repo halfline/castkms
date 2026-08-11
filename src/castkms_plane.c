@@ -50,24 +50,31 @@ static const u32 castkms_formats[] = {
 	DRM_FORMAT_R8,
 };
 
-static struct drm_plane_state *
-castkms_plane_duplicate_state(struct drm_plane *plane)
+static struct castkms_plane_state *castkms_plane_state_alloc(void)
 {
 	struct castkms_plane_state *castkms_state;
-	struct castkms_frame_info *frame_info;
 
 	castkms_state = kzalloc_obj(*castkms_state);
 	if (!castkms_state)
 		return NULL;
 
-	frame_info = kzalloc_obj(*frame_info);
-	if (!frame_info) {
-		DRM_DEBUG_KMS("Couldn't allocate frame_info\n");
+	castkms_state->frame_info = kzalloc_obj(*castkms_state->frame_info);
+	if (!castkms_state->frame_info) {
 		kfree(castkms_state);
 		return NULL;
 	}
 
-	castkms_state->frame_info = frame_info;
+	return castkms_state;
+}
+
+static struct drm_plane_state *
+castkms_plane_duplicate_state(struct drm_plane *plane)
+{
+	struct castkms_plane_state *castkms_state;
+
+	castkms_state = castkms_plane_state_alloc();
+	if (!castkms_state)
+		return NULL;
 
 	__drm_gem_duplicate_shadow_plane_state(plane, &castkms_state->base);
 
@@ -102,7 +109,7 @@ static void castkms_plane_reset(struct drm_plane *plane)
 		plane->state = NULL; /* must be set to NULL here */
 	}
 
-	castkms_state = kzalloc_obj(*castkms_state);
+	castkms_state = castkms_plane_state_alloc();
 	if (!castkms_state) {
 		DRM_ERROR("Cannot allocate castkms_plane_state\n");
 		return;
