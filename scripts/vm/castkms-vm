@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_DIR=$(cd -- "$SCRIPT_DIR/../.." && pwd)
+
+readonly IMAGE_NAME=Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2
+readonly IMAGE_URL=https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/$IMAGE_NAME
+readonly IMAGE_SHA256=846574c8a97cd2d8dc1f231062d73107cc85cbbbda56335e264a46e3a6c8ab2f
+readonly KERNEL_RELEASE=7.1.7-100.fc43.x86_64
+readonly KERNEL_RPM_BASE_URL=https://kojipkgs.fedoraproject.org/packages/kernel/7.1.7/100.fc43/x86_64
+
+STATE_DIR=${CASTKMS_VM_STATE_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/castkms-vm}
+INSTANCE_NAME=${CASTKMS_VM_INSTANCE:-default}
+INSTANCE_DIR=$STATE_DIR/instances/$INSTANCE_NAME
+IMAGE_DIR=$STATE_DIR/images
+BASE_IMAGE=$IMAGE_DIR/$IMAGE_NAME
+DISK_IMAGE=$INSTANCE_DIR/root.qcow2
+SEED_ISO=$INSTANCE_DIR/seed.iso
+PID_FILE=$INSTANCE_DIR/qemu.pid
+SERIAL_LOG=$INSTANCE_DIR/serial.log
+QEMU_LOG=$INSTANCE_DIR/qemu.log
+SSH_KEY=$STATE_DIR/ssh/id_ed25519
+SSH_PORT=${CASTKMS_VM_SSH_PORT:-22222}
+SSH_USER=castkms
+GUEST_REPO=/home/$SSH_USER/castkms
+RESULT_DIR=$STATE_DIR/results/$INSTANCE_NAME
+
+SSH_OPTIONS=(
+	-i "$SSH_KEY"
+	-p "$SSH_PORT"
+	-o BatchMode=yes
+	-o ConnectTimeout=3
+	-o IdentitiesOnly=yes
+	-o StrictHostKeyChecking=accept-new
+	-o UserKnownHostsFile="$STATE_DIR/ssh/known_hosts"
+)
+
+usage()
+{
+	cat <<'EOF'
+Usage: scripts/vm/castkms-vm COMMAND
+
+Commands:
+  prepare     Download the verified base image and create a disposable overlay
+  start       Start the VM in the background
+  wait        Wait until the guest accepts SSH connections
+  provision   Start the VM, install the pinned kernel/toolchain, and reboot it
+  sync        Mirror the current source tree into the guest
+  test        Sync, build, load, and smoke-test castkms in the guest
+  shell       Open an interactive shell in the guest
+  status      Show VM and guest-kernel status
+  logs        Follow the guest serial console log
+  stop        Ask the guest to power off, with a bounded fallback
+  reset       Stop and archive the disposable instance, then create a fresh one
+
+Environment:
+  CASTKMS_VM_STATE_DIR       VM cache/state directory
+  CASTKMS_VM_INSTANCE        Instance name (default: default)
+  CASTKMS_VM_SSH_PORT        Host SSH forward (default: 22222)
+  CASTKMS_VM_MEMORY_MB       Guest memory in MiB (default: 4096)
+  CASTKMS_VM_CPUS            Guest vCPU count (default: 4)
+  CASTKMS_VM_VNC_DISPLAY     Optional localhost VNC display number
+EOF
+}
+
+die()
+{
+	printf 'error: %s\n' "$*" >&2
+	exit 1
+}
+
+require_command()
+{
+	command -v "$1" >/dev/null || die "required command not found: $1"
+}
+
+vm_pid()
+{
+	local pid
+
+	test -r "$PID_FILE" || return 1
+	read -r pid < "$PID_FILE"
+	[[ $pid =~ ^[0-9]+$ ]] || return 1
+	printf '%s\n' "$pid"
+}
+
+vm_running()
+{
+	local pid
+
+	pid=$(vm_pid) || return 1
+	kill -0 "$pid" 2>/dev/null || return 1
+	test -r "/proc/$pid/cmdline" || return 1
+	tr '\0' '\n' < "/proc/$pid/cmdline" | grep -Fxq "castkms-$INSTANCE_NAME"
+}
+
+ssh_guest()
+{
+	ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1" "$@"
+}
+
+prepare()
+{
+	local public_key part_image
+
+	require_command curl
+	require_command mkisofs
+	require_command qemu-img
+	require_command sha256sum
+	require_command ssh-keygen
+
+	mkdir -p "$IMAGE_DIR" "$INSTANCE_DIR" "$STATE_DIR/ssh" "$RESULT_DIR"
+
+	if test ! -f "$BASE_IMAGE"; then
+		part_image=$BASE_IMAGE.part
+		printf 'Downloading %s\n' "$IMAGE_URL"
+		curl --fail --location --show-error --continue-at - \
+			--output "$part_image" "$IMAGE_URL"
+		printf '%s  %s\n' "$IMAGE_SHA256" "$part_image" | sha256sum --check -
+		mv -- "$part_image" "$BASE_IMAGE"
+	fi
+
+	printf '%s  %s\n' "$IMAGE_SHA256" "$BASE_IMAGE" | sha256sum --check -
+
+	if test ! -f "$SSH_KEY"; then
+		ssh-keygen -q -t ed25519 -N '' -C castkms-vm -f "$SSH_KEY"
+	fi
+
+	if test ! -f "$DISK_IMAGE"; then
+		qemu-img create -q -f qcow2 -F qcow2 -b "$BASE_IMAGE" "$DISK_IMAGE" 30G
+	fi
+
+	public_key=$(<"$SSH_KEY.pub")
+	sed "s|@SSH_PUBLIC_KEY@|$public_key|" \
+		"$SCRIPT_DIR/cloud-init-user-data.in" > "$INSTANCE_DIR/user-data"
+	printf 'instance-id: castkms-%s\nlocal-hostname: castkms-vm\n' \
+		"$INSTANCE_NAME" > "$INSTANCE_DIR/meta-data"
+	mkisofs -quiet -output "$SEED_ISO" -volid cidata -joliet -rock \
+		"$INSTANCE_DIR/user-data" "$INSTANCE_DIR/meta-data"
+
+	printf 'VM state prepared in %s\n' "$INSTANCE_DIR"
+}
+
+start()
+{
+	local -a display_args
+	local memory_mb cpus vnc_display
+
+	if vm_running; then
+		printf 'VM %s is already running (pid %s)\n' "$INSTANCE_NAME" "$(vm_pid)"
+		return
+	fi
+
+	prepare
+	require_command qemu-system-x86_64
+
+	memory_mb=${CASTKMS_VM_MEMORY_MB:-4096}
+	cpus=${CASTKMS_VM_CPUS:-4}
+	vnc_display=${CASTKMS_VM_VNC_DISPLAY:-}
+	display_args=(-display none)
+	if test -n "$vnc_display"; then
+		display_args+=(-vnc "127.0.0.1:$vnc_display")
+	fi
+
+	: > "$SERIAL_LOG"
+	: > "$QEMU_LOG"
+
+	qemu-system-x86_64 \
+		-name "castkms-$INSTANCE_NAME" \
+		-machine q35,accel=kvm \
+		-cpu host \
+		-smp "$cpus" \
+		-m "$memory_mb" \
+		-drive "if=virtio,format=qcow2,file=$DISK_IMAGE,discard=unmap" \
+		-drive "if=virtio,format=raw,readonly=on,file=$SEED_ISO" \
+		-device virtio-net-pci,netdev=net0 \
+		-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" \
+		-vga virtio \
+		-serial "file:$SERIAL_LOG" \
+		"${display_args[@]}" \
+		-daemonize \
+		-pidfile "$PID_FILE" \
+		-D "$QEMU_LOG"
+
+	printf 'Started VM %s (pid %s, SSH port %s)\n' \
+		"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT"
+}
+
+wait_for_ssh()
+{
+	local elapsed timeout
+
+	timeout=${CASTKMS_VM_BOOT_TIMEOUT:-240}
+	elapsed=0
+	while test "$elapsed" -lt "$timeout"; do
+		vm_running || die "VM exited while waiting for SSH; see $QEMU_LOG"
+		if ssh_guest true >/dev/null 2>&1; then
+			printf 'SSH is ready after %ss\n' "$elapsed"
+			return
+		fi
+		sleep 2
+		elapsed=$((elapsed + 2))
+	done
+
+	die "timed out waiting for SSH; see $SERIAL_LOG"
+}
+
+wait_for_ssh_disconnect()
+{
+	local attempt
+
+	for attempt in $(seq 1 30); do
+		if ! ssh_guest true >/dev/null 2>&1; then
+			return
+		fi
+		sleep 1
+	done
+
+	die 'guest did not disconnect for reboot'
+}
+
+provision()
+{
+	local cloud_init_status current_release
+
+	start
+	wait_for_ssh
+	cloud_init_status=0
+	ssh_guest sudo cloud-init status --wait || cloud_init_status=$?
+	if test "$cloud_init_status" -ne 0 && test "$cloud_init_status" -ne 2; then
+		die "cloud-init failed with status $cloud_init_status"
+	fi
+	ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1" \
+		bash -s -- "$KERNEL_RELEASE" "$KERNEL_RPM_BASE_URL" \
+		< "$SCRIPT_DIR/guest-bootstrap.sh"
+
+	current_release=$(ssh_guest uname -r)
+	if test "$current_release" != "$KERNEL_RELEASE"; then
+		printf 'Rebooting guest from %s into %s\n' "$current_release" "$KERNEL_RELEASE"
+		ssh_guest sudo systemctl reboot || true
+		wait_for_ssh_disconnect
+		wait_for_ssh
+	fi
+
+	current_release=$(ssh_guest uname -r)
+	test "$current_release" = "$KERNEL_RELEASE" || \
+		die "guest booted $current_release instead of $KERNEL_RELEASE"
+	printf 'Guest is provisioned on %s\n' "$current_release"
+}
+
+sync_source()
+{
+	vm_running || die 'VM is not running; run provision first'
+	wait_for_ssh
+	ssh_guest mkdir -p "$GUEST_REPO"
+	rsync -az --delete \
+		-e "ssh ${SSH_OPTIONS[*]}" \
+		--exclude .git/ \
+		--exclude '*.ko' \
+		--exclude '*.mod' \
+		--exclude '*.mod.c' \
+		--exclude '*.o' \
+		--exclude '.*.cmd' \
+		--exclude Module.symvers \
+		--exclude modules.order \
+		--exclude test-results/ \
+		"$REPO_DIR/" "$SSH_USER@127.0.0.1:$GUEST_REPO/"
+	printf 'Source synchronized to %s:%s\n' "$INSTANCE_NAME" "$GUEST_REPO"
+}
+
+run_tests()
+{
+	local status
+
+	provision
+	sync_source
+	set +e
+	ssh_guest bash "$GUEST_REPO/scripts/vm/guest-smoke-test.sh" \
+		"$GUEST_REPO" "$KERNEL_RELEASE"
+	status=$?
+	set -e
+
+	mkdir -p "$RESULT_DIR"
+	rsync -az --delete -e "ssh ${SSH_OPTIONS[*]}" \
+		"$SSH_USER@127.0.0.1:$GUEST_REPO/test-results/vm-smoke/" \
+		"$RESULT_DIR/" 2>/dev/null || true
+
+	if test "$status" -ne 0; then
+		die "guest smoke test failed with status $status; results: $RESULT_DIR"
+	fi
+	printf 'Guest smoke test passed; results: %s\n' "$RESULT_DIR"
+}
+
+show_status()
+{
+	if ! vm_running; then
+		printf 'VM %s is stopped\n' "$INSTANCE_NAME"
+		return
+	fi
+
+	printf 'VM %s is running (pid %s)\n' "$INSTANCE_NAME" "$(vm_pid)"
+	if ssh_guest true >/dev/null 2>&1; then
+		ssh_guest 'printf "kernel=%s uptime=" "$(uname -r)"; uptime -p'
+	else
+		printf '%s\n' 'SSH is not ready'
+	fi
+}
+
+stop()
+{
+	local attempt pid
+
+	if ! vm_running; then
+		printf 'VM %s is already stopped\n' "$INSTANCE_NAME"
+		return
+	fi
+
+	pid=$(vm_pid)
+	ssh_guest sudo systemctl poweroff >/dev/null 2>&1 || true
+	for attempt in $(seq 1 30); do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			printf 'VM %s stopped\n' "$INSTANCE_NAME"
+			return
+		fi
+		sleep 1
+	done
+
+	printf '%s\n' 'Guest did not power off within 30s; terminating QEMU' >&2
+	kill -TERM "$pid"
+	for attempt in $(seq 1 10); do
+		kill -0 "$pid" 2>/dev/null || return
+		sleep 1
+	done
+	die "QEMU process $pid did not terminate"
+}
+
+reset()
+{
+	local archive_dir timestamp
+
+	stop
+	if test -d "$INSTANCE_DIR"; then
+		timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+		archive_dir=$STATE_DIR/archive/$INSTANCE_NAME-$timestamp
+		mkdir -p "$STATE_DIR/archive"
+		mv -- "$INSTANCE_DIR" "$archive_dir"
+		printf 'Archived previous instance at %s\n' "$archive_dir"
+	fi
+	if test -f "$STATE_DIR/ssh/known_hosts"; then
+		ssh-keygen -q -R "[127.0.0.1]:$SSH_PORT" \
+			-f "$STATE_DIR/ssh/known_hosts" >/dev/null || true
+	fi
+	prepare
+}
+
+command=${1:-}
+case "$command" in
+	prepare) prepare ;;
+	start) start ;;
+	wait) wait_for_ssh ;;
+	provision) provision ;;
+	sync) sync_source ;;
+	test) run_tests ;;
+	shell)
+		vm_running || die 'VM is not running; run provision first'
+		ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1"
+		;;
+	status) show_status ;;
+	logs)
+		test -f "$SERIAL_LOG" || die "serial log not found: $SERIAL_LOG"
+		tail -f "$SERIAL_LOG"
+		;;
+	stop) stop ;;
+	reset) reset ;;
+	-h|--help|help|'') usage ;;
+	*) usage >&2; die "unknown command: $command" ;;
+esac

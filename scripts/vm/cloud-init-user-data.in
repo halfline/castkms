@@ -1,0 +1,22 @@
+#cloud-config
+users:
+  - name: castkms
+    gecos: CASTKMS development
+    groups:
+      - wheel
+    lock_passwd: true
+    shell: /bin/bash
+    sudo:
+      - ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - @SSH_PUBLIC_KEY@
+
+disable_root: true
+ssh_pwauth: false
+
+growpart:
+  mode: auto
+  devices:
+    - /
+
+resize_rootfs: true
