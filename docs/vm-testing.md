@@ -23,8 +23,9 @@ into that kernel. Re-running it is safe and idempotent.
 
 `test` mirrors the current working tree into the guest and then:
 
-1. builds `castkms.ko` with `W=1`;
-2. verifies the module name, vermagic, legacy strings, and exported symbols;
+1. builds `castkms.ko` and the three-suite KUnit module with `W=1`;
+2. verifies both modules' names, vermagic, dependencies, legacy strings, and
+   exported symbols;
 3. loads stock `vkms` and `castkms` together without default devices;
 4. verifies independent `vkms` and `castkms` configfs roots;
 5. creates a device through configfs and verifies topology removal safely
@@ -34,6 +35,11 @@ into that kernel. Re-running it is safe and idempotent.
 8. captures three frame CRCs to exercise the composition worker;
 9. records `modetest`, `drm_info`, and CRC output;
 10. unloads every module it loaded and verifies cleanup.
+
+The pinned Fedora kernel publishes the KUnit ABI in its development package
+but does not ship the corresponding `kunit.ko`, so the VM currently provides
+compile and linkage coverage for the KUnit suites rather than executing them.
+The standalone build target is also available directly with `make kunit`.
 
 Results are copied to:
 

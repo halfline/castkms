@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 obj-m += castkms.o
+obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += src/tests/
 
 castkms-y := \
 	src/castkms_drv.o \
