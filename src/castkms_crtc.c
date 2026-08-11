@@ -90,12 +90,16 @@ static void castkms_atomic_crtc_reset(struct drm_crtc *crtc)
 {
 	struct castkms_crtc_state *castkms_state = kzalloc_obj(*castkms_state);
 
-	if (crtc->state)
+	if (crtc->state) {
 		castkms_atomic_crtc_destroy_state(crtc, crtc->state);
+		crtc->state = NULL;
+	}
+
+	if (!castkms_state)
+		return;
 
 	__drm_atomic_helper_crtc_reset(crtc, &castkms_state->base);
-	if (castkms_state)
-		INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
+	INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
 }
 
 static const struct drm_crtc_funcs castkms_crtc_funcs = {
