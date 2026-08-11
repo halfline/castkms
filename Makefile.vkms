@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+KDIR ?= /lib/modules/$(shell uname -r)/build
+VKMS_DIR := $(CURDIR)/drivers/gpu/drm/vkms
+VKMS_KUNIT_TESTS ?= n
+
+.PHONY: all clean install
+
+all:
+	$(MAKE) -C $(KDIR) M=$(VKMS_DIR) CONFIG_DRM_VKMS=m \
+		CONFIG_DRM_VKMS_KUNIT_TEST=$(VKMS_KUNIT_TESTS) modules
+
+clean:
+	$(MAKE) -C $(KDIR) M=$(VKMS_DIR) clean
+
+install:
+	$(MAKE) -C $(KDIR) M=$(VKMS_DIR) CONFIG_DRM_VKMS=m \
+		CONFIG_DRM_VKMS_KUNIT_TEST=$(VKMS_KUNIT_TESTS) modules_install
