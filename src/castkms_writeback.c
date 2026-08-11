@@ -45,9 +45,12 @@ static int castkms_wb_atomic_check(struct drm_connector *connector,
 		return 0;
 
 	if (!conn_state->crtc)
-		return 0;
+		return -EINVAL;
 
-	crtc_state = drm_atomic_get_new_crtc_state(state, conn_state->crtc);
+	crtc_state = drm_atomic_get_crtc_state(state, conn_state->crtc);
+	if (IS_ERR(crtc_state))
+		return PTR_ERR(crtc_state);
+
 	mode = &crtc_state->mode;
 
 	fb = conn_state->writeback_job->fb;
