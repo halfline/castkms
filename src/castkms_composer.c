@@ -218,8 +218,8 @@ static void pre_blend_color_transform(const struct castkms_plane_state *plane_st
 
 			colorop_state = colorop->state;
 
-			if (!colorop_state)
-				return;
+			if (WARN_ON(!colorop_state))
+				break;
 
 			if (!colorop_state->bypass)
 				apply_colorop(&pixel, colorop);
