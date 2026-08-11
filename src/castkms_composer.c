@@ -33,8 +33,8 @@ static u16 pre_mul_blend_channel(u16 src, u16 dst, u16 alpha)
  * @x_start: The start offset
  * @pixel_count: The number of pixels to blend
  *
- * The pixels [@x_start;@x_start+@pixel_count) in stage_buffer are blended at
- * [@x_start;@x_start+@pixel_count) in output_buffer.
+ * The first @pixel_count pixels in @stage_buffer are blended at
+ * [@x_start;@x_start+@pixel_count) in @output_buffer.
  *
  * The current DRM assumption is that pixel color values have been already
  * pre-multiplied with the alpha channel values. See more
@@ -45,7 +45,7 @@ static void pre_mul_alpha_blend(const struct line_buffer *stage_buffer,
 				struct line_buffer *output_buffer, int x_start, int pixel_count)
 {
 	struct pixel_argb_u16 *out = &output_buffer->pixels[x_start];
-	const struct pixel_argb_u16 *in = &stage_buffer->pixels[x_start];
+	const struct pixel_argb_u16 *in = stage_buffer->pixels;
 
 	for (int i = 0; i < pixel_count; i++) {
 		out[i].a = (u16)0xffff;
@@ -366,6 +366,7 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 {
 	int src_x_start, src_y_start, dst_x_start, pixel_count;
 	struct drm_rect dst_line, tmp_src, src_line;
+	struct line_buffer plane_buffer;
 
 	/* Avoid rendering useless lines */
 	if (y < current_plane->frame_info->dst.y1 ||
@@ -448,10 +449,12 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 	 * inside the source buffer [2] and we don't write outside the stage
 	 * buffer [1].
 	 */
-	current_plane->pixel_read_line(current_plane, src_x_start, src_y_start, direction,
-				       pixel_count, &stage_buffer->pixels[dst_x_start]);
-	pre_blend_color_transform(current_plane, stage_buffer);
-	pre_mul_alpha_blend(stage_buffer, output_buffer,
+	plane_buffer.n_pixels = pixel_count;
+	plane_buffer.pixels = &stage_buffer->pixels[dst_x_start];
+	current_plane->pixel_read_line(current_plane, src_x_start, src_y_start,
+				       direction, pixel_count, plane_buffer.pixels);
+	pre_blend_color_transform(current_plane, &plane_buffer);
+	pre_mul_alpha_blend(&plane_buffer, output_buffer,
 			    dst_x_start, pixel_count);
 }
 
