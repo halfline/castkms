@@ -838,6 +838,9 @@ int castkms_configfs_register(void)
 
 void castkms_configfs_unregister(void)
 {
-	if (is_configfs_registered)
-		configfs_unregister_subsystem(&castkms_subsys);
+	if (!is_configfs_registered)
+		return;
+
+	configfs_unregister_subsystem(&castkms_subsys);
+	is_configfs_registered = false;
 }
