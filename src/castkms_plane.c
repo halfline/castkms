@@ -228,6 +228,7 @@ struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
 {
 	struct drm_device *dev = &castkmsdev->drm;
 	struct castkms_plane *plane;
+	int ret;
 
 	plane = drmm_universal_plane_alloc(dev, struct castkms_plane, base, 0,
 					   &castkms_plane_funcs,
@@ -239,20 +240,27 @@ struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
 
 	drm_plane_helper_add(&plane->base, &castkms_plane_helper_funcs);
 
-	drm_plane_create_rotation_property(&plane->base, DRM_MODE_ROTATE_0,
-					   DRM_MODE_ROTATE_MASK | DRM_MODE_REFLECT_MASK);
+	ret = drm_plane_create_rotation_property(&plane->base, DRM_MODE_ROTATE_0,
+					 DRM_MODE_ROTATE_MASK | DRM_MODE_REFLECT_MASK);
+	if (ret)
+		return ERR_PTR(ret);
 
-	drm_plane_create_color_properties(&plane->base,
-					  BIT(DRM_COLOR_YCBCR_BT601) |
-					  BIT(DRM_COLOR_YCBCR_BT709) |
-					  BIT(DRM_COLOR_YCBCR_BT2020),
-					  BIT(DRM_COLOR_YCBCR_LIMITED_RANGE) |
-					  BIT(DRM_COLOR_YCBCR_FULL_RANGE),
-					  DRM_COLOR_YCBCR_BT601,
-					  DRM_COLOR_YCBCR_FULL_RANGE);
+	ret = drm_plane_create_color_properties(&plane->base,
+					BIT(DRM_COLOR_YCBCR_BT601) |
+					BIT(DRM_COLOR_YCBCR_BT709) |
+					BIT(DRM_COLOR_YCBCR_BT2020),
+					BIT(DRM_COLOR_YCBCR_LIMITED_RANGE) |
+					BIT(DRM_COLOR_YCBCR_FULL_RANGE),
+					DRM_COLOR_YCBCR_BT601,
+					DRM_COLOR_YCBCR_FULL_RANGE);
+	if (ret)
+		return ERR_PTR(ret);
 
-	if (castkms_config_plane_get_default_pipeline(plane_cfg))
-		castkms_initialize_colorops(&plane->base);
+	if (castkms_config_plane_get_default_pipeline(plane_cfg)) {
+		ret = castkms_initialize_colorops(&plane->base);
+		if (ret)
+			return ERR_PTR(ret);
+	}
 
 	return plane;
 }
