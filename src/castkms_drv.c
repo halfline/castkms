@@ -110,11 +110,15 @@ static int castkms_atomic_check(struct drm_device *dev, struct drm_atomic_state 
 	int i;
 
 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
+		size_t gamma_lut_length;
+
 		if (!new_crtc_state->gamma_lut || !new_crtc_state->color_mgmt_changed)
 			continue;
 
-		if (new_crtc_state->gamma_lut->length / sizeof(struct drm_color_lut *)
-		    > CASTKMS_LUT_SIZE)
+		gamma_lut_length = new_crtc_state->gamma_lut->length;
+		if (!gamma_lut_length ||
+		    gamma_lut_length % sizeof(struct drm_color_lut) ||
+		    gamma_lut_length / sizeof(struct drm_color_lut) > CASTKMS_LUT_SIZE)
 			return -EINVAL;
 	}
 
