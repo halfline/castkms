@@ -8,9 +8,21 @@ expected_release=${2:?missing expected kernel release}
 result_dir=$repo_dir/test-results/vm-smoke
 stock_loaded=0
 cast_loaded=0
+configfs_dev=/sys/kernel/config/castkms/lifetime-test
 
 cleanup()
 {
+	if test -d "$configfs_dev"; then
+		sudo rm -f \
+			"$configfs_dev/planes/primary-0/possible_crtcs/crtc-0" \
+			"$configfs_dev/encoders/encoder-0/possible_crtcs/crtc-0" \
+			"$configfs_dev/connectors/connector-0/possible_encoders/encoder-0"
+		sudo rmdir "$configfs_dev/connectors/connector-0" 2>/dev/null || true
+		sudo rmdir "$configfs_dev/encoders/encoder-0" 2>/dev/null || true
+		sudo rmdir "$configfs_dev/planes/primary-0" 2>/dev/null || true
+		sudo rmdir "$configfs_dev/crtcs/crtc-0" 2>/dev/null || true
+		sudo rmdir "$configfs_dev" 2>/dev/null || true
+	fi
 	if test "$cast_loaded" -eq 1; then
 		sudo rmmod castkms || true
 	fi
@@ -66,6 +78,35 @@ test -d /sys/kernel/config/castkms
 lsmod | grep -E '^(vkms|castkms)\b' | tee "$result_dir/coexistence-modules.txt"
 ls -ld /sys/kernel/config/vkms /sys/kernel/config/castkms | \
 	tee "$result_dir/coexistence-configfs.txt"
+
+sudo mkdir "$configfs_dev"
+sudo mkdir "$configfs_dev/planes/primary-0"
+sudo mkdir "$configfs_dev/crtcs/crtc-0"
+sudo mkdir "$configfs_dev/encoders/encoder-0"
+sudo mkdir "$configfs_dev/connectors/connector-0"
+printf '1\n' | sudo tee "$configfs_dev/planes/primary-0/type" >/dev/null
+sudo ln -s "$configfs_dev/crtcs/crtc-0" \
+	"$configfs_dev/planes/primary-0/possible_crtcs/crtc-0"
+sudo ln -s "$configfs_dev/crtcs/crtc-0" \
+	"$configfs_dev/encoders/encoder-0/possible_crtcs/crtc-0"
+sudo ln -s "$configfs_dev/encoders/encoder-0" \
+	"$configfs_dev/connectors/connector-0/possible_encoders/encoder-0"
+printf '1\n' | sudo tee "$configfs_dev/enabled" >/dev/null
+test "$(sudo cat "$configfs_dev/enabled")" = 1
+
+# Removing topology cannot be rejected by configfs. It must first disable the
+# live DRM device so no runtime object retains the detached configuration.
+sudo rm "$configfs_dev/planes/primary-0/possible_crtcs/crtc-0"
+test "$(sudo cat "$configfs_dev/enabled")" = 0
+printf '%s\n' 'configfs_topology_lifetime=pass' | tee -a "$result_dir/summary.txt"
+
+sudo rm "$configfs_dev/encoders/encoder-0/possible_crtcs/crtc-0"
+sudo rm "$configfs_dev/connectors/connector-0/possible_encoders/encoder-0"
+sudo rmdir "$configfs_dev/connectors/connector-0"
+sudo rmdir "$configfs_dev/encoders/encoder-0"
+sudo rmdir "$configfs_dev/planes/primary-0"
+sudo rmdir "$configfs_dev/crtcs/crtc-0"
+sudo rmdir "$configfs_dev"
 
 sudo rmmod castkms
 cast_loaded=0
