@@ -883,8 +883,8 @@ void castkms_get_conversion_matrix_to_argb_u16(u32 format,
 				       enum drm_color_range range,
 				       struct conversion_matrix *matrix)
 {
-	const struct conversion_matrix *matrix_to_copy;
-	bool limited_range;
+	const struct conversion_matrix *matrix_to_copy = &no_operation;
+	bool limited_range = false;
 
 	switch (range) {
 	case DRM_COLOR_YCBCR_LIMITED_RANGE:
@@ -893,9 +893,8 @@ void castkms_get_conversion_matrix_to_argb_u16(u32 format,
 	case DRM_COLOR_YCBCR_FULL_RANGE:
 		limited_range = false;
 		break;
-	case DRM_COLOR_RANGE_MAX:
-		limited_range = false;
-		WARN_ONCE(true, "The requested range is not supported.");
+	default:
+		WARN_ONCE(true, "The requested range %u is not supported.\n", range);
 		break;
 	}
 
@@ -912,9 +911,8 @@ void castkms_get_conversion_matrix_to_argb_u16(u32 format,
 		matrix_to_copy = limited_range ? &yuv_bt2020_limited :
 						 &yuv_bt2020_full;
 		break;
-	case DRM_COLOR_ENCODING_MAX:
-		matrix_to_copy = &no_operation;
-		WARN_ONCE(true, "The requested encoding is not supported.");
+	default:
+		WARN_ONCE(true, "The requested encoding %u is not supported.\n", encoding);
 		break;
 	}
 
