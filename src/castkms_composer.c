@@ -594,8 +594,8 @@ free_stage_buffer:
  * @work: work_struct
  *
  * Work handler for composing and computing CRCs. work_struct scheduled in
- * an ordered workqueue that's periodically scheduled to run by
- * castkms_vblank_simulate() and flushed at castkms_atomic_commit_tail().
+ * an ordered workqueue that's periodically scheduled by the vblank timer and
+ * flushed at castkms_atomic_commit_tail().
  */
 void castkms_composer_worker(struct work_struct *work)
 {
