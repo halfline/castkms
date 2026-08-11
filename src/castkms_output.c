@@ -14,7 +14,6 @@ int castkms_output_init(struct castkms_device *castkmsdev)
 	struct castkms_config_encoder *encoder_cfg;
 	struct castkms_config_connector *connector_cfg;
 	int ret;
-	int writeback;
 
 	if (!castkms_config_is_valid(castkmsdev->config))
 		return -EINVAL;
@@ -42,9 +41,11 @@ int castkms_output_init(struct castkms_device *castkmsdev)
 
 		/* Initialize the writeback component */
 		if (castkms_config_crtc_get_writeback(crtc_cfg)) {
-			writeback = castkms_enable_writeback_connector(castkmsdev, crtc_cfg->crtc);
-			if (writeback)
+			ret = castkms_enable_writeback_connector(castkmsdev, crtc_cfg->crtc);
+			if (ret) {
 				DRM_ERROR("Failed to init writeback connector\n");
+				return ret;
+			}
 		}
 	}
 
