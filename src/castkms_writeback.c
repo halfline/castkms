@@ -129,10 +129,9 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 				  struct drm_atomic_commit *state)
 {
 	struct drm_connector_state *connector_state = drm_atomic_get_new_connector_state(state,
-											 conn);
+									 conn);
 	struct castkms_output *output = drm_crtc_to_castkms_output(connector_state->crtc);
 	struct drm_writeback_connector *wb_conn = &output->wb_connector;
-	struct drm_connector_state *conn_state = wb_conn->base.state;
 	struct castkms_crtc_state *crtc_state = output->composer_state;
 	struct drm_framebuffer *fb = connector_state->writeback_job->fb;
 	u16 crtc_height = crtc_state->base.mode.vdisplay;
@@ -141,22 +140,21 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 	struct castkms_frame_info *wb_frame_info;
 	u32 wb_format = fb->format->format;
 
-	if (!conn_state)
-		return;
-
-	castkms_set_composer(output, true);
-
-	active_wb = conn_state->writeback_job->priv;
+	active_wb = connector_state->writeback_job->priv;
 	wb_frame_info = &active_wb->wb_frame_info;
+
+	active_wb->pixel_write = castkms_get_pixel_write_function(wb_format);
+	drm_rect_init(&wb_frame_info->src, 0, 0, crtc_width, crtc_height);
+	drm_rect_init(&wb_frame_info->dst, 0, 0, crtc_width, crtc_height);
+
+	drm_writeback_queue_job(wb_conn, connector_state);
 
 	spin_lock_irq(&output->composer_lock);
 	crtc_state->active_writeback = active_wb;
 	crtc_state->wb_pending = true;
 	spin_unlock_irq(&output->composer_lock);
-	drm_writeback_queue_job(wb_conn, connector_state);
-	active_wb->pixel_write = castkms_get_pixel_write_function(wb_format);
-	drm_rect_init(&wb_frame_info->src, 0, 0, crtc_width, crtc_height);
-	drm_rect_init(&wb_frame_info->dst, 0, 0, crtc_width, crtc_height);
+
+	castkms_set_composer(output, true);
 }
 
 static const struct drm_connector_helper_funcs castkms_wb_conn_helper_funcs = {
