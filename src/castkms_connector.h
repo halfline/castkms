@@ -11,7 +11,7 @@
 /**
  * struct castkms_connector - CASTKMS custom type wrapping around the DRM connector
  *
- * @drm: Base DRM connector
+ * @base: Base DRM connector
  */
 struct castkms_connector {
 	struct drm_connector base;

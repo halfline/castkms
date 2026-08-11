@@ -21,7 +21,7 @@ static bool is_configfs_registered;
  * @crtcs_group: Default subgroup of @group at "/config/castkms/crtcs"
  * @encoders_group: Default subgroup of @group at "/config/castkms/encoders"
  * @connectors_group: Default subgroup of @group at "/config/castkms/connectors"
- * @lock: Lock used to project concurrent access to the configuration attributes
+ * @lock: Lock used to protect concurrent access to the configuration attributes
  * @config: Protected by @lock. Configuration of the CASTKMS device
  * @enabled: Protected by @lock. The device is created or destroyed when this
  * option changes
