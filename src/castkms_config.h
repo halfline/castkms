@@ -352,11 +352,9 @@ struct castkms_config_crtc *castkms_config_create_crtc(struct castkms_config *co
 
 /**
  * castkms_config_destroy_crtc() - Remove and free a CRTC configuration
- * @config: Configuration to remove the CRTC from
  * @crtc_cfg: CRTC configuration to destroy
  */
-void castkms_config_destroy_crtc(struct castkms_config *config,
-			      struct castkms_config_crtc *crtc_cfg);
+void castkms_config_destroy_crtc(struct castkms_config_crtc *crtc_cfg);
 
 /**
  * castkms_config_crtc_get_writeback() - If a writeback connector will be created

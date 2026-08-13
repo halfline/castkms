@@ -272,7 +272,7 @@ static void castkms_config_test_get_crtcs(struct kunit *test)
 			KUNIT_FAIL(test, "Unexpected CRTC");
 	}
 
-	castkms_config_destroy_crtc(config, crtc_cfg2);
+	castkms_config_destroy_crtc(crtc_cfg2);
 	KUNIT_ASSERT_EQ(test, castkms_config_get_num_crtcs(config), 1);
 	castkms_config_for_each_crtc(config, crtc_cfg) {
 		if (crtc_cfg != crtc_cfg1)
@@ -511,7 +511,7 @@ static void castkms_config_test_invalid_crtc_number(struct kunit *test)
 
 	/* Invalid: No CRTCs */
 	crtc_cfg = get_first_crtc(config);
-	castkms_config_destroy_crtc(config, crtc_cfg);
+	castkms_config_destroy_crtc(crtc_cfg);
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
 
 	/* Invalid: Too many CRTCs */
@@ -588,7 +588,7 @@ static void castkms_config_test_valid_encoder_possible_crtcs(struct kunit *test)
 
 	/* Valid: First CRTC with 2 possible encoder */
 	castkms_config_destroy_plane(plane_cfg);
-	castkms_config_destroy_crtc(config, crtc_cfg2);
+	castkms_config_destroy_crtc(crtc_cfg2);
 	KUNIT_EXPECT_TRUE(test, castkms_config_is_valid(config));
 
 	castkms_config_destroy(config);

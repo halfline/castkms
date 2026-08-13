@@ -138,7 +138,7 @@ void castkms_config_destroy(struct castkms_config *config)
 		castkms_config_destroy_plane(plane_cfg);
 
 	list_for_each_entry_safe(crtc_cfg, crtc_tmp, &config->crtcs, link)
-		castkms_config_destroy_crtc(config, crtc_cfg);
+		castkms_config_destroy_crtc(crtc_cfg);
 
 	list_for_each_entry_safe(encoder_cfg, encoder_tmp, &config->encoders, link)
 		castkms_config_destroy_encoder(config, encoder_cfg);
@@ -501,9 +501,9 @@ struct castkms_config_crtc *castkms_config_create_crtc(struct castkms_config *co
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_create_crtc);
 
-void castkms_config_destroy_crtc(struct castkms_config *config,
-			      struct castkms_config_crtc *crtc_cfg)
+void castkms_config_destroy_crtc(struct castkms_config_crtc *crtc_cfg)
 {
+	struct castkms_config *config = crtc_cfg->config;
 	struct castkms_config_plane *plane_cfg;
 	struct castkms_config_encoder *encoder_cfg;
 
