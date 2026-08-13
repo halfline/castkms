@@ -201,7 +201,7 @@ static void crtc_release(struct config_item *item)
 
 	scoped_guard(mutex, lock) {
 		castkms_configfs_device_disable(crtc->dev);
-		castkms_config_destroy_crtc(crtc->dev->config, crtc->config);
+		castkms_config_destroy_crtc(crtc->config);
 		kfree(crtc);
 	}
 }
