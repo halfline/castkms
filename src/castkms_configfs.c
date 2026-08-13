@@ -480,7 +480,7 @@ static void encoder_release(struct config_item *item)
 
 	scoped_guard(mutex, lock) {
 		castkms_configfs_device_disable(encoder->dev);
-		castkms_config_destroy_encoder(encoder->dev->config, encoder->config);
+		castkms_config_destroy_encoder(encoder->config);
 		kfree(encoder);
 	}
 }

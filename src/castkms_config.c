@@ -141,7 +141,7 @@ void castkms_config_destroy(struct castkms_config *config)
 		castkms_config_destroy_crtc(crtc_cfg);
 
 	list_for_each_entry_safe(encoder_cfg, encoder_tmp, &config->encoders, link)
-		castkms_config_destroy_encoder(config, encoder_cfg);
+		castkms_config_destroy_encoder(encoder_cfg);
 
 	list_for_each_entry_safe(connector_cfg, connector_tmp, &config->connectors, link)
 		castkms_config_destroy_connector(connector_cfg);
@@ -580,9 +580,9 @@ struct castkms_config_encoder *castkms_config_create_encoder(struct castkms_conf
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_create_encoder);
 
-void castkms_config_destroy_encoder(struct castkms_config *config,
-				 struct castkms_config_encoder *encoder_cfg)
+void castkms_config_destroy_encoder(struct castkms_config_encoder *encoder_cfg)
 {
+	struct castkms_config *config = encoder_cfg->config;
 	struct castkms_config_connector *connector_cfg;
 
 	castkms_config_for_each_connector(config, connector_cfg)
