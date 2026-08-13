@@ -418,11 +418,9 @@ struct castkms_config_encoder *castkms_config_create_encoder(struct castkms_conf
 
 /**
  * castkms_config_destroy_encoder() - Remove and free a encoder configuration
- * @config: Configuration to remove the encoder from
  * @encoder_cfg: Encoder configuration to destroy
  */
-void castkms_config_destroy_encoder(struct castkms_config *config,
-				 struct castkms_config_encoder *encoder_cfg);
+void castkms_config_destroy_encoder(struct castkms_config_encoder *encoder_cfg);
 
 /**
  * castkms_config_encoder_attach_crtc - Attach a encoder to a CRTC

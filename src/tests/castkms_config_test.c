@@ -316,7 +316,7 @@ static void castkms_config_test_get_encoders(struct kunit *test)
 	KUNIT_ASSERT_EQ(test, n_encoders, 2);
 	n_encoders = 0;
 
-	castkms_config_destroy_encoder(config, encoder_cfg2);
+	castkms_config_destroy_encoder(encoder_cfg2);
 	castkms_config_for_each_encoder(config, encoder_cfg) {
 		n_encoders++;
 		if (encoder_cfg != encoder_cfg1)
@@ -534,7 +534,7 @@ static void castkms_config_test_invalid_encoder_number(struct kunit *test)
 
 	/* Invalid: No encoders */
 	encoder_cfg = get_first_encoder(config);
-	castkms_config_destroy_encoder(config, encoder_cfg);
+	castkms_config_destroy_encoder(encoder_cfg);
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
 
 	/* Invalid: Too many encoders */
