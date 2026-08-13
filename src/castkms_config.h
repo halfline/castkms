@@ -380,8 +380,7 @@ castkms_config_crtc_set_writeback(struct castkms_config_crtc *crtc_cfg,
 
 /**
  * castkms_config_crtc_primary_plane() - Return the primary plane for a CRTC
- * @config: Configuration containing the CRTC
- * @crtc_config: Target CRTC
+ * @crtc_cfg: Target CRTC
  *
  * Note that, if multiple primary planes are found, the first one is returned.
  * In this case, the configuration will be invalid. See castkms_config_is_valid().
@@ -389,8 +388,8 @@ castkms_config_crtc_set_writeback(struct castkms_config_crtc *crtc_cfg,
  * Returns:
  * The primary plane or NULL if none is assigned yet.
  */
-struct castkms_config_plane *castkms_config_crtc_primary_plane(const struct castkms_config *config,
-							 struct castkms_config_crtc *crtc_cfg);
+struct castkms_config_plane *
+castkms_config_crtc_primary_plane(struct castkms_config_crtc *crtc_cfg);
 
 /**
  * castkms_config_crtc_cursor_plane() - Return the cursor plane for a CRTC

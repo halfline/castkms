@@ -29,8 +29,8 @@ int castkms_output_init(struct castkms_device *castkmsdev)
 	castkms_config_for_each_crtc(castkmsdev->config, crtc_cfg) {
 		struct castkms_config_plane *primary, *cursor;
 
-		primary = castkms_config_crtc_primary_plane(castkmsdev->config, crtc_cfg);
 		cursor = castkms_config_crtc_cursor_plane(castkmsdev->config, crtc_cfg);
+		primary = castkms_config_crtc_primary_plane(crtc_cfg);
 
 		crtc_cfg->crtc = castkms_crtc_init(dev, &primary->plane->base,
 						cursor ? &cursor->plane->base : NULL);
