@@ -549,10 +549,11 @@ static struct castkms_config_plane *castkms_config_crtc_get_plane(const struct c
 	return NULL;
 }
 
-struct castkms_config_plane *castkms_config_crtc_primary_plane(const struct castkms_config *config,
-							 struct castkms_config_crtc *crtc_cfg)
+struct castkms_config_plane *
+castkms_config_crtc_primary_plane(struct castkms_config_crtc *crtc_cfg)
 {
-	return castkms_config_crtc_get_plane(config, crtc_cfg, DRM_PLANE_TYPE_PRIMARY);
+	return castkms_config_crtc_get_plane(crtc_cfg->config, crtc_cfg,
+					       DRM_PLANE_TYPE_PRIMARY);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_crtc_primary_plane);
 
