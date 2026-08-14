@@ -645,22 +645,18 @@ static void argb_u16_to_ABGR8888(u8 *out_pixel, const struct pixel_argb_u16 *in_
 
 static void argb_u16_to_ARGB16161616(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel)
 {
-	__le16 *pixel = (__le16 *)out_pixel;
-
-	pixel[3] = cpu_to_le16(in_pixel->a);
-	pixel[2] = cpu_to_le16(in_pixel->r);
-	pixel[1] = cpu_to_le16(in_pixel->g);
-	pixel[0] = cpu_to_le16(in_pixel->b);
+	put_unaligned_le16(in_pixel->a, out_pixel + 6);
+	put_unaligned_le16(in_pixel->r, out_pixel + 4);
+	put_unaligned_le16(in_pixel->g, out_pixel + 2);
+	put_unaligned_le16(in_pixel->b, out_pixel);
 }
 
 static void argb_u16_to_XRGB16161616(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel)
 {
-	__le16 *pixel = (__le16 *)out_pixel;
-
-	pixel[3] = cpu_to_le16(0xffff);
-	pixel[2] = cpu_to_le16(in_pixel->r);
-	pixel[1] = cpu_to_le16(in_pixel->g);
-	pixel[0] = cpu_to_le16(in_pixel->b);
+	put_unaligned_le16(0xffff, out_pixel + 6);
+	put_unaligned_le16(in_pixel->r, out_pixel + 4);
+	put_unaligned_le16(in_pixel->g, out_pixel + 2);
+	put_unaligned_le16(in_pixel->b, out_pixel);
 }
 
 static void argb_u16_to_RGB565(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel)

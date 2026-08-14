@@ -468,6 +468,40 @@ static void castkms_format_test_unaligned_rgb565_write(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, destination[2], (u8)0xf8);
 }
 
+static void castkms_format_test_unaligned_rgb64_write(struct kunit *test)
+{
+	static const struct {
+		u32 format;
+		u8 expected_alpha[2];
+	} cases[] = {
+		{ DRM_FORMAT_ARGB16161616, { 0xf0, 0xde } },
+		{ DRM_FORMAT_XRGB16161616, { 0xff, 0xff } },
+	};
+	struct pixel_argb_u16 pixel = {
+		.a = 0xdef0,
+		.r = 0x9abc,
+		.g = 0x5678,
+		.b = 0x1234,
+	};
+	pixel_write_t write_pixel;
+	u8 destination[10];
+
+	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+		memset(destination, 0xa5, sizeof(destination));
+		write_pixel = castkms_get_pixel_write_function(cases[i].format);
+		KUNIT_ASSERT_NOT_NULL(test, write_pixel);
+		write_pixel(destination + 1, &pixel);
+		KUNIT_EXPECT_EQ(test, destination[1], (u8)0x34);
+		KUNIT_EXPECT_EQ(test, destination[2], (u8)0x12);
+		KUNIT_EXPECT_EQ(test, destination[3], (u8)0x78);
+		KUNIT_EXPECT_EQ(test, destination[4], (u8)0x56);
+		KUNIT_EXPECT_EQ(test, destination[5], (u8)0xbc);
+		KUNIT_EXPECT_EQ(test, destination[6], (u8)0x9a);
+		KUNIT_EXPECT_EQ(test, destination[7], cases[i].expected_alpha[0]);
+		KUNIT_EXPECT_EQ(test, destination[8], cases[i].expected_alpha[1]);
+	}
+}
+
 /*
  * castkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
  * colors to ARGB colors in CASTKMS
@@ -531,6 +565,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_unaligned_rgb565_read),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb64_read),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb565_write),
+	KUNIT_CASE(castkms_format_test_unaligned_rgb64_write),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
 };
