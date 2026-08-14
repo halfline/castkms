@@ -160,13 +160,11 @@ VISIBLE_IF_KUNIT void castkms_apply_3x4_matrix(struct pixel_argb_s32 *pixel,
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_apply_3x4_matrix);
 
-static void apply_colorop(struct pixel_argb_s32 *pixel, struct drm_colorop *colorop)
+static void apply_colorop(struct pixel_argb_s32 *pixel,
+			  const struct castkms_colorop_snapshot *colorop)
 {
-	struct drm_colorop_state *colorop_state = colorop->state;
-	struct drm_device *dev = colorop->dev;
-
 	if (colorop->type == DRM_COLOROP_1D_CURVE) {
-		switch (colorop_state->curve_1d_type) {
+		switch (colorop->curve_1d_type) {
 		case DRM_COLOROP_1D_CURVE_SRGB_INV_EOTF:
 			pixel->r = castkms_apply_lut_to_channel_value(&castkms_srgb_inv_eotf, pixel->r, LUT_RED);
 			pixel->g = castkms_apply_lut_to_channel_value(&castkms_srgb_inv_eotf, pixel->g, LUT_GREEN);
@@ -178,26 +176,23 @@ static void apply_colorop(struct pixel_argb_s32 *pixel, struct drm_colorop *colo
 			pixel->b = castkms_apply_lut_to_channel_value(&castkms_srgb_eotf, pixel->b, LUT_BLUE);
 			break;
 		default:
-			drm_WARN_ONCE(dev, true,
-				      "unknown colorop 1D curve type %d\n",
-				      colorop_state->curve_1d_type);
+			WARN_ONCE(true, "unknown colorop 1D curve type %d\n",
+				  colorop->curve_1d_type);
 			break;
 		}
 	} else if (colorop->type == DRM_COLOROP_CTM_3X4) {
-		if (colorop_state->data)
-			castkms_apply_3x4_matrix(pixel,
-					 (struct drm_color_ctm_3x4 *)colorop_state->data->data);
+		if (colorop->has_ctm)
+			castkms_apply_3x4_matrix(pixel, &colorop->ctm);
 	}
 }
 
-static void pre_blend_color_transform(const struct castkms_plane_state *plane_state,
-				      struct line_buffer *output_buffer)
+VISIBLE_IF_KUNIT void
+castkms_apply_colorops(const struct castkms_plane_state *plane_state,
+		       struct line_buffer *output_buffer)
 {
 	struct pixel_argb_s32 pixel;
 
 	for (size_t x = 0; x < output_buffer->n_pixels; x++) {
-		struct drm_colorop *colorop = plane_state->base.base.color_pipeline;
-
 		/*
 		 * Some operations, such as applying a BT709 encoding matrix,
 		 * followed by a decoding matrix, require that we preserve
@@ -213,18 +208,12 @@ static void pre_blend_color_transform(const struct castkms_plane_state *plane_st
 		pixel.g = output_buffer->pixels[x].g;
 		pixel.b = output_buffer->pixels[x].b;
 
-		while (colorop) {
-			struct drm_colorop_state *colorop_state;
+		for (size_t i = 0; i < plane_state->num_colorops; i++) {
+			const struct castkms_colorop_snapshot *colorop =
+				&plane_state->colorops[i];
 
-			colorop_state = colorop->state;
-
-			if (WARN_ON(!colorop_state))
-				break;
-
-			if (!colorop_state->bypass)
+			if (!colorop->bypass)
 				apply_colorop(&pixel, colorop);
-
-			colorop = colorop->next;
 		}
 
 		/* clamp values */
@@ -234,6 +223,7 @@ static void pre_blend_color_transform(const struct castkms_plane_state *plane_st
 		output_buffer->pixels[x].b = clamp_val(pixel.b, 0, 0xffff);
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_apply_colorops);
 
 /**
  * direction_for_rotation() - Get the correct reading direction for a given rotation
@@ -453,7 +443,7 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 	plane_buffer.pixels = &stage_buffer->pixels[dst_x_start];
 	current_plane->pixel_read_line(current_plane, src_x_start, src_y_start,
 				       direction, pixel_count, plane_buffer.pixels);
-	pre_blend_color_transform(current_plane, &plane_buffer);
+	castkms_apply_colorops(current_plane, &plane_buffer);
 	pre_mul_alpha_blend(&plane_buffer, output_buffer,
 			    dst_x_start, pixel_count);
 }

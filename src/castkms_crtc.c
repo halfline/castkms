@@ -154,12 +154,19 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 		return ret;
 
 	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
+		struct castkms_plane_state *castkms_plane_state;
+
 		plane_state = drm_atomic_get_new_plane_state(crtc_state->state, plane);
 		if (WARN_ON(!plane_state))
 			return -EINVAL;
 
 		if (!plane_state->visible)
 			continue;
+
+		castkms_plane_state = to_castkms_plane_state(plane_state);
+		ret = castkms_plane_snapshot_colorops(castkms_plane_state, state);
+		if (ret)
+			return ret;
 
 		i++;
 	}
