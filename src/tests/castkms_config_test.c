@@ -390,7 +390,7 @@ static void castkms_config_test_invalid_plane_number(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
 
 	/* Invalid: Too many planes */
-	for (n = 0; n <= 32; n++)
+	for (n = 0; n <= CASTKMS_MAX_OUTPUT_OBJECTS; n++)
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, castkms_config_create_plane(config));
 
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
@@ -515,7 +515,7 @@ static void castkms_config_test_invalid_crtc_number(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
 
 	/* Invalid: Too many CRTCs */
-	for (n = 0; n <= 32; n++)
+	for (n = 0; n <= CASTKMS_MAX_OUTPUT_OBJECTS; n++)
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, castkms_config_create_crtc(config));
 
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
@@ -538,7 +538,7 @@ static void castkms_config_test_invalid_encoder_number(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
 
 	/* Invalid: Too many encoders */
-	for (n = 0; n <= 32; n++)
+	for (n = 0; n <= CASTKMS_MAX_OUTPUT_OBJECTS; n++)
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, castkms_config_create_encoder(config));
 
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
@@ -609,7 +609,7 @@ static void castkms_config_test_invalid_connector_number(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
 
 	/* Invalid: Too many connectors */
-	for (n = 0; n <= 32; n++)
+	for (n = 0; n <= CASTKMS_MAX_OUTPUT_OBJECTS; n++)
 		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, castkms_config_create_connector(config));
 
 	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
