@@ -132,7 +132,8 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 
 	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
 		plane_state = drm_atomic_get_new_plane_state(crtc_state->state, plane);
-		WARN_ON(!plane_state);
+		if (WARN_ON(!plane_state))
+			return -EINVAL;
 
 		if (!plane_state->visible)
 			continue;
@@ -148,6 +149,10 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 	i = 0;
 	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
 		plane_state = drm_atomic_get_new_plane_state(crtc_state->state, plane);
+		if (WARN_ON(!plane_state)) {
+			ret = -EINVAL;
+			goto err_free_active_planes;
+		}
 
 		if (!plane_state->visible)
 			continue;
@@ -157,6 +162,12 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 	}
 
 	return 0;
+
+err_free_active_planes:
+	kfree(castkms_state->active_planes);
+	castkms_state->active_planes = NULL;
+	castkms_state->num_active_planes = 0;
+	return ret;
 }
 
 static void castkms_crtc_atomic_begin(struct drm_crtc *crtc,
