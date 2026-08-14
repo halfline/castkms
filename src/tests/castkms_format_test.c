@@ -321,7 +321,8 @@ static void castkms_format_test_stride_range(struct kunit *test)
 	fb.format = drm_format_info(DRM_FORMAT_R8);
 	fb.pitches[0] = U32_MAX;
 
-	KUNIT_EXPECT_FALSE(test, castkms_framebuffer_read_strides_are_valid(&fb));
+	KUNIT_EXPECT_EQ(test, castkms_framebuffer_read_strides_are_valid(&fb),
+			(bool)(sizeof(ptrdiff_t) > sizeof(u32)));
 }
 
 static void castkms_format_test_packed_vertical_step(struct kunit *test)
