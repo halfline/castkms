@@ -168,6 +168,8 @@ static int castkms_plane_atomic_check(struct drm_plane *plane,
 	if (!new_plane_state->fb || WARN_ON(!new_plane_state->crtc))
 		return 0;
 
+	if (!castkms_get_pixel_read_line_function(new_plane_state->fb->format->format))
+		return -EINVAL;
 	if (!castkms_framebuffer_read_strides_are_valid(new_plane_state->fb))
 		return -EINVAL;
 

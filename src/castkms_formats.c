@@ -817,15 +817,7 @@ pixel_read_line_t castkms_get_pixel_read_line_function(u32 format)
 	case DRM_FORMAT_R8:
 		return &R8_read_line;
 	default:
-		/*
-		 * This is a bug in castkms_plane_atomic_check(). All the supported
-		 * format must:
-		 * - Be listed in castkms_formats in castkms_plane.c
-		 * - Have a pixel_read callback defined here
-		 */
-		pr_err("Pixel format %p4cc is not supported by CASTKMS planes. This is a kernel bug, atomic check must forbid this configuration.\n",
-		       &format);
-		BUG();
+		return NULL;
 	}
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_get_pixel_read_line_function);
