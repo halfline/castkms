@@ -14,42 +14,6 @@
 #include "castkms_drv.h"
 #include "castkms_formats.h"
 
-static const u32 castkms_formats[] = {
-	DRM_FORMAT_ARGB8888,
-	DRM_FORMAT_ABGR8888,
-	DRM_FORMAT_BGRA8888,
-	DRM_FORMAT_RGBA8888,
-	DRM_FORMAT_XRGB8888,
-	DRM_FORMAT_XBGR8888,
-	DRM_FORMAT_RGB888,
-	DRM_FORMAT_BGR888,
-	DRM_FORMAT_XRGB16161616,
-	DRM_FORMAT_XBGR16161616,
-	DRM_FORMAT_ARGB16161616,
-	DRM_FORMAT_ABGR16161616,
-	DRM_FORMAT_RGB565,
-	DRM_FORMAT_BGR565,
-	DRM_FORMAT_NV12,
-	DRM_FORMAT_NV16,
-	DRM_FORMAT_NV24,
-	DRM_FORMAT_NV21,
-	DRM_FORMAT_NV61,
-	DRM_FORMAT_NV42,
-	DRM_FORMAT_YUV420,
-	DRM_FORMAT_YUV422,
-	DRM_FORMAT_YUV444,
-	DRM_FORMAT_YVU420,
-	DRM_FORMAT_YVU422,
-	DRM_FORMAT_YVU444,
-	DRM_FORMAT_P010,
-	DRM_FORMAT_P012,
-	DRM_FORMAT_P016,
-	DRM_FORMAT_R1,
-	DRM_FORMAT_R2,
-	DRM_FORMAT_R4,
-	DRM_FORMAT_R8,
-};
-
 static struct castkms_plane_state *castkms_plane_state_alloc(void)
 {
 	struct castkms_plane_state *castkms_state;
@@ -233,13 +197,20 @@ struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
 {
 	struct drm_device *dev = &castkmsdev->drm;
 	struct castkms_plane *plane;
+	u32 *formats;
+	int num_formats;
 	int ret;
+
+	num_formats = castkms_plane_formats_alloc(&formats);
+	if (num_formats < 0)
+		return ERR_PTR(num_formats);
 
 	plane = drmm_universal_plane_alloc(dev, struct castkms_plane, base, 0,
 					   &castkms_plane_funcs,
-					   castkms_formats, ARRAY_SIZE(castkms_formats),
+					   formats, num_formats,
 					   NULL, castkms_config_plane_get_type(plane_cfg),
 					   NULL);
+	kfree(formats);
 	if (IS_ERR(plane))
 		return plane;
 

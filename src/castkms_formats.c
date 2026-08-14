@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/minmax.h>
+#include <linux/slab.h>
 #include <linux/unaligned.h>
 
 #include <drm/drm_blend.h>
@@ -792,6 +793,23 @@ static const struct castkms_plane_format castkms_plane_formats[] = {
 	{ DRM_FORMAT_R4, R4_read_line },
 	{ DRM_FORMAT_R8, R8_read_line },
 };
+
+int castkms_plane_formats_alloc(u32 **formats)
+{
+	u32 *values;
+
+	values = kmalloc_array(ARRAY_SIZE(castkms_plane_formats),
+			       sizeof(*values), GFP_KERNEL);
+	if (!values)
+		return -ENOMEM;
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(castkms_plane_formats); i++)
+		values[i] = castkms_plane_formats[i].format;
+
+	*formats = values;
+
+	return ARRAY_SIZE(castkms_plane_formats);
+}
 
 /**
  * castkms_get_pixel_read_line_function() - Retrieve a format's read callback
