@@ -1025,15 +1025,7 @@ pixel_write_t castkms_get_pixel_write_function(u32 format)
 	case DRM_FORMAT_RGB565:
 		return &argb_u16_to_RGB565;
 	default:
-		/*
-		 * This is a bug in castkms_writeback_atomic_check. All the supported
-		 * format must:
-		 * - Be listed in castkms_wb_formats in castkms_writeback.c
-		 * - Have a pixel_write callback defined here
-		 */
-		pr_err("Pixel format %p4cc is not supported by CASTKMS writeback. This is a kernel bug, atomic check must forbid this configuration.\n",
-		       &format);
-		BUG();
+		return NULL;
 	}
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_get_pixel_write_function);

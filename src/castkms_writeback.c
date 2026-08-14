@@ -54,6 +54,9 @@ static int castkms_wb_atomic_check(struct drm_connector *connector,
 	mode = &crtc_state->mode;
 
 	fb = conn_state->writeback_job->fb;
+	if (!castkms_get_pixel_write_function(fb->format->format))
+		return -EINVAL;
+
 	if (fb->width != mode->hdisplay || fb->height != mode->vdisplay) {
 		DRM_DEBUG_KMS("Invalid framebuffer size %ux%u\n",
 			      fb->width, fb->height);
