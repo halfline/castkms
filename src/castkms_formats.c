@@ -12,13 +12,12 @@
 #include "castkms_formats.h"
 
 /**
- * packed_pixels_offset() - Get the offset of the block containing the pixel at coordinates x/y
+ * castkms_packed_pixels_offset() - Locate a packed pixel block
  *
  * @frame_info: Buffer metadata
  * @x: The x coordinate of the wanted pixel in the buffer
  * @y: The y coordinate of the wanted pixel in the buffer
  * @plane_index: The index of the plane to use
- * @offset: The returned offset inside the buffer of the block
  * @rem_x: The returned X coordinate of the requested pixel in the block
  * @rem_y: The returned Y coordinate of the requested pixel in the block
  *
@@ -31,8 +30,10 @@
  *
  * With this function, the caller just have to extract the correct pixel from the block.
  */
-static void packed_pixels_offset(const struct castkms_frame_info *frame_info, int x, int y,
-				 int plane_index, int *offset, int *rem_x, int *rem_y)
+VISIBLE_IF_KUNIT size_t
+castkms_packed_pixels_offset(const struct castkms_frame_info *frame_info,
+			     int x, int y, unsigned int plane_index,
+			     int *rem_x, int *rem_y)
 {
 	struct drm_framebuffer *fb = frame_info->fb;
 	const struct drm_format_info *format = frame_info->fb->format;
@@ -43,16 +44,19 @@ static void packed_pixels_offset(const struct castkms_frame_info *frame_info, in
 	 * containing the pixel.
 	 */
 
-	int block_x = x / drm_format_info_block_width(format, plane_index);
-	int block_y = y / drm_format_info_block_height(format, plane_index);
-	int block_pitch = fb->pitches[plane_index] * drm_format_info_block_height(format,
-										  plane_index);
+	size_t block_x = x / drm_format_info_block_width(format, plane_index);
+	size_t block_y = y / drm_format_info_block_height(format, plane_index);
+	size_t block_pitch = (size_t)fb->pitches[plane_index] *
+		drm_format_info_block_height(format, plane_index);
+
 	*rem_x = x % drm_format_info_block_width(format, plane_index);
 	*rem_y = y % drm_format_info_block_height(format, plane_index);
-	*offset = fb->offsets[plane_index] +
-		  block_y * block_pitch +
-		  block_x * format->char_per_block[plane_index];
+
+	return fb->offsets[plane_index] + block_y * block_pitch +
+	       block_x * format->char_per_block[plane_index];
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_packed_pixels_offset);
+
 
 /**
  * packed_pixels_addr() - Get the pointer to the block containing the pixel at the given
@@ -69,15 +73,16 @@ static void packed_pixels_offset(const struct castkms_frame_info *frame_info, in
  * Takes the information stored in the frame_info, a pair of coordinates, and returns the address
  * of the block containing this pixel and the pixel position inside this block.
  *
- * See @packed_pixels_offset for details about rem_x/rem_y behavior.
+ * See castkms_packed_pixels_offset() for details about rem_x/rem_y behavior.
  */
 static void packed_pixels_addr(const struct castkms_frame_info *frame_info,
 			       int x, int y, int plane_index, u8 **addr, int *rem_x,
 			       int *rem_y)
 {
-	int offset;
+	size_t offset;
 
-	packed_pixels_offset(frame_info, x, y, plane_index, &offset, rem_x, rem_y);
+	offset = castkms_packed_pixels_offset(frame_info, x, y, plane_index,
+					      rem_x, rem_y);
 	*addr = (u8 *)frame_info->map[plane_index].vaddr + offset;
 }
 
@@ -128,7 +133,8 @@ static int get_block_step_bytes(struct drm_framebuffer *fb, enum pixel_read_dire
 static void packed_pixels_addr_1x1(const struct castkms_frame_info *frame_info,
 				   int x, int y, int plane_index, u8 **addr)
 {
-	int offset, rem_x, rem_y;
+	int rem_x, rem_y;
+	size_t offset;
 
 	WARN_ONCE(drm_format_info_block_width(frame_info->fb->format,
 					      plane_index) != 1,
@@ -137,8 +143,8 @@ static void packed_pixels_addr_1x1(const struct castkms_frame_info *frame_info,
 					       plane_index) != 1,
 		"%s() only support formats with block_h == 1", __func__);
 
-	packed_pixels_offset(frame_info, x, y, plane_index, &offset, &rem_x,
-			     &rem_y);
+	offset = castkms_packed_pixels_offset(frame_info, x, y, plane_index,
+					      &rem_x, &rem_y);
 	*addr = (u8 *)frame_info->map[plane_index].vaddr + offset;
 }
 

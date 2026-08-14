@@ -288,6 +288,32 @@ static void castkms_format_test_distinct_multiplane_maps(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, pixel.b, expected.b);
 }
 
+static void castkms_format_test_wide_framebuffer_offset(struct kunit *test)
+{
+	struct castkms_plane_state plane;
+	struct castkms_frame_info frame_info;
+	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
+	struct drm_framebuffer fb;
+	u64 expected;
+	size_t offset;
+	int rem_x, rem_y;
+
+	castkms_format_test_init_plane(&plane, &frame_info, map, &fb,
+				       DRM_FORMAT_R8);
+	if (sizeof(size_t) >= sizeof(u64)) {
+		fb.offsets[0] = (u32)INT_MAX + 1;
+		fb.pitches[0] = (u32)INT_MAX + 2;
+
+		offset = castkms_packed_pixels_offset(&frame_info, 3, 1, 0,
+						      &rem_x, &rem_y);
+		expected = (u64)fb.offsets[0] + fb.pitches[0] + 3;
+
+		KUNIT_EXPECT_EQ(test, (u64)offset, expected);
+		KUNIT_EXPECT_EQ(test, rem_x, 0);
+		KUNIT_EXPECT_EQ(test, rem_y, 0);
+	}
+}
+
 static void castkms_format_test_packed_vertical_step(struct kunit *test)
 {
 	static const struct {
@@ -395,6 +421,7 @@ KUNIT_ARRAY_PARAM(yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_cases,
 static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_framebuffer_offset),
 	KUNIT_CASE(castkms_format_test_distinct_multiplane_maps),
+	KUNIT_CASE(castkms_format_test_wide_framebuffer_offset),
 	KUNIT_CASE(castkms_format_test_packed_vertical_step),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
