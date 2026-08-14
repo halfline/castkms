@@ -29,11 +29,13 @@ into that kernel. Re-running it is safe and idempotent.
 3. loads stock `vkms` and `castkms` together without default devices;
 4. verifies independent `vkms` and `castkms` configfs roots;
 5. creates a device through configfs and verifies topology removal safely
-   disables it before detaching configuration;
+   disables and unplugs it before detaching configuration, including explicit
+   ioctl and debugfs failures through file descriptors kept open across
+   removal;
 6. creates a default `castkms` DRM card with a color pipeline;
 7. performs a bounded preferred-mode, vsynced page-flip test;
 8. captures three frame CRCs to exercise the composition worker;
-9. records `modetest`, `drm_info`, and CRC output;
+9. records `modetest`, `drm_info`, CRC, and lifecycle output;
 10. unloads every module it loaded and verifies cleanup.
 
 The pinned Fedora kernel publishes the KUnit ABI in its development package

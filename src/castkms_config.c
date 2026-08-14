@@ -4,6 +4,7 @@
 #include <linux/printk.h>
 
 #include <drm/drm_debugfs.h>
+#include <drm/drm_drv.h>
 #include <kunit/visibility.h>
 
 #include "castkms_config.h"
@@ -380,35 +381,48 @@ static int castkms_config_show(struct seq_file *m, void *data)
 	struct drm_debugfs_entry *entry = m->private;
 	struct drm_device *dev = entry->dev;
 	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_config *config;
 	const char *dev_name;
 	struct castkms_config_plane *plane_cfg;
 	struct castkms_config_crtc *crtc_cfg;
 	struct castkms_config_encoder *encoder_cfg;
 	struct castkms_config_connector *connector_cfg;
+	int idx;
 
-	dev_name = castkms_config_get_device_name((struct castkms_config *)castkmsdev->config);
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
+	config = castkmsdev->config;
+	if (!config) {
+		drm_dev_exit(idx);
+		return -ENODEV;
+	}
+
+	dev_name = castkms_config_get_device_name(config);
 	seq_printf(m, "dev_name=%s\n", dev_name);
 
-	castkms_config_for_each_plane(castkmsdev->config, plane_cfg) {
+	castkms_config_for_each_plane(config, plane_cfg) {
 		seq_puts(m, "plane:\n");
 		seq_printf(m, "\ttype=%d\n",
 			   castkms_config_plane_get_type(plane_cfg));
 	}
 
-	castkms_config_for_each_crtc(castkmsdev->config, crtc_cfg) {
+	castkms_config_for_each_crtc(config, crtc_cfg) {
 		seq_puts(m, "crtc:\n");
 		seq_printf(m, "\twriteback=%d\n",
 			   castkms_config_crtc_get_writeback(crtc_cfg));
 	}
 
-	castkms_config_for_each_encoder(castkmsdev->config, encoder_cfg)
+	castkms_config_for_each_encoder(config, encoder_cfg)
 		seq_puts(m, "encoder\n");
 
-	castkms_config_for_each_connector(castkmsdev->config, connector_cfg) {
+	castkms_config_for_each_connector(config, connector_cfg) {
 		seq_puts(m, "connector:\n");
 		seq_printf(m, "\tstatus=%d\n",
 			   castkms_config_connector_get_status(connector_cfg));
 	}
+
+	drm_dev_exit(idx);
 
 	return 0;
 }

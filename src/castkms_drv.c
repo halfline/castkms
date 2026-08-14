@@ -266,6 +266,7 @@ err_configfs:
 
 void castkms_destroy(struct castkms_config *config)
 {
+	struct castkms_device *castkms_device;
 	struct faux_device *fdev;
 
 	if (!config->dev) {
@@ -273,15 +274,16 @@ void castkms_destroy(struct castkms_config *config)
 		return;
 	}
 
-	fdev = config->dev->faux_dev;
+	castkms_device = config->dev;
+	fdev = castkms_device->faux_dev;
 
-	drm_dev_unregister(&config->dev->drm);
-	drm_atomic_helper_shutdown(&config->dev->drm);
+	drm_dev_unplug(&castkms_device->drm);
+	drm_atomic_helper_shutdown(&castkms_device->drm);
 	castkms_config_clear_runtime_objects(config);
+	castkms_device->config = NULL;
+	config->dev = NULL;
 	devres_release_group(&fdev->dev, NULL);
 	faux_device_destroy(fdev);
-
-	config->dev = NULL;
 }
 
 static void __exit castkms_exit(void)
