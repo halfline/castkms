@@ -249,12 +249,6 @@ static struct pixel_argb_u16 argb_u16_from_u16161616(u16 a, u16 r, u16 g, u16 b)
 	return out_pixel;
 }
 
-static struct pixel_argb_u16 argb_u16_from_le16161616(__le16 a, __le16 r, __le16 g, __le16 b)
-{
-	return argb_u16_from_u16161616(le16_to_cpu(a), le16_to_cpu(r), le16_to_cpu(g),
-				       le16_to_cpu(b));
-}
-
 static struct pixel_argb_u16 argb_u16_from_RGB565(u16 pixel)
 {
 	struct pixel_argb_u16 out_pixel;
@@ -373,20 +367,6 @@ static void function_name(const struct castkms_plane_state *plane, int x_start,	
  */
 #define READ_LINE_ARGB8888(function_name, pixel_name, a, r, g, b) \
 	READ_LINE(function_name, pixel_name, u8, argb_u16_from_u8888, a, r, g, b)
-/**
- * READ_LINE_le16161616() - Generic generator for ARGB16161616 formats.
- * The pixel type used is u16, so pixel_name[0]..pixel_name[n] are the n components of the pixel.
- *
- * @function_name: Function name to generate
- * @pixel_name: temporary pixel to use in @a, @r, @g and @b parameters
- * @a: alpha value
- * @r: red value
- * @g: green value
- * @b: blue value
- */
-#define READ_LINE_le16161616(function_name, pixel_name, a, r, g, b) \
-	READ_LINE(function_name, pixel_name, __le16, argb_u16_from_le16161616, a, r, g, b)
-
 /*
  * The following functions are read_line function for each pixel format supported by CASTKMS.
  *
@@ -487,10 +467,18 @@ READ_LINE_ARGB8888(BGRA8888_read_line, px, px[0], px[1], px[2], px[3])
 READ_LINE_ARGB8888(RGB888_read_line, px, 0xFF, px[2], px[1], px[0])
 READ_LINE_ARGB8888(BGR888_read_line, px, 0xFF, px[0], px[1], px[2])
 
-READ_LINE_le16161616(ARGB16161616_read_line, px, px[3], px[2], px[1], px[0])
-READ_LINE_le16161616(ABGR16161616_read_line, px, px[3], px[0], px[1], px[2])
-READ_LINE_le16161616(XRGB16161616_read_line, px, cpu_to_le16(0xFFFF), px[2], px[1], px[0])
-READ_LINE_le16161616(XBGR16161616_read_line, px, cpu_to_le16(0xFFFF), px[0], px[1], px[2])
+READ_LINE(ARGB16161616_read_line, px, u8, argb_u16_from_u16161616,
+	  get_unaligned_le16(px + 6), get_unaligned_le16(px + 4),
+	  get_unaligned_le16(px + 2), get_unaligned_le16(px))
+READ_LINE(ABGR16161616_read_line, px, u8, argb_u16_from_u16161616,
+	  get_unaligned_le16(px + 6), get_unaligned_le16(px),
+	  get_unaligned_le16(px + 2), get_unaligned_le16(px + 4))
+READ_LINE(XRGB16161616_read_line, px, u8, argb_u16_from_u16161616,
+	  0xffff, get_unaligned_le16(px + 4), get_unaligned_le16(px + 2),
+	  get_unaligned_le16(px))
+READ_LINE(XBGR16161616_read_line, px, u8, argb_u16_from_u16161616,
+	  0xffff, get_unaligned_le16(px), get_unaligned_le16(px + 2),
+	  get_unaligned_le16(px + 4))
 
 READ_LINE(RGB565_read_line, px, u8, argb_u16_from_RGB565,
 	  get_unaligned_le16(px))

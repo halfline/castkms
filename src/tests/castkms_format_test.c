@@ -409,6 +409,49 @@ static void castkms_format_test_unaligned_rgb565_read(struct kunit *test)
 	}
 }
 
+static void castkms_format_test_unaligned_rgb64_read(struct kunit *test)
+{
+	static const struct {
+		u32 format;
+		struct pixel_argb_u16 expected;
+	} cases[] = {
+		{ DRM_FORMAT_ARGB16161616,
+		  { 0xdef0, 0x9abc, 0x5678, 0x1234 } },
+		{ DRM_FORMAT_ABGR16161616,
+		  { 0xdef0, 0x1234, 0x5678, 0x9abc } },
+		{ DRM_FORMAT_XRGB16161616,
+		  { 0xffff, 0x9abc, 0x5678, 0x1234 } },
+		{ DRM_FORMAT_XBGR16161616,
+		  { 0xffff, 0x1234, 0x5678, 0x9abc } },
+	};
+	struct castkms_plane_state plane;
+	struct castkms_frame_info frame_info;
+	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
+	struct drm_framebuffer fb;
+	struct pixel_argb_u16 pixel;
+	pixel_read_line_t read_line;
+	u8 source[] = {
+		0xa5, 0x34, 0x12, 0x78, 0x56,
+		0xbc, 0x9a, 0xf0, 0xde, 0xa5,
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+		castkms_format_test_init_plane(&plane, &frame_info, map, &fb,
+					       cases[i].format);
+		fb.pitches[0] = 8;
+		fb.offsets[0] = 1;
+		iosys_map_set_vaddr(&map[0], source);
+
+		read_line = castkms_get_pixel_read_line_function(cases[i].format);
+		KUNIT_ASSERT_NOT_NULL(test, read_line);
+		read_line(&plane, 0, 0, READ_LEFT_TO_RIGHT, 1, &pixel);
+		KUNIT_EXPECT_EQ(test, pixel.a, cases[i].expected.a);
+		KUNIT_EXPECT_EQ(test, pixel.r, cases[i].expected.r);
+		KUNIT_EXPECT_EQ(test, pixel.g, cases[i].expected.g);
+		KUNIT_EXPECT_EQ(test, pixel.b, cases[i].expected.b);
+	}
+}
+
 /*
  * castkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
  * colors to ARGB colors in CASTKMS
@@ -470,6 +513,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_stride_range),
 	KUNIT_CASE(castkms_format_test_packed_vertical_step),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb565_read),
+	KUNIT_CASE(castkms_format_test_unaligned_rgb64_read),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
 };
