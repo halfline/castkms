@@ -256,7 +256,7 @@ sync_source()
 	vm_running || die 'VM is not running; run provision first'
 	wait_for_ssh
 	ssh_guest mkdir -p "$GUEST_REPO"
-	rsync -az --delete \
+	rsync -az --delete --delete-excluded \
 		-e "ssh ${SSH_OPTIONS[*]}" \
 		--exclude .git/ \
 		--exclude '*.ko' \
