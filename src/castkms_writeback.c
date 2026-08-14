@@ -15,15 +15,6 @@
 #include "castkms_drv.h"
 #include "castkms_formats.h"
 
-static const u32 castkms_wb_formats[] = {
-	DRM_FORMAT_ARGB8888,
-	DRM_FORMAT_XRGB8888,
-	DRM_FORMAT_ABGR8888,
-	DRM_FORMAT_XRGB16161616,
-	DRM_FORMAT_ARGB16161616,
-	DRM_FORMAT_RGB565
-};
-
 static const struct drm_connector_funcs castkms_wb_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.reset = drm_atomic_helper_connector_reset,
@@ -173,6 +164,8 @@ int castkms_enable_writeback_connector(struct castkms_device *castkmsdev,
 				    struct castkms_output *castkms_output)
 {
 	struct drm_writeback_connector *wb = &castkms_output->wb_connector;
+	u32 *formats;
+	int num_formats;
 	int ret;
 
 	ret = drmm_encoder_init(&castkmsdev->drm, &castkms_output->wb_encoder,
@@ -185,9 +178,15 @@ int castkms_enable_writeback_connector(struct castkms_device *castkmsdev,
 
 	drm_connector_helper_add(&wb->base, &castkms_wb_conn_helper_funcs);
 
-	return drmm_writeback_connector_init(&castkmsdev->drm, wb,
-					     &castkms_wb_connector_funcs,
-					     &castkms_output->wb_encoder,
-					     castkms_wb_formats,
-					     ARRAY_SIZE(castkms_wb_formats));
+	num_formats = castkms_writeback_formats_alloc(&formats);
+	if (num_formats < 0)
+		return num_formats;
+
+	ret = drmm_writeback_connector_init(&castkmsdev->drm, wb,
+					    &castkms_wb_connector_funcs,
+					    &castkms_output->wb_encoder,
+					    formats, num_formats);
+	kfree(formats);
+
+	return ret;
 }

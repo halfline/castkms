@@ -7,6 +7,7 @@
 
 int castkms_plane_formats_alloc(u32 **formats);
 
+int castkms_writeback_formats_alloc(u32 **formats);
 pixel_read_line_t castkms_get_pixel_read_line_function(u32 format);
 
 pixel_write_t castkms_get_pixel_write_function(u32 format);

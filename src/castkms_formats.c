@@ -1016,6 +1016,23 @@ static const struct castkms_writeback_format castkms_writeback_formats[] = {
 	{ DRM_FORMAT_RGB565, argb_u16_to_RGB565 },
 };
 
+int castkms_writeback_formats_alloc(u32 **formats)
+{
+	u32 *values;
+
+	values = kmalloc_array(ARRAY_SIZE(castkms_writeback_formats),
+			       sizeof(*values), GFP_KERNEL);
+	if (!values)
+		return -ENOMEM;
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(castkms_writeback_formats); i++)
+		values[i] = castkms_writeback_formats[i].format;
+
+	*formats = values;
+
+	return ARRAY_SIZE(castkms_writeback_formats);
+}
+
 /**
  * castkms_get_pixel_write_function() - Retrieve a format's write callback
  * @format: DRM_FORMAT_* value for which to obtain a conversion function
