@@ -665,8 +665,6 @@ static void argb_u16_to_XRGB16161616(u8 *out_pixel, const struct pixel_argb_u16 
 
 static void argb_u16_to_RGB565(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel)
 {
-	__le16 *pixel = (__le16 *)out_pixel;
-
 	s64 fp_rb_ratio = drm_fixp_div(drm_int2fixp(65535), drm_int2fixp(31));
 	s64 fp_g_ratio = drm_fixp_div(drm_int2fixp(65535), drm_int2fixp(63));
 
@@ -678,7 +676,7 @@ static void argb_u16_to_RGB565(u8 *out_pixel, const struct pixel_argb_u16 *in_pi
 	u16 g = drm_fixp2int(drm_fixp_div(fp_g, fp_g_ratio));
 	u16 b = drm_fixp2int(drm_fixp_div(fp_b, fp_rb_ratio));
 
-	*pixel = cpu_to_le16(r << 11 | g << 5 | b);
+	put_unaligned_le16(r << 11 | g << 5 | b, out_pixel);
 }
 
 /**
@@ -992,3 +990,4 @@ pixel_write_t castkms_get_pixel_write_function(u32 format)
 		BUG();
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_get_pixel_write_function);

@@ -452,6 +452,22 @@ static void castkms_format_test_unaligned_rgb64_read(struct kunit *test)
 	}
 }
 
+static void castkms_format_test_unaligned_rgb565_write(struct kunit *test)
+{
+	struct pixel_argb_u16 pixel = {
+		.a = 0xffff,
+		.r = 0xffff,
+	};
+	pixel_write_t write_pixel;
+	u8 destination[] = { 0xa5, 0xa5, 0xa5, 0xa5 };
+
+	write_pixel = castkms_get_pixel_write_function(DRM_FORMAT_RGB565);
+	KUNIT_ASSERT_NOT_NULL(test, write_pixel);
+	write_pixel(destination + 1, &pixel);
+	KUNIT_EXPECT_EQ(test, destination[1], (u8)0x00);
+	KUNIT_EXPECT_EQ(test, destination[2], (u8)0xf8);
+}
+
 /*
  * castkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
  * colors to ARGB colors in CASTKMS
@@ -514,6 +530,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_packed_vertical_step),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb565_read),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb64_read),
+	KUNIT_CASE(castkms_format_test_unaligned_rgb565_write),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
 };
