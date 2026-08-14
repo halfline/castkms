@@ -34,7 +34,9 @@
  * @fb: backing drm framebuffer
  * @src: source rectangle of this frame in the source framebuffer, stored in 16.16 fixed-point form
  * @dst: destination rectangle in the crtc buffer, stored in whole pixel units
- * @map: see @drm_shadow_plane_state.data
+ * @map: Borrowed view of raw per-plane buffer-object mappings. Framebuffer
+ *       offsets have not been applied, and the mapping owner must outlive this
+ *       frame description.
  * @rotation: rotation applied to the source.
  *
  * @src and @dst should have the same size modulo the rotation.
@@ -42,7 +44,7 @@
 struct castkms_frame_info {
 	struct drm_framebuffer *fb;
 	struct drm_rect src, dst;
-	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
+	const struct iosys_map *map;
 	unsigned int rotation;
 };
 
@@ -87,7 +89,7 @@ struct line_buffer {
 typedef void (*pixel_write_t)(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel);
 
 struct castkms_writeback_job {
-	struct iosys_map data[DRM_FORMAT_MAX_PLANES];
+	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 	struct castkms_frame_info wb_frame_info;
 	pixel_write_t pixel_write;
 };

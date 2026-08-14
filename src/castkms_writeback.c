@@ -88,13 +88,14 @@ static int castkms_wb_prepare_job(struct drm_writeback_connector *wb_connector,
 	if (!castkmsjob)
 		return -ENOMEM;
 
-	ret = drm_gem_fb_vmap(job->fb, castkmsjob->wb_frame_info.map, castkmsjob->data);
+	ret = drm_gem_fb_vmap(job->fb, castkmsjob->map, NULL);
 	if (ret) {
 		DRM_ERROR("vmap failed: %d\n", ret);
 		goto err_kfree;
 	}
 
 	castkmsjob->wb_frame_info.fb = job->fb;
+	castkmsjob->wb_frame_info.map = castkmsjob->map;
 	drm_framebuffer_get(castkmsjob->wb_frame_info.fb);
 
 	job->priv = castkmsjob;
@@ -117,7 +118,7 @@ static void castkms_wb_cleanup_job(struct drm_writeback_connector *connector,
 	if (!job->fb)
 		return;
 
-	drm_gem_fb_vunmap(job->fb, castkmsjob->wb_frame_info.map);
+	drm_gem_fb_vunmap(job->fb, castkmsjob->map);
 
 	drm_framebuffer_put(castkmsjob->wb_frame_info.fb);
 

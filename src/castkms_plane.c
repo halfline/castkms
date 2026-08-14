@@ -148,7 +148,7 @@ static void castkms_plane_atomic_update(struct drm_plane *plane,
 	memcpy(&frame_info->src, &new_state->src, sizeof(struct drm_rect));
 	memcpy(&frame_info->dst, &new_state->dst, sizeof(struct drm_rect));
 	frame_info->fb = fb;
-	memcpy(&frame_info->map, &shadow_plane_state->data, sizeof(frame_info->map));
+	frame_info->map = shadow_plane_state->map;
 	drm_framebuffer_get(frame_info->fb);
 	frame_info->rotation = new_state->rotation;
 
@@ -199,7 +199,7 @@ static int castkms_prepare_fb(struct drm_plane *plane,
 	if (ret)
 		return ret;
 
-	return drm_gem_fb_vmap(fb, shadow_plane_state->map, shadow_plane_state->data);
+	return drm_gem_fb_vmap(fb, shadow_plane_state->map, NULL);
 }
 
 static void castkms_cleanup_fb(struct drm_plane *plane,
