@@ -558,6 +558,7 @@ static void castkms_format_test_unaligned_le16_yuv(struct kunit *test)
 static void castkms_format_test_unknown_callbacks(struct kunit *test)
 {
 	KUNIT_EXPECT_NULL(test, castkms_get_pixel_read_line_function(DRM_FORMAT_C8));
+	KUNIT_EXPECT_NULL(test, castkms_get_pixel_write_function(DRM_FORMAT_C8));
 }
 
 static void castkms_format_test_registries(struct kunit *test)
