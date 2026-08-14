@@ -530,16 +530,29 @@ static bool format_funcs_are_valid(struct castkms_crtc_state *crtc_state,
 	return true;
 }
 
-static bool iosys_maps_are_valid(struct castkms_crtc_state *crtc_state)
+static bool frame_maps_are_valid(const struct castkms_frame_info *frame_info)
+{
+	if (!frame_info || !frame_info->fb || !frame_info->map)
+		return false;
+
+	for (unsigned int i = 0; i < frame_info->fb->format->num_planes; i++)
+		if (iosys_map_is_null(&frame_info->map[i]))
+			return false;
+
+	return true;
+}
+
+static bool iosys_maps_are_valid(struct castkms_crtc_state *crtc_state,
+				 struct castkms_writeback_job *active_wb)
 {
 	struct castkms_plane_state **plane_state = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
 
 	for (size_t i = 0; i < n_active_planes; i++)
-		if (iosys_map_is_null(&plane_state[i]->frame_info->map[0]))
+		if (!frame_maps_are_valid(plane_state[i]->frame_info))
 			return false;
 
-	return true;
+	return !active_wb || frame_maps_are_valid(&active_wb->wb_frame_info);
 }
 
 static int compose_active_planes(struct castkms_writeback_job *active_wb,
@@ -558,7 +571,7 @@ static int compose_active_planes(struct castkms_writeback_job *active_wb,
 	 */
 	static_assert(sizeof(struct pixel_argb_u16) == 8);
 
-	if (WARN_ON(!iosys_maps_are_valid(crtc_state)))
+	if (WARN_ON(!iosys_maps_are_valid(crtc_state, active_wb)))
 		return -EINVAL;
 
 	if (WARN_ON(!format_funcs_are_valid(crtc_state, active_wb)))
