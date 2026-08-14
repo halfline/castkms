@@ -149,6 +149,7 @@ static int castkms_modeset_init(struct castkms_device *castkmsdev)
 	dev->mode_config.min_height = YRES_MIN;
 	dev->mode_config.max_width = XRES_MAX;
 	dev->mode_config.max_height = YRES_MAX;
+	dev->mode_config.normalize_zpos = true;
 	dev->mode_config.cursor_width = 512;
 	dev->mode_config.cursor_height = 512;
 	/*

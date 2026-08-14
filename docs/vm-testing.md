@@ -23,7 +23,7 @@ into that kernel. Re-running it is safe and idempotent.
 
 `test` mirrors the current working tree into the guest and then:
 
-1. builds `castkms.ko` and the three-suite KUnit module with `W=1`;
+1. builds `castkms.ko` and the four-suite KUnit module with `W=1`;
 2. verifies both modules' names, vermagic, dependencies, legacy strings, and
    exported symbols;
 3. loads stock `vkms` and `castkms` together without default devices;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/dma-fence.h>
+#include <linux/sort.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
@@ -11,7 +12,29 @@
 #include <drm/drm_vblank.h>
 #include <drm/drm_vblank_helper.h>
 
+#include <kunit/visibility.h>
+
 #include "castkms_drv.h"
+
+static int castkms_plane_state_zpos_cmp(const void *a, const void *b)
+{
+	const struct castkms_plane_state *plane_a =
+		*(const struct castkms_plane_state **)a;
+	const struct castkms_plane_state *plane_b =
+		*(const struct castkms_plane_state **)b;
+	u32 zpos_a = plane_a->base.base.normalized_zpos;
+	u32 zpos_b = plane_b->base.base.normalized_zpos;
+
+	return (zpos_a > zpos_b) - (zpos_a < zpos_b);
+}
+
+VISIBLE_IF_KUNIT void
+castkms_sort_plane_states(struct castkms_plane_state **planes, size_t count)
+{
+	sort(planes, count, sizeof(*planes), castkms_plane_state_zpos_cmp,
+	     NULL);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_sort_plane_states);
 
 static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 {
@@ -160,6 +183,9 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 		castkms_state->active_planes[i++] =
 			to_castkms_plane_state(plane_state);
 	}
+
+	castkms_sort_plane_states(castkms_state->active_planes,
+				  castkms_state->num_active_planes);
 
 	return 0;
 
