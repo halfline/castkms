@@ -409,20 +409,22 @@ static void Rx_read_line(const struct castkms_plane_state *plane, int x_start,
 			u8 val = ((*src_pixels) >> bit_offset) & mask;
 
 			*out_pixel = argb_u16_from_grayu16((int)val * lum_per_level);
+			out_pixel += 1;
 
 			bit_offset += step_bit_offset;
 			if (bit_offset < 0 || 8 <= bit_offset) {
 				bit_offset = restart_bit_offset;
-				src_pixels += step;
+				if (out_pixel < end)
+					src_pixels += step;
 			}
-			out_pixel += 1;
 		}
 	} else if (direction == READ_TOP_TO_BOTTOM || direction == READ_BOTTOM_TO_TOP) {
 		while (out_pixel < end) {
 			u8 val = (*src_pixels >> bit_offset) & mask;
 			*out_pixel = argb_u16_from_grayu16((int)val * lum_per_level);
-			src_pixels += step;
 			out_pixel += 1;
+			if (out_pixel < end)
+				src_pixels += step;
 		}
 	}
 }
