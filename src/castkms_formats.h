@@ -8,6 +8,7 @@
 pixel_read_line_t castkms_get_pixel_read_line_function(u32 format);
 
 pixel_write_t castkms_get_pixel_write_function(u32 format);
+bool castkms_framebuffer_read_strides_are_valid(const struct drm_framebuffer *fb);
 
 void castkms_get_conversion_matrix_to_argb_u16(u32 format, enum drm_color_encoding encoding,
 				       enum drm_color_range range,

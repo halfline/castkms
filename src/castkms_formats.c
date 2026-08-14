@@ -57,6 +57,19 @@ castkms_packed_pixels_offset(const struct castkms_frame_info *frame_info,
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_packed_pixels_offset);
 
+bool castkms_framebuffer_read_strides_are_valid(const struct drm_framebuffer *fb)
+{
+	for (unsigned int i = 0; i < fb->format->num_planes; i++) {
+		u64 block_stride = (u64)fb->pitches[i] *
+			drm_format_info_block_height(fb->format, i);
+
+		if (block_stride > INT_MAX)
+			return false;
+	}
+
+	return true;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_framebuffer_read_strides_are_valid);
 
 /**
  * packed_pixels_addr() - Get the pointer to the block containing the pixel at the given

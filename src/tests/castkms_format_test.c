@@ -314,6 +314,16 @@ static void castkms_format_test_wide_framebuffer_offset(struct kunit *test)
 	}
 }
 
+static void castkms_format_test_stride_range(struct kunit *test)
+{
+	struct drm_framebuffer fb = {};
+
+	fb.format = drm_format_info(DRM_FORMAT_R8);
+	fb.pitches[0] = U32_MAX;
+
+	KUNIT_EXPECT_FALSE(test, castkms_framebuffer_read_strides_are_valid(&fb));
+}
+
 static void castkms_format_test_packed_vertical_step(struct kunit *test)
 {
 	static const struct {
@@ -422,6 +432,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_framebuffer_offset),
 	KUNIT_CASE(castkms_format_test_distinct_multiplane_maps),
 	KUNIT_CASE(castkms_format_test_wide_framebuffer_offset),
+	KUNIT_CASE(castkms_format_test_stride_range),
 	KUNIT_CASE(castkms_format_test_packed_vertical_step),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}

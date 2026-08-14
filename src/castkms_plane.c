@@ -168,6 +168,9 @@ static int castkms_plane_atomic_check(struct drm_plane *plane,
 	if (!new_plane_state->fb || WARN_ON(!new_plane_state->crtc))
 		return 0;
 
+	if (!castkms_framebuffer_read_strides_are_valid(new_plane_state->fb))
+		return -EINVAL;
+
 	crtc_state = drm_atomic_get_crtc_state(state,
 					       new_plane_state->crtc);
 	if (IS_ERR(crtc_state))
