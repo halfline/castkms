@@ -127,18 +127,29 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 									 conn);
 	struct castkms_output *output = drm_crtc_to_castkms_output(connector_state->crtc);
 	struct drm_writeback_connector *wb_conn = &output->wb_connector;
-	struct castkms_crtc_state *crtc_state = output->composer_state;
+	struct drm_crtc_state *new_crtc_state =
+		drm_atomic_get_new_crtc_state(state, connector_state->crtc);
+	struct castkms_crtc_state *crtc_state;
 	struct drm_framebuffer *fb = connector_state->writeback_job->fb;
-	u16 crtc_height = crtc_state->base.mode.vdisplay;
-	u16 crtc_width = crtc_state->base.mode.hdisplay;
 	struct castkms_writeback_job *active_wb;
 	struct castkms_frame_info *wb_frame_info;
-	u32 wb_format = fb->format->format;
+	u16 crtc_height;
+	u16 crtc_width;
+	int ret;
+
+	if (WARN_ON(!new_crtc_state)) {
+		ret = -EINVAL;
+		goto err_complete_job;
+	}
+
+	crtc_state = to_castkms_crtc_state(new_crtc_state);
+	crtc_height = new_crtc_state->mode.vdisplay;
+	crtc_width = new_crtc_state->mode.hdisplay;
 
 	active_wb = connector_state->writeback_job->priv;
 	wb_frame_info = &active_wb->wb_frame_info;
 
-	active_wb->pixel_write = castkms_get_pixel_write_function(wb_format);
+	active_wb->pixel_write = castkms_get_pixel_write_function(fb->format->format);
 	drm_rect_init(&wb_frame_info->src, 0, 0, crtc_width, crtc_height);
 	drm_rect_init(&wb_frame_info->dst, 0, 0, crtc_width, crtc_height);
 
@@ -150,6 +161,18 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 	spin_unlock_irq(&output->composer_lock);
 
 	castkms_set_composer(output, true);
+	/*
+	 * A vblank can race with this connector hook after atomic_flush() has
+	 * published the CRTC state. Queue the state directly so that a newer
+	 * atomic commit cannot replace it before this job reaches the worker.
+	 */
+	queue_work(output->composer_workq, &crtc_state->composer_work);
+
+	return;
+
+err_complete_job:
+	drm_writeback_queue_job(wb_conn, connector_state);
+	drm_writeback_signal_completion(wb_conn, ret);
 }
 
 static const struct drm_connector_helper_funcs castkms_wb_conn_helper_funcs = {
