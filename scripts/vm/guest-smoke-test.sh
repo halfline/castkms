@@ -9,6 +9,9 @@ result_dir=$repo_dir/test-results/vm-smoke
 stock_loaded=0
 cast_loaded=0
 configfs_dev=/sys/kernel/config/castkms/lifetime-test
+runtime_dir=
+unplug_gate_open=0
+unplug_helper_pid=
 
 cleanup()
 {
@@ -23,6 +26,19 @@ cleanup()
 		sudo rmdir "$configfs_dev/crtcs/crtc-0" 2>/dev/null || true
 		sudo rmdir "$configfs_dev" 2>/dev/null || true
 	fi
+	if test "$unplug_gate_open" -eq 1; then
+		printf 'x' >&7 2>/dev/null || true
+		exec 7>&-
+	fi
+	if test -n "$unplug_helper_pid"; then
+		kill "$unplug_helper_pid" 2>/dev/null || true
+		wait "$unplug_helper_pid" 2>/dev/null || true
+	fi
+	if test -n "$runtime_dir"; then
+		rm -f "$runtime_dir/drm-unplug-check" \
+			"$runtime_dir/unplug-gate"
+		rmdir "$runtime_dir" 2>/dev/null || true
+	fi
 	if test "$cast_loaded" -eq 1; then
 		sudo rmmod castkms || true
 	fi
@@ -35,6 +51,7 @@ trap cleanup EXIT
 
 mkdir -p "$result_dir"
 cd "$repo_dir"
+runtime_dir=$(mktemp -d)
 
 running_release=$(uname -r)
 test "$running_release" = "$expected_release"
@@ -79,6 +96,9 @@ fi
 if ! mountpoint -q /sys/kernel/config; then
 	sudo mount -t configfs none /sys/kernel/config
 fi
+if ! mountpoint -q /sys/kernel/debug; then
+	sudo mount -t debugfs none /sys/kernel/debug
+fi
 
 sudo modprobe vkms create_default_dev=0
 stock_loaded=1
@@ -105,6 +125,46 @@ sudo ln -s "$configfs_dev/encoders/encoder-0" \
 	"$configfs_dev/connectors/connector-0/possible_encoders/encoder-0"
 printf '1\n' | sudo tee "$configfs_dev/enabled" >/dev/null
 test "$(sudo cat "$configfs_dev/enabled")" = 1
+sudo udevadm settle
+
+lifetime_debugfs=/sys/kernel/debug/dri/lifetime-test
+sudo test -r "$lifetime_debugfs/castkms_config"
+lifetime_minor=$(sudo find /sys/kernel/debug/dri -maxdepth 1 -type l \
+	-lname lifetime-test -printf '%f\n')
+test -n "$lifetime_minor"
+lifetime_drm=/dev/dri/card$lifetime_minor
+test -c "$lifetime_drm"
+
+cc -std=gnu11 -O2 -Wall -Wextra -Werror \
+	-o "$runtime_dir/drm-unplug-check" \
+	"$repo_dir/scripts/vm/drm-unplug-check.c"
+mkfifo "$runtime_dir/unplug-gate"
+exec 7<> "$runtime_dir/unplug-gate"
+unplug_gate_open=1
+
+# Keep both userspace-facing descriptors open until the complete configfs
+# object has been removed, then require both interfaces to report unplugging.
+sudo timeout --signal=TERM --kill-after=2s 15s \
+	"$runtime_dir/drm-unplug-check" \
+	"$lifetime_drm" "$lifetime_debugfs/castkms_config" \
+	<&7 > "$result_dir/configfs-open-fd.txt" 2>&1 &
+unplug_helper_pid=$!
+for attempt in $(seq 1 50); do
+	if grep -Fx 'ready=castkms' "$result_dir/configfs-open-fd.txt" \
+			>/dev/null; then
+		break
+	fi
+	if ! kill -0 "$unplug_helper_pid" 2>/dev/null; then
+		cat "$result_dir/configfs-open-fd.txt" >&2
+		exit 1
+	fi
+	sleep 0.1
+done
+if ! grep -Fx 'ready=castkms' "$result_dir/configfs-open-fd.txt" \
+		>/dev/null; then
+	cat "$result_dir/configfs-open-fd.txt" >&2
+	exit 1
+fi
 
 # Removing topology cannot be rejected by configfs. It must first disable the
 # live DRM device so no runtime object retains the detached configuration.
@@ -119,6 +179,19 @@ sudo rmdir "$configfs_dev/encoders/encoder-0"
 sudo rmdir "$configfs_dev/planes/primary-0"
 sudo rmdir "$configfs_dev/crtcs/crtc-0"
 sudo rmdir "$configfs_dev"
+printf 'x' >&7
+exec 7>&-
+unplug_gate_open=0
+if ! wait "$unplug_helper_pid"; then
+	cat "$result_dir/configfs-open-fd.txt" >&2
+	exit 1
+fi
+unplug_helper_pid=
+grep -Fx 'drm_ioctl_after_unplug=ENODEV' \
+	"$result_dir/configfs-open-fd.txt" >/dev/null
+grep -Fx 'debugfs_read_after_unplug=EIO' \
+	"$result_dir/configfs-open-fd.txt" >/dev/null
+printf '%s\n' 'configfs_open_fd_lifetime=pass' | tee -a "$result_dir/summary.txt"
 
 sudo rmmod castkms
 cast_loaded=0
@@ -163,9 +236,6 @@ if ! sudo drm_info > "$result_dir/drm-info.txt" 2>&1; then
 	exit 1
 fi
 
-if ! mountpoint -q /sys/kernel/debug; then
-	sudo mount -t debugfs none /sys/kernel/debug
-fi
 castkms_debugfs=/sys/kernel/debug/dri/castkms
 test "$(sudo sed -n 's/ .*//p' "$castkms_debugfs/name")" = castkms
 printf 'auto\n' | sudo tee "$castkms_debugfs/crtc-0/crc/control" >/dev/null

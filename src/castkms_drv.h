@@ -234,7 +234,9 @@ struct castkms_config_plane;
  * @drm - Base device in DRM
  * @faux_dev - Associated faux device
  * @output - Configuration and sub-components of the CASTKMS device
- * @config: Configuration used in this CASTKMS device
+ * @config: Configuration used in this CASTKMS device. Runtime callbacks must
+ *          hold a drm_dev_enter() reference while accessing it because its
+ *          configfs owner may release it after unplug.
  */
 struct castkms_device {
 	struct drm_device drm;

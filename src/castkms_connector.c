@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_probe_helper.h>
@@ -16,20 +17,29 @@ static enum drm_connector_status castkms_connector_detect(struct drm_connector *
 	struct castkms_connector *castkms_connector;
 	enum drm_connector_status status;
 	struct castkms_config_connector *connector_cfg;
+	int idx;
 
 	castkms_connector = drm_connector_to_castkms_connector(connector);
 
 	/*
-	 * The connector configuration might not exist if its configfs directory
-	 * was deleted. Therefore, use the configuration if present or keep the
-	 * current status if we can not access it anymore.
+	 * Configfs owns the configuration and can release it after unplug. Keep
+	 * the last status when teardown has blocked access to that configuration.
 	 */
 	status = connector->status;
+
+	if (!drm_dev_enter(dev, &idx))
+		return status;
+
+	if (!castkmsdev->config)
+		goto out;
 
 	castkms_config_for_each_connector(castkmsdev->config, connector_cfg) {
 		if (connector_cfg->connector == castkms_connector)
 			status = castkms_config_connector_get_status(connector_cfg);
 	}
+
+out:
+	drm_dev_exit(idx);
 
 	return status;
 }
