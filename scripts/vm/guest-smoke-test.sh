@@ -159,7 +159,12 @@ case ",$(modinfo -F depends ./src/tests/castkms-kunit-tests.ko)," in
 esac
 printf '%s\n' 'kunit_build=pass' | tee -a "$result_dir/summary.txt"
 
-if strings ./castkms.ko | grep -qi vkms; then
+if ! strings ./castkms.ko > "$result_dir/module-strings.txt"; then
+	printf '%s\n' 'could not inspect the module string table' >&2
+	exit 1
+fi
+if grep -i vkms "$result_dir/module-strings.txt" \
+		> "$result_dir/legacy-strings.txt"; then
 	printf '%s\n' 'legacy VKMS identity remains in castkms.ko' >&2
 	exit 1
 fi
