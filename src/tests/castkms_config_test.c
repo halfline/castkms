@@ -717,14 +717,14 @@ static void castkms_config_test_plane_attach_crtc(struct kunit *test)
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, crtc_cfg);
 
 	/* No primary or cursor planes */
-	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(config, crtc_cfg));
 	KUNIT_EXPECT_NULL(test, castkms_config_crtc_primary_plane(crtc_cfg));
+	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(crtc_cfg));
 
 	/* Overlay plane, but no primary or cursor planes */
 	err = castkms_config_plane_attach_crtc(overlay_cfg, crtc_cfg);
 	KUNIT_EXPECT_EQ(test, err, 0);
-	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(config, crtc_cfg));
 	KUNIT_EXPECT_NULL(test, castkms_config_crtc_primary_plane(crtc_cfg));
+	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(crtc_cfg));
 
 	/* Primary plane, attaching it twice must fail */
 	err = castkms_config_plane_attach_crtc(primary_cfg, crtc_cfg);
@@ -734,7 +734,7 @@ static void castkms_config_test_plane_attach_crtc(struct kunit *test)
 	KUNIT_EXPECT_PTR_EQ(test,
 			    castkms_config_crtc_primary_plane(crtc_cfg),
 			    primary_cfg);
-	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(config, crtc_cfg));
+	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(crtc_cfg));
 
 	/* Primary and cursor planes */
 	err = castkms_config_plane_attach_crtc(cursor_cfg, crtc_cfg);
@@ -743,15 +743,15 @@ static void castkms_config_test_plane_attach_crtc(struct kunit *test)
 			    castkms_config_crtc_primary_plane(crtc_cfg),
 			    primary_cfg);
 	KUNIT_EXPECT_PTR_EQ(test,
-			    castkms_config_crtc_cursor_plane(config, crtc_cfg),
+			    castkms_config_crtc_cursor_plane(crtc_cfg),
 			    cursor_cfg);
 
 	/* Detach primary and destroy cursor plane */
 	castkms_config_plane_detach_crtc(overlay_cfg, crtc_cfg);
 	castkms_config_plane_detach_crtc(primary_cfg, crtc_cfg);
 	castkms_config_destroy_plane(cursor_cfg);
-	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(config, crtc_cfg));
 	KUNIT_EXPECT_NULL(test, castkms_config_crtc_primary_plane(crtc_cfg));
+	KUNIT_EXPECT_NULL(test, castkms_config_crtc_cursor_plane(crtc_cfg));
 
 	castkms_config_destroy(config);
 }

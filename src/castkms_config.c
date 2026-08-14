@@ -519,19 +519,19 @@ void castkms_config_destroy_crtc(struct castkms_config_crtc *crtc_cfg)
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_destroy_crtc);
 
 /**
- * castkms_config_crtc_get_plane() - Return the first attached plane to a CRTC with
+ * castkms_crtc_get_plane() - Return the first attached plane to a CRTC with
  * the specific type
- * @config: Configuration containing the CRTC and the plane
  * @crtc_cfg: Only find planes attached to this CRTC
  * @type: Plane type to search
  *
  * Returns:
  * The first plane found attached to @crtc_cfg with the type @type.
  */
-static struct castkms_config_plane *castkms_config_crtc_get_plane(const struct castkms_config *config,
-							    struct castkms_config_crtc *crtc_cfg,
-							    enum drm_plane_type type)
+static struct castkms_config_plane *
+castkms_crtc_get_plane(struct castkms_config_crtc *crtc_cfg,
+		       enum drm_plane_type type)
 {
+	struct castkms_config *config = crtc_cfg->config;
 	struct castkms_config_plane *plane_cfg;
 	struct castkms_config_crtc *possible_crtc;
 	enum drm_plane_type current_type;
@@ -552,15 +552,14 @@ static struct castkms_config_plane *castkms_config_crtc_get_plane(const struct c
 struct castkms_config_plane *
 castkms_config_crtc_primary_plane(struct castkms_config_crtc *crtc_cfg)
 {
-	return castkms_config_crtc_get_plane(crtc_cfg->config, crtc_cfg,
-					       DRM_PLANE_TYPE_PRIMARY);
+	return castkms_crtc_get_plane(crtc_cfg, DRM_PLANE_TYPE_PRIMARY);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_crtc_primary_plane);
 
-struct castkms_config_plane *castkms_config_crtc_cursor_plane(const struct castkms_config *config,
-							struct castkms_config_crtc *crtc_cfg)
+struct castkms_config_plane *
+castkms_config_crtc_cursor_plane(struct castkms_config_crtc *crtc_cfg)
 {
-	return castkms_config_crtc_get_plane(config, crtc_cfg, DRM_PLANE_TYPE_CURSOR);
+	return castkms_crtc_get_plane(crtc_cfg, DRM_PLANE_TYPE_CURSOR);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_crtc_cursor_plane);
 
