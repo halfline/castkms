@@ -375,6 +375,40 @@ static void castkms_format_test_packed_vertical_step(struct kunit *test)
 	}
 }
 
+static void castkms_format_test_unaligned_rgb565_read(struct kunit *test)
+{
+	static const struct {
+		u32 format;
+		u16 red;
+		u16 blue;
+	} cases[] = {
+		{ DRM_FORMAT_RGB565, 0xffff, 0 },
+		{ DRM_FORMAT_BGR565, 0, 0xffff },
+	};
+	struct castkms_plane_state plane;
+	struct castkms_frame_info frame_info;
+	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
+	struct drm_framebuffer fb;
+	struct pixel_argb_u16 pixel;
+	pixel_read_line_t read_line;
+	u8 source[] = { 0xa5, 0x00, 0xf8, 0xa5 };
+
+	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+		castkms_format_test_init_plane(&plane, &frame_info, map, &fb,
+					       cases[i].format);
+		fb.pitches[0] = 2;
+		fb.offsets[0] = 1;
+		iosys_map_set_vaddr(&map[0], source);
+
+		read_line = castkms_get_pixel_read_line_function(cases[i].format);
+		KUNIT_ASSERT_NOT_NULL(test, read_line);
+		read_line(&plane, 0, 0, READ_LEFT_TO_RIGHT, 1, &pixel);
+		KUNIT_EXPECT_EQ(test, pixel.r, cases[i].red);
+		KUNIT_EXPECT_EQ(test, pixel.g, (u16)0);
+		KUNIT_EXPECT_EQ(test, pixel.b, cases[i].blue);
+	}
+}
+
 /*
  * castkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
  * colors to ARGB colors in CASTKMS
@@ -435,6 +469,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_wide_framebuffer_offset),
 	KUNIT_CASE(castkms_format_test_stride_range),
 	KUNIT_CASE(castkms_format_test_packed_vertical_step),
+	KUNIT_CASE(castkms_format_test_unaligned_rgb565_read),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
 };

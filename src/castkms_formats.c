@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/minmax.h>
+#include <linux/unaligned.h>
 
 #include <drm/drm_blend.h>
 #include <drm/drm_rect.h>
@@ -254,17 +255,16 @@ static struct pixel_argb_u16 argb_u16_from_le16161616(__le16 a, __le16 r, __le16
 				       le16_to_cpu(b));
 }
 
-static struct pixel_argb_u16 argb_u16_from_RGB565(const __le16 *pixel)
+static struct pixel_argb_u16 argb_u16_from_RGB565(u16 pixel)
 {
 	struct pixel_argb_u16 out_pixel;
 
 	s64 fp_rb_ratio = drm_fixp_div(drm_int2fixp(65535), drm_int2fixp(31));
 	s64 fp_g_ratio = drm_fixp_div(drm_int2fixp(65535), drm_int2fixp(63));
 
-	u16 rgb_565 = le16_to_cpu(*pixel);
-	s64 fp_r = drm_int2fixp((rgb_565 >> 11) & 0x1f);
-	s64 fp_g = drm_int2fixp((rgb_565 >> 5) & 0x3f);
-	s64 fp_b = drm_int2fixp(rgb_565 & 0x1f);
+	s64 fp_r = drm_int2fixp((pixel >> 11) & 0x1f);
+	s64 fp_g = drm_int2fixp((pixel >> 5) & 0x3f);
+	s64 fp_b = drm_int2fixp(pixel & 0x1f);
 
 	out_pixel.a = (u16)0xffff;
 	out_pixel.r = drm_fixp2int_round(drm_fixp_mul(fp_r, fp_rb_ratio));
@@ -284,7 +284,7 @@ static struct pixel_argb_u16 argb_u16_from_grayu16(u16 gray)
 	return argb_u16_from_u16161616(0xFFFF, gray, gray, gray);
 }
 
-static struct pixel_argb_u16 argb_u16_from_BGR565(const __le16 *pixel)
+static struct pixel_argb_u16 argb_u16_from_BGR565(u16 pixel)
 {
 	struct pixel_argb_u16 out_pixel;
 
@@ -492,8 +492,10 @@ READ_LINE_le16161616(ABGR16161616_read_line, px, px[3], px[0], px[1], px[2])
 READ_LINE_le16161616(XRGB16161616_read_line, px, cpu_to_le16(0xFFFF), px[2], px[1], px[0])
 READ_LINE_le16161616(XBGR16161616_read_line, px, cpu_to_le16(0xFFFF), px[0], px[1], px[2])
 
-READ_LINE(RGB565_read_line, px, __le16, argb_u16_from_RGB565, px)
-READ_LINE(BGR565_read_line, px, __le16, argb_u16_from_BGR565, px)
+READ_LINE(RGB565_read_line, px, u8, argb_u16_from_RGB565,
+	  get_unaligned_le16(px))
+READ_LINE(BGR565_read_line, px, u8, argb_u16_from_BGR565,
+	  get_unaligned_le16(px))
 
 READ_LINE(R8_read_line, px, u8, argb_u16_from_gray8, *px)
 
