@@ -20,6 +20,7 @@ size_t castkms_packed_pixels_offset(const struct castkms_frame_info *frame_info,
 				    int *rem_x, int *rem_y);
 struct pixel_argb_u16 castkms_argb_u16_from_yuv161616(const struct conversion_matrix *matrix,
 					      u16 y, u16 channel_1, u16 channel_2);
+bool castkms_format_registries_are_valid(void);
 #endif
 
 #endif /* _CASTKMS_FORMATS_H_ */
