@@ -1002,31 +1002,33 @@ void castkms_get_conversion_matrix_to_argb_u16(u32 format,
 }
 EXPORT_SYMBOL(castkms_get_conversion_matrix_to_argb_u16);
 
+struct castkms_writeback_format {
+	u32 format;
+	pixel_write_t write_pixel;
+};
+
+static const struct castkms_writeback_format castkms_writeback_formats[] = {
+	{ DRM_FORMAT_ARGB8888, argb_u16_to_ARGB8888 },
+	{ DRM_FORMAT_XRGB8888, argb_u16_to_XRGB8888 },
+	{ DRM_FORMAT_ABGR8888, argb_u16_to_ABGR8888 },
+	{ DRM_FORMAT_XRGB16161616, argb_u16_to_XRGB16161616 },
+	{ DRM_FORMAT_ARGB16161616, argb_u16_to_ARGB16161616 },
+	{ DRM_FORMAT_RGB565, argb_u16_to_RGB565 },
+};
+
 /**
- * castkms_get_pixel_write_function() - Retrieve the correct write_pixel function for a specific format.
- * The returned pointer is NULL for unsupported pixel formats. The caller must ensure that the
- * pointer is valid before using it in a castkms_writeback_job.
+ * castkms_get_pixel_write_function() - Retrieve a format's write callback
+ * @format: DRM_FORMAT_* value for which to obtain a conversion function
  *
- * @format: DRM_FORMAT_* value for which to obtain a conversion function (see [drm_fourcc.h])
+ * Returns NULL when @format is unsupported.
  */
 pixel_write_t castkms_get_pixel_write_function(u32 format)
 {
-	switch (format) {
-	case DRM_FORMAT_ARGB8888:
-		return &argb_u16_to_ARGB8888;
-	case DRM_FORMAT_XRGB8888:
-		return &argb_u16_to_XRGB8888;
-	case DRM_FORMAT_ABGR8888:
-		return &argb_u16_to_ABGR8888;
-	case DRM_FORMAT_ARGB16161616:
-		return &argb_u16_to_ARGB16161616;
-	case DRM_FORMAT_XRGB16161616:
-		return &argb_u16_to_XRGB16161616;
-	case DRM_FORMAT_RGB565:
-		return &argb_u16_to_RGB565;
-	default:
-		return NULL;
-	}
+	for (unsigned int i = 0; i < ARRAY_SIZE(castkms_writeback_formats); i++)
+		if (castkms_writeback_formats[i].format == format)
+			return castkms_writeback_formats[i].write_pixel;
+
+	return NULL;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_get_pixel_write_function);
 
@@ -1045,6 +1047,21 @@ VISIBLE_IF_KUNIT bool castkms_format_registries_are_valid(void)
 		     j < ARRAY_SIZE(castkms_plane_formats); j++)
 			if (castkms_plane_formats[i].format ==
 			    castkms_plane_formats[j].format)
+				return false;
+	}
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(castkms_writeback_formats); i++) {
+		pixel_write_t write_pixel;
+		u32 format = castkms_writeback_formats[i].format;
+
+		write_pixel = castkms_get_pixel_write_function(format);
+		if (write_pixel !=
+				castkms_writeback_formats[i].write_pixel)
+			return false;
+		for (unsigned int j = i + 1;
+		     j < ARRAY_SIZE(castkms_writeback_formats); j++)
+			if (castkms_writeback_formats[i].format ==
+			    castkms_writeback_formats[j].format)
 				return false;
 	}
 
