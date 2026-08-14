@@ -330,7 +330,8 @@ static void function_name(const struct castkms_plane_state *plane, int x_start,	
 		pixel_type *(pixel_name) = (pixel_type *)src_pixels;				\
 		*out_pixel = (callback)(__VA_ARGS__);						\
 		out_pixel += 1;									\
-		src_pixels += step;								\
+		if (out_pixel < end)								\
+			src_pixels += step;							\
 	}											\
 }
 
