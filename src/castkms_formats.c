@@ -575,6 +575,8 @@ static void planar_yuv_read_line(const struct castkms_plane_state *plane, int x_
 						     *y_plane * 257, *channel_1_plane * 257,
 						     *channel_2_plane * 257);
 		out_pixel += 1;
+		if (i + 1 == count)
+			continue;
 		y_plane += step_y;
 		if ((i + subsampling_offset + 1) % subsampling == 0) {
 			channel_1_plane += step_channel_1;
