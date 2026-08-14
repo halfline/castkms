@@ -509,6 +509,11 @@ static void castkms_format_test_unaligned_le16_yuv(struct kunit *test)
 		DRM_FORMAT_P012,
 		DRM_FORMAT_P016,
 	};
+	static const u16 sample_masks[] = {
+		0xffc0,
+		0xfff0,
+		0xffff,
+	};
 	u8 luma[] = { 0xa5, 0x34, 0x12 };
 	u8 chroma[] = { 0xa5, 0x78, 0x56, 0xbc, 0x9a };
 
@@ -523,9 +528,9 @@ static void castkms_format_test_unaligned_le16_yuv(struct kunit *test)
 		struct pixel_argb_u16 expected;
 		struct pixel_argb_u16 pixel;
 		pixel_read_line_t read_line;
-		u16 y = 0x1234;
-		u16 u = 0x5678;
-		u16 v = 0x9abc;
+		u16 y = 0x1234 & sample_masks[i];
+		u16 u = 0x5678 & sample_masks[i];
+		u16 v = 0x9abc & sample_masks[i];
 
 		castkms_format_test_init_plane(&plane, &frame_info, map, &fb,
 					       formats[i]);

@@ -549,6 +549,21 @@ static void function_name(const struct castkms_plane_state *plane, int x_start,	
 READ_LINE_YUV_SEMIPLANAR(YUV888_semiplanar_read_line, y, uv, u8, u8, castkms_argb_u16_from_yuv161616,
 			 y[0] * 257, uv[0] * 257, uv[1] * 257)
 
+static u16 yuv16_sample_mask(u32 format)
+{
+	switch (format) {
+	case DRM_FORMAT_P010:
+		return 0xffc0;
+	case DRM_FORMAT_P012:
+		return 0xfff0;
+	case DRM_FORMAT_P016:
+		return 0xffff;
+	default:
+		WARN_ON_ONCE(1);
+		return 0xffff;
+	}
+}
+
 static void
 P0XX_read_line(const struct castkms_plane_state *plane, int x_start,
 	       int y_start, enum pixel_read_direction direction, int count,
@@ -561,6 +576,7 @@ P0XX_read_line(const struct castkms_plane_state *plane, int x_start,
 	int subsampling;
 	ptrdiff_t step_y;
 	ptrdiff_t step_uv;
+	u16 sample_mask;
 	u8 *y;
 	u8 *uv;
 
@@ -571,11 +587,12 @@ P0XX_read_line(const struct castkms_plane_state *plane, int x_start,
 	step_uv = get_block_step_bytes(frame_info->fb, direction, 1);
 	subsampling = get_subsampling(format, direction);
 	subsampling_offset = get_subsampling_offset(direction, x_start, y_start);
+	sample_mask = yuv16_sample_mask(format->format);
 
 	for (int i = 0; i < count; i++) {
-		u16 y_sample = get_unaligned_le16(y);
-		u16 u_sample = get_unaligned_le16(uv);
-		u16 v_sample = get_unaligned_le16(uv + 2);
+		u16 y_sample = get_unaligned_le16(y) & sample_mask;
+		u16 u_sample = get_unaligned_le16(uv) & sample_mask;
+		u16 v_sample = get_unaligned_le16(uv + 2) & sample_mask;
 
 		*out_pixel = castkms_argb_u16_from_yuv161616(matrix, y_sample, u_sample, v_sample);
 		out_pixel++;
