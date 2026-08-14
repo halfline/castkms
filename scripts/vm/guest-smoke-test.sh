@@ -12,6 +12,69 @@ configfs_dev=/sys/kernel/config/castkms/lifetime-test
 runtime_dir=
 unplug_gate_open=0
 unplug_helper_pid=
+mode_gate_open=0
+mode_holder_pid=
+crc_fd=
+crc_pid=
+
+append_crc_record()
+{
+	local destination=$1
+	local context=$2
+	local line
+
+	if ! IFS= read -r -t 2 -u "$crc_fd" line; then
+		printf 'CRC capture stopped during %s\n' "$context" >&2
+		return 1
+	fi
+	if [[ ! $line =~ ^0x[[:xdigit:]]{8}\ 0x[[:xdigit:]]{8}$ ]]; then
+		printf 'malformed CRC record during %s: %s\n' "$context" "$line" >&2
+		return 1
+	fi
+	printf '%s\n' "$line" >> "$destination"
+}
+
+run_writeback()
+{
+	local label=$1
+	local output=$result_dir/writeback-$label.raw
+	local log=$result_dir/writeback-$label.txt
+	local status=0
+
+	sudo rm -f "$output"
+	sudo timeout --signal=TERM --kill-after=2s 8s \
+		modetest -a -M castkms \
+		-s "$virtual_connector,$writeback_connector@$crtc_id:1024x768" \
+		-P "$plane_id@$crtc_id:1024x768@XR24" \
+		-o "$output" -d </dev/null > "$log" 2>&1 || status=$?
+	if test "$status" -ne 0 ||
+		! grep -F 'Dumping buffer' "$log" >/dev/null ||
+		grep -F 'Poll for writeback error:' "$log" >/dev/null ||
+		grep -F 'Atomic Commit failed [1]' "$log" >/dev/null; then
+		cat "$log" >&2
+		return 1
+	fi
+	if test "$(stat -c %s "$output")" -ne $((1024 * 768 * 4)); then
+		printf 'writeback %s has the wrong size\n' "$label" >&2
+		return 1
+	fi
+	if ! od -An -v -tu1 "$output" | awk '
+		{
+			for (i = 1; i <= NF; i++) {
+				if (!seen) {
+					first = $i
+					seen = 1
+				} else if ($i != first) {
+					varied = 1
+				}
+			}
+		}
+		END { exit !(seen && varied) }
+	'; then
+		printf 'writeback %s contains only one byte value\n' "$label" >&2
+		return 1
+	fi
+}
 
 cleanup()
 {
@@ -26,6 +89,22 @@ cleanup()
 		sudo rmdir "$configfs_dev/crtcs/crtc-0" 2>/dev/null || true
 		sudo rmdir "$configfs_dev" 2>/dev/null || true
 	fi
+	if test -n "$crc_fd"; then
+		exec {crc_fd}<&-
+		crc_fd=
+	fi
+	if test -n "$crc_pid"; then
+		kill "$crc_pid" 2>/dev/null || true
+		wait "$crc_pid" 2>/dev/null || true
+	fi
+	if test "$mode_gate_open" -eq 1; then
+		printf '\n' >&8 2>/dev/null || true
+		exec 8>&-
+	fi
+	if test -n "$mode_holder_pid"; then
+		kill "$mode_holder_pid" 2>/dev/null || true
+		wait "$mode_holder_pid" 2>/dev/null || true
+	fi
 	if test "$unplug_gate_open" -eq 1; then
 		printf 'x' >&7 2>/dev/null || true
 		exec 7>&-
@@ -36,7 +115,7 @@ cleanup()
 	fi
 	if test -n "$runtime_dir"; then
 		rm -f "$runtime_dir/drm-unplug-check" \
-			"$runtime_dir/unplug-gate"
+			"$runtime_dir/unplug-gate" "$runtime_dir/mode-gate"
 		rmdir "$runtime_dir" 2>/dev/null || true
 	fi
 	if test "$cast_loaded" -eq 1; then
@@ -202,16 +281,36 @@ sudo insmod ./castkms.ko \
 	create_default_dev=1 \
 	enable_cursor=0 \
 	enable_overlay=0 \
-	enable_writeback=0 \
+	enable_writeback=1 \
 	enable_plane_pipeline=1
 cast_loaded=1
 
 sudo udevadm settle
 ls -l /dev/dri | tee "$result_dir/dev-dri.txt"
-if ! sudo modetest -M castkms -c -p -e > "$result_dir/modetest.txt" 2>&1; then
+if ! sudo modetest -a -M castkms -c -p -e \
+		> "$result_dir/modetest.txt" 2>&1; then
 	cat "$result_dir/modetest.txt" >&2
 	exit 1
 fi
+
+virtual_connector=$(awk '
+	$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $4; exit }
+' "$result_dir/modetest.txt")
+writeback_connector=$(awk '
+	$1 ~ /^[0-9]+$/ && $4 ~ /^Writeback-/ { print $4; exit }
+' "$result_dir/modetest.txt")
+crtc_id=$(awk '
+	$0 == "CRTCs:" { in_crtcs = 1; next }
+	in_crtcs && $1 ~ /^[0-9]+$/ { print $1; exit }
+' "$result_dir/modetest.txt")
+plane_id=$(awk '
+	$0 == "Planes:" { in_planes = 1; next }
+	in_planes && $1 ~ /^[0-9]+$/ { print $1; exit }
+' "$result_dir/modetest.txt")
+test -n "$virtual_connector"
+test -n "$writeback_connector"
+test -n "$crtc_id"
+test -n "$plane_id"
 
 # Keep stdin open so noninteractive SSH does not end the flip loop immediately.
 page_flip_input_dir=$(mktemp -d)
@@ -238,11 +337,101 @@ fi
 
 castkms_debugfs=/sys/kernel/debug/dri/castkms
 test "$(sudo sed -n 's/ .*//p' "$castkms_debugfs/name")" = castkms
+
+# Hold an active atomic modeset while dropping DRM master so independent
+# writeback clients can submit jobs against the same CRTC.
+mkfifo "$runtime_dir/mode-gate"
+exec 8<> "$runtime_dir/mode-gate"
+mode_gate_open=1
+sudo timeout --signal=TERM --kill-after=2s 45s \
+	stdbuf --output=L --error=L modetest -a -M castkms \
+	-s "$virtual_connector@$crtc_id:1024x768" \
+	-P "$plane_id@$crtc_id:1024x768@XR24" -d \
+	<&8 > "$result_dir/mode-holder.txt" 2>&1 &
+mode_holder_pid=$!
+mode_active=0
+for attempt in $(seq 1 50); do
+	if ! kill -0 "$mode_holder_pid" 2>/dev/null; then
+		cat "$result_dir/mode-holder.txt" >&2
+		exit 1
+	fi
+	if sudo modetest -a -M castkms -p \
+			> "$result_dir/mode-state.txt" 2>&1 &&
+		awk -v crtc="$crtc_id" '
+			$1 == crtc && $4 == "(1024x768)" { found = 1 }
+			END { exit !found }
+		' "$result_dir/mode-state.txt"; then
+		mode_active=1
+		break
+	fi
+	sleep 0.1
+done
+if test "$mode_active" -ne 1 ||
+	grep -F 'Atomic Commit failed [1]' "$result_dir/mode-holder.txt" \
+		>/dev/null; then
+	cat "$result_dir/mode-holder.txt" >&2
+	exit 1
+fi
+
 printf 'auto\n' | sudo tee "$castkms_debugfs/crtc-0/crc/control" >/dev/null
-sudo timeout 5s dd if="$castkms_debugfs/crtc-0/crc/data" bs=23 count=3 \
-	status=none | tr -d '\000' | tee "$result_dir/crc.txt"
-test "$(wc -l < "$result_dir/crc.txt")" -eq 3
+coproc CRC_CAPTURE {
+	exec sudo timeout --signal=TERM --kill-after=1s 30s \
+		cat "$castkms_debugfs/crtc-0/crc/data" \
+		2> "$result_dir/crc-reader.txt"
+}
+crc_pid=$CRC_CAPTURE_PID
+crc_fd=${CRC_CAPTURE[0]}
+: > "$result_dir/crc.txt"
+: > "$result_dir/crc-writeback.txt"
+for sample in 1 2 3; do
+	append_crc_record "$result_dir/crc.txt" baseline
+done
 printf '%s\n' 'composer_crc=pass' | tee -a "$result_dir/summary.txt"
+
+run_writeback 1
+run_writeback 2
+cmp -s "$result_dir/writeback-1.raw" "$result_dir/writeback-2.raw"
+sha256sum "$result_dir/writeback-1.raw" "$result_dir/writeback-2.raw" \
+	> "$result_dir/writeback-sha256.txt"
+
+# Discard records already queued during the second job. Reaching an
+# inter-frame gap before requiring new records prevents buffered output from
+# hiding a composer that stopped during writeback cleanup.
+drained=0
+while test "$drained" -lt 1024; do
+	if ! IFS= read -r -t 0.001 -u "$crc_fd" line; then
+		break
+	fi
+	if [[ ! $line =~ ^0x[[:xdigit:]]{8}\ 0x[[:xdigit:]]{8}$ ]]; then
+		printf 'malformed queued CRC record: %s\n' "$line" >&2
+		exit 1
+	fi
+	printf '%s\n' "$line" >> "$result_dir/crc-writeback.txt"
+	drained=$((drained + 1))
+done
+test "$drained" -lt 1024
+for sample in 1 2 3; do
+	append_crc_record "$result_dir/crc-writeback.txt" \
+		'post-writeback cleanup'
+done
+printf '%s\n' 'composer_writeback_overlap=pass' | \
+	tee -a "$result_dir/summary.txt"
+
+exec {crc_fd}<&-
+crc_fd=
+wait "$crc_pid" 2>/dev/null || true
+crc_pid=
+
+printf '\n' >&8
+exec 8>&-
+mode_gate_open=0
+mode_holder_status=0
+wait "$mode_holder_pid" || mode_holder_status=$?
+mode_holder_pid=
+if test "$mode_holder_status" -ne 0; then
+	cat "$result_dir/mode-holder.txt" >&2
+	exit 1
+fi
 
 sudo rmmod castkms
 cast_loaded=0

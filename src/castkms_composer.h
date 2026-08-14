@@ -20,6 +20,11 @@ enum lut_channel {
 #if IS_ENABLED(CONFIG_KUNIT)
 void castkms_apply_colorops(const struct castkms_plane_state *plane_state,
 			    struct line_buffer *output_buffer);
+int castkms_composer_demand_get(struct castkms_composer_demand *demand,
+				enum castkms_composer_client client,
+				int vblank_ret, bool *keep_vblank);
+bool castkms_composer_demand_put(struct castkms_composer_demand *demand,
+				 enum castkms_composer_client client);
 u16 castkms_lerp_u16(u16 a, u16 b, s64 t);
 s64 castkms_get_lut_index(const struct castkms_color_lut *lut, u16 channel_value);
 u16 castkms_apply_lut_to_channel_value(const struct castkms_color_lut *lut, u16 channel_value,

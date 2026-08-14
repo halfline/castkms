@@ -32,10 +32,12 @@ into that kernel. Re-running it is safe and idempotent.
    disables and unplugs it before detaching configuration, including explicit
    ioctl and debugfs failures through file descriptors kept open across
    removal;
-6. creates a default `castkms` DRM card with a color pipeline;
+6. creates a default `castkms` DRM card with a color pipeline and writeback
+   connector;
 7. performs a bounded preferred-mode, vsynced page-flip test;
-8. captures three frame CRCs to exercise the composition worker;
-9. records `modetest`, `drm_info`, CRC, and lifecycle output;
+8. keeps CRC capture open across two writeback jobs, verifies both fences and
+   output buffers, and requires fresh CRC records after writeback cleanup;
+9. records `modetest`, `drm_info`, CRC, writeback, and lifecycle output;
 10. unloads every module it loaded and verifies cleanup.
 
 The pinned Fedora kernel publishes the KUnit ABI in its development package

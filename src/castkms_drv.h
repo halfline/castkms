@@ -95,6 +95,27 @@ struct castkms_writeback_job {
 	pixel_write_t pixel_write;
 };
 
+enum castkms_composer_client {
+	CASTKMS_COMPOSER_CLIENT_CRC,
+	CASTKMS_COMPOSER_CLIENT_WRITEBACK,
+};
+
+/**
+ * struct castkms_composer_demand - Clients requiring frame composition
+ * @crc_enabled: Whether CRC capture requires composition
+ * @writeback_count: Number of committed writeback jobs awaiting composition
+ */
+struct castkms_composer_demand {
+	bool crc_enabled;
+	unsigned int writeback_count;
+};
+
+static inline bool
+castkms_composer_demand_is_active(const struct castkms_composer_demand *demand)
+{
+	return demand->crc_enabled || demand->writeback_count;
+}
+
 /**
  * enum pixel_read_direction - Enum used internally by CASTKMS to represent a reading direction in a
  * plane.
@@ -233,8 +254,7 @@ struct castkms_crtc_state {
  * @wb_encoder: DRM encoder used by @wb_connector
  * @composer_workq: Ordered workqueue for @composer_state.composer_work.
  * @lock: Lock used to protect the current composer state and scheduling
- * @composer_enabled: Protected by @lock, true when the CASTKMS composer is active (crc needed or
- *		      writeback)
+ * @composer_demand: Protected by @lock, clients keeping the composer active
  * @composer_state: Protected by @lock, current state of this CASTKMS output
  * @composer_lock: Lock used internally to protect @composer_state members
  */
@@ -245,7 +265,7 @@ struct castkms_output {
 	struct workqueue_struct *composer_workq;
 	spinlock_t lock;
 
-	bool composer_enabled;
+	struct castkms_composer_demand composer_demand;
 	struct castkms_crtc_state *composer_state;
 
 	spinlock_t composer_lock;
@@ -344,7 +364,10 @@ int castkms_verify_crc_source(struct drm_crtc *crtc, const char *source_name,
 
 /* Composer Support */
 void castkms_composer_worker(struct work_struct *work);
-void castkms_set_composer(struct castkms_output *out, bool enabled);
+int castkms_composer_get(struct castkms_output *out,
+			 enum castkms_composer_client client);
+void castkms_composer_put(struct castkms_output *out,
+			  enum castkms_composer_client client);
 void castkms_writeback_row(struct castkms_writeback_job *wb, const struct line_buffer *src_buffer, int y);
 
 /* Writeback */
