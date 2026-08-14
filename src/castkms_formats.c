@@ -523,6 +523,8 @@ static void function_name(const struct castkms_plane_state *plane, int x_start,	
 		pixel_2_type *(pixel_2_name) = (pixel_2_type *)plane_2;				\
 		*out_pixel = (callback)(conversion_matrix, __VA_ARGS__);			\
 		out_pixel += 1;									\
+		if (i + 1 == count)								\
+			continue;								\
 		plane_1 += step_1;								\
 		if ((i + subsampling_offset + 1) % subsampling == 0)				\
 			plane_2 += step_2;							\
