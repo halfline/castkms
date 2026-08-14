@@ -739,6 +739,8 @@ int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name)
 	int ret = 0;
 
 	ret = castkms_crc_parse_source(src_name, &enabled);
+	if (ret)
+		return ret;
 
 	castkms_set_composer(out, enabled);
 
