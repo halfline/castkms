@@ -752,73 +752,60 @@ void castkms_writeback_row(struct castkms_writeback_job *wb,
 		wb->pixel_write(dst_pixels, &in_pixels[x]);
 }
 
+struct castkms_plane_format {
+	u32 format;
+	pixel_read_line_t read_line;
+};
+
+static const struct castkms_plane_format castkms_plane_formats[] = {
+	{ DRM_FORMAT_ARGB8888, ARGB8888_read_line },
+	{ DRM_FORMAT_ABGR8888, ABGR8888_read_line },
+	{ DRM_FORMAT_BGRA8888, BGRA8888_read_line },
+	{ DRM_FORMAT_RGBA8888, RGBA8888_read_line },
+	{ DRM_FORMAT_XRGB8888, XRGB8888_read_line },
+	{ DRM_FORMAT_XBGR8888, XBGR8888_read_line },
+	{ DRM_FORMAT_RGB888, RGB888_read_line },
+	{ DRM_FORMAT_BGR888, BGR888_read_line },
+	{ DRM_FORMAT_XRGB16161616, XRGB16161616_read_line },
+	{ DRM_FORMAT_XBGR16161616, XBGR16161616_read_line },
+	{ DRM_FORMAT_ARGB16161616, ARGB16161616_read_line },
+	{ DRM_FORMAT_ABGR16161616, ABGR16161616_read_line },
+	{ DRM_FORMAT_RGB565, RGB565_read_line },
+	{ DRM_FORMAT_BGR565, BGR565_read_line },
+	{ DRM_FORMAT_NV12, YUV888_semiplanar_read_line },
+	{ DRM_FORMAT_NV16, YUV888_semiplanar_read_line },
+	{ DRM_FORMAT_NV24, YUV888_semiplanar_read_line },
+	{ DRM_FORMAT_NV21, YUV888_semiplanar_read_line },
+	{ DRM_FORMAT_NV61, YUV888_semiplanar_read_line },
+	{ DRM_FORMAT_NV42, YUV888_semiplanar_read_line },
+	{ DRM_FORMAT_YUV420, planar_yuv_read_line },
+	{ DRM_FORMAT_YUV422, planar_yuv_read_line },
+	{ DRM_FORMAT_YUV444, planar_yuv_read_line },
+	{ DRM_FORMAT_YVU420, planar_yuv_read_line },
+	{ DRM_FORMAT_YVU422, planar_yuv_read_line },
+	{ DRM_FORMAT_YVU444, planar_yuv_read_line },
+	{ DRM_FORMAT_P010, P0XX_read_line },
+	{ DRM_FORMAT_P012, P0XX_read_line },
+	{ DRM_FORMAT_P016, P0XX_read_line },
+	{ DRM_FORMAT_R1, R1_read_line },
+	{ DRM_FORMAT_R2, R2_read_line },
+	{ DRM_FORMAT_R4, R4_read_line },
+	{ DRM_FORMAT_R8, R8_read_line },
+};
+
 /**
- * castkms_get_pixel_read_line_function() - Retrieve the correct read_line function for a specific
- * format. The returned pointer is NULL for unsupported pixel formats. The caller must ensure that
- * the pointer is valid before using it in a castkms_plane_state.
+ * castkms_get_pixel_read_line_function() - Retrieve a format's read callback
+ * @format: DRM_FORMAT_* value for which to obtain a conversion function
  *
- * @format: DRM_FORMAT_* value for which to obtain a conversion function (see [drm_fourcc.h])
+ * Returns NULL when @format is unsupported.
  */
 pixel_read_line_t castkms_get_pixel_read_line_function(u32 format)
 {
-	switch (format) {
-	case DRM_FORMAT_ARGB8888:
-		return &ARGB8888_read_line;
-	case DRM_FORMAT_ABGR8888:
-		return &ABGR8888_read_line;
-	case DRM_FORMAT_BGRA8888:
-		return &BGRA8888_read_line;
-	case DRM_FORMAT_RGBA8888:
-		return &RGBA8888_read_line;
-	case DRM_FORMAT_XRGB8888:
-		return &XRGB8888_read_line;
-	case DRM_FORMAT_XBGR8888:
-		return &XBGR8888_read_line;
-	case DRM_FORMAT_RGB888:
-		return &RGB888_read_line;
-	case DRM_FORMAT_BGR888:
-		return &BGR888_read_line;
-	case DRM_FORMAT_ARGB16161616:
-		return &ARGB16161616_read_line;
-	case DRM_FORMAT_ABGR16161616:
-		return &ABGR16161616_read_line;
-	case DRM_FORMAT_XRGB16161616:
-		return &XRGB16161616_read_line;
-	case DRM_FORMAT_XBGR16161616:
-		return &XBGR16161616_read_line;
-	case DRM_FORMAT_RGB565:
-		return &RGB565_read_line;
-	case DRM_FORMAT_BGR565:
-		return &BGR565_read_line;
-	case DRM_FORMAT_NV12:
-	case DRM_FORMAT_NV16:
-	case DRM_FORMAT_NV24:
-	case DRM_FORMAT_NV21:
-	case DRM_FORMAT_NV61:
-	case DRM_FORMAT_NV42:
-		return &YUV888_semiplanar_read_line;
-	case DRM_FORMAT_P010:
-	case DRM_FORMAT_P012:
-	case DRM_FORMAT_P016:
-		return &P0XX_read_line;
-	case DRM_FORMAT_YUV420:
-	case DRM_FORMAT_YUV422:
-	case DRM_FORMAT_YUV444:
-	case DRM_FORMAT_YVU420:
-	case DRM_FORMAT_YVU422:
-	case DRM_FORMAT_YVU444:
-		return &planar_yuv_read_line;
-	case DRM_FORMAT_R1:
-		return &R1_read_line;
-	case DRM_FORMAT_R2:
-		return &R2_read_line;
-	case DRM_FORMAT_R4:
-		return &R4_read_line;
-	case DRM_FORMAT_R8:
-		return &R8_read_line;
-	default:
-		return NULL;
-	}
+	for (unsigned int i = 0; i < ARRAY_SIZE(castkms_plane_formats); i++)
+		if (castkms_plane_formats[i].format == format)
+			return castkms_plane_formats[i].read_line;
+
+	return NULL;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_get_pixel_read_line_function);
 
@@ -1032,3 +1019,26 @@ pixel_write_t castkms_get_pixel_write_function(u32 format)
 	}
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_get_pixel_write_function);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+VISIBLE_IF_KUNIT bool castkms_format_registries_are_valid(void)
+{
+	for (unsigned int i = 0; i < ARRAY_SIZE(castkms_plane_formats); i++) {
+		pixel_read_line_t read_line;
+		u32 format = castkms_plane_formats[i].format;
+
+		read_line = castkms_get_pixel_read_line_function(format);
+		if (read_line !=
+				castkms_plane_formats[i].read_line)
+			return false;
+		for (unsigned int j = i + 1;
+		     j < ARRAY_SIZE(castkms_plane_formats); j++)
+			if (castkms_plane_formats[i].format ==
+			    castkms_plane_formats[j].format)
+				return false;
+	}
+
+	return true;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_format_registries_are_valid);
+#endif
