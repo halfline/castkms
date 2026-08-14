@@ -2,8 +2,10 @@
 
 #include <kunit/test.h>
 
+#include <drm/drm_colorop.h>
 #include <drm/drm_fixed.h>
 #include <drm/drm_mode.h>
+#include <drm/drm_property.h>
 #include "../castkms_composer.h"
 #include "../castkms_drv.h"
 #include "../castkms_luts.h"
@@ -393,6 +395,80 @@ static void castkms_color_ctm_3x4_bt709(struct kunit *test)
 	KUNIT_EXPECT_LT(test, out.b, 0x100);
 }
 
+static void castkms_color_pipeline_owns_queued_values(struct kunit *test)
+{
+	struct drm_color_ctm_3x4 swap_red_green = {
+		.matrix = {
+			0, 1ULL << 32, 0, 0,
+			1ULL << 32, 0, 0, 0,
+			0, 0, 1ULL << 32, 0,
+		},
+	};
+	struct drm_property_blob ctm_blob = {
+		.length = sizeof(swap_red_green),
+		.data = &swap_red_green,
+	};
+	struct drm_colorop_state live_curve = {
+		.bypass = true,
+		.curve_1d_type = DRM_COLOROP_1D_CURVE_SRGB_INV_EOTF,
+	};
+	struct drm_colorop_state queued_curve = {
+		.curve_1d_type = DRM_COLOROP_1D_CURVE_SRGB_EOTF,
+	};
+	struct drm_colorop_state live_ctm = { .bypass = true };
+	struct drm_colorop_state queued_ctm = { .data = &ctm_blob };
+	struct drm_colorop *curve;
+	struct drm_colorop *ctm;
+	struct castkms_colorop_snapshot snapshots[2];
+	struct castkms_plane_state *plane_state;
+	const struct castkms_color_lut *lut = &castkms_srgb_eotf;
+	struct pixel_argb_u16 pixel = {
+		.a = 0xffff,
+		.r = 0x8080,
+		.g = 0x4040,
+		.b = 0x2020,
+	};
+	struct line_buffer buffer = {
+		.n_pixels = 1,
+		.pixels = &pixel,
+	};
+	u16 expected_r, expected_g, expected_b;
+	int ret;
+
+	curve = kunit_kzalloc(test, sizeof(*curve), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, curve);
+	ctm = kunit_kzalloc(test, sizeof(*ctm), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, ctm);
+	plane_state = kunit_kzalloc(test, sizeof(*plane_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, plane_state);
+
+	curve->type = DRM_COLOROP_1D_CURVE;
+	curve->state = &live_curve;
+	ctm->type = DRM_COLOROP_CTM_3X4;
+	ctm->state = &live_ctm;
+	plane_state->num_colorops = ARRAY_SIZE(snapshots);
+	plane_state->colorops = snapshots;
+
+	ret = castkms_colorop_snapshot_init(snapshots, curve, &queued_curve);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	ret = castkms_colorop_snapshot_init(&snapshots[1], ctm, &queued_ctm);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	expected_r = castkms_apply_lut_to_channel_value(lut, pixel.r, LUT_RED);
+	expected_g = castkms_apply_lut_to_channel_value(lut, pixel.g, LUT_GREEN);
+	expected_b = castkms_apply_lut_to_channel_value(lut, pixel.b, LUT_BLUE);
+
+	queued_curve.bypass = true;
+	queued_curve.curve_1d_type = DRM_COLOROP_1D_CURVE_SRGB_INV_EOTF;
+	memset(&swap_red_green, 0, sizeof(swap_red_green));
+
+	castkms_apply_colorops(plane_state, &buffer);
+
+	KUNIT_EXPECT_EQ(test, pixel.r, expected_g);
+	KUNIT_EXPECT_EQ(test, pixel.g, expected_r);
+	KUNIT_EXPECT_EQ(test, pixel.b, expected_b);
+}
+
 static struct kunit_case castkms_color_test_cases[] = {
 	KUNIT_CASE(castkms_color_test_get_lut_index),
 	KUNIT_CASE(castkms_color_test_lerp),
@@ -400,6 +476,7 @@ static struct kunit_case castkms_color_test_cases[] = {
 	KUNIT_CASE(castkms_color_srgb_inv_srgb),
 	KUNIT_CASE(castkms_color_ctm_3x4_50_desat),
 	KUNIT_CASE(castkms_color_ctm_3x4_bt709),
+	KUNIT_CASE(castkms_color_pipeline_owns_queued_values),
 	{}
 };
 

@@ -6,6 +6,7 @@
 #include <linux/hrtimer.h>
 
 #include <drm/drm.h>
+#include <drm/drm_colorop.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_atomic_helper.h>
@@ -143,18 +144,41 @@ struct conversion_matrix {
 };
 
 /**
+ * struct castkms_colorop_snapshot - Render state for one color operation
+ * @type: Operation selected by the plane's color pipeline
+ * @bypass: Whether this operation is disabled
+ * @curve_1d_type: Transfer curve selected for a 1D curve operation
+ * @has_ctm: Whether @ctm contains matrix data
+ * @ctm: Value-owned matrix for a 3x4 CTM operation
+ *
+ * The composer consumes this value-owned representation instead of following
+ * mutable DRM object state after the atomic transaction has been published.
+ */
+struct castkms_colorop_snapshot {
+	enum drm_colorop_type type;
+	bool bypass;
+	enum drm_colorop_curve_1d_type curve_1d_type;
+	bool has_ctm;
+	struct drm_color_ctm_3x4 ctm;
+};
+
+/**
  * struct castkms_plane_state - Driver specific plane state
  * @base: base plane state
  * @frame_info: data required for composing computation
  * @pixel_read_line: function to read a pixel line in this plane. The creator of a
  *		     struct castkms_plane_state must ensure that this pointer is valid
  * @conversion_matrix: matrix used for yuv formats to convert to rgb
+ * @num_colorops: Number of entries in @colorops
+ * @colorops: Value-owned color pipeline selected by this plane update
  */
 struct castkms_plane_state {
 	struct drm_shadow_plane_state base;
 	struct castkms_frame_info *frame_info;
 	pixel_read_line_t pixel_read_line;
 	struct conversion_matrix conversion_matrix;
+	size_t num_colorops;
+	struct castkms_colorop_snapshot *colorops;
 };
 
 struct castkms_plane {
@@ -308,6 +332,8 @@ int castkms_output_init(struct castkms_device *castkmsdev);
  */
 struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
 				   struct castkms_config_plane *plane_cfg);
+int castkms_plane_snapshot_colorops(struct castkms_plane_state *plane_state,
+				    struct drm_atomic_state *state);
 
 /* CRC Support */
 const char *const *castkms_get_crc_sources(struct drm_crtc *crtc,
@@ -330,6 +356,12 @@ int castkms_initialize_colorops(struct drm_plane *plane);
 #if IS_ENABLED(CONFIG_KUNIT)
 void castkms_sort_plane_states(struct castkms_plane_state **planes,
 			       size_t count);
+#endif
+
+#if IS_ENABLED(CONFIG_KUNIT)
+int castkms_colorop_snapshot_init(struct castkms_colorop_snapshot *snapshot,
+				  const struct drm_colorop *colorop,
+				  const struct drm_colorop_state *state);
 #endif
 
 #endif /* _CASTKMS_DRV_H_ */
