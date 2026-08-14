@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/slab.h>
+#include <linux/printk.h>
 
-#include <drm/drm_print.h>
 #include <drm/drm_debugfs.h>
 #include <kunit/visibility.h>
 
@@ -173,13 +173,12 @@ void castkms_config_clear_runtime_objects(struct castkms_config *config)
 
 static bool valid_plane_number(const struct castkms_config *config)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	size_t n_planes;
 
 	n_planes = list_count_nodes((struct list_head *)&config->planes);
 	if (!n_planes || n_planes > CASTKMS_MAX_OUTPUT_OBJECTS) {
-		drm_info(dev, "The number of planes must be between 1 and %u\n",
-			 CASTKMS_MAX_OUTPUT_OBJECTS);
+		pr_info("castkms %s: The number of planes must be between 1 and %u\n",
+			config->dev_name, CASTKMS_MAX_OUTPUT_OBJECTS);
 		return false;
 	}
 
@@ -189,7 +188,6 @@ static bool valid_plane_number(const struct castkms_config *config)
 static bool valid_planes_for_crtc(const struct castkms_config *config,
 				  struct castkms_config_crtc *crtc_cfg)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	struct castkms_config_plane *plane_cfg;
 	bool has_primary_plane = false;
 	bool has_cursor_plane = false;
@@ -207,14 +205,16 @@ static bool valid_planes_for_crtc(const struct castkms_config *config,
 
 			if (type == DRM_PLANE_TYPE_PRIMARY) {
 				if (has_primary_plane) {
-					drm_info(dev, "Multiple primary planes\n");
+					pr_info("castkms %s: Multiple primary planes\n",
+						config->dev_name);
 					return false;
 				}
 
 				has_primary_plane = true;
 			} else if (type == DRM_PLANE_TYPE_CURSOR) {
 				if (has_cursor_plane) {
-					drm_info(dev, "Multiple cursor planes\n");
+					pr_info("castkms %s: Multiple cursor planes\n",
+						config->dev_name);
 					return false;
 				}
 
@@ -224,7 +224,8 @@ static bool valid_planes_for_crtc(const struct castkms_config *config,
 	}
 
 	if (!has_primary_plane) {
-		drm_info(dev, "Primary plane not found\n");
+		pr_info("castkms %s: Primary plane not found\n",
+			config->dev_name);
 		return false;
 	}
 
@@ -233,12 +234,12 @@ static bool valid_planes_for_crtc(const struct castkms_config *config,
 
 static bool valid_plane_possible_crtcs(const struct castkms_config *config)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	struct castkms_config_plane *plane_cfg;
 
 	castkms_config_for_each_plane(config, plane_cfg) {
 		if (xa_empty(&plane_cfg->possible_crtcs)) {
-			drm_info(dev, "All planes must have at least one possible CRTC\n");
+			pr_info("castkms %s: All planes must have at least one possible CRTC\n",
+				config->dev_name);
 			return false;
 		}
 	}
@@ -248,13 +249,12 @@ static bool valid_plane_possible_crtcs(const struct castkms_config *config)
 
 static bool valid_crtc_number(const struct castkms_config *config)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	size_t n_crtcs;
 
 	n_crtcs = list_count_nodes((struct list_head *)&config->crtcs);
 	if (!n_crtcs || n_crtcs > CASTKMS_MAX_OUTPUT_OBJECTS) {
-		drm_info(dev, "The number of CRTCs must be between 1 and %u\n",
-			 CASTKMS_MAX_OUTPUT_OBJECTS);
+		pr_info("castkms %s: The number of CRTCs must be between 1 and %u\n",
+			config->dev_name, CASTKMS_MAX_OUTPUT_OBJECTS);
 		return false;
 	}
 
@@ -263,13 +263,12 @@ static bool valid_crtc_number(const struct castkms_config *config)
 
 static bool valid_encoder_number(const struct castkms_config *config)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	size_t n_encoders;
 
 	n_encoders = list_count_nodes((struct list_head *)&config->encoders);
 	if (!n_encoders || n_encoders > CASTKMS_MAX_OUTPUT_OBJECTS) {
-		drm_info(dev, "The number of encoders must be between 1 and %u\n",
-			 CASTKMS_MAX_OUTPUT_OBJECTS);
+		pr_info("castkms %s: The number of encoders must be between 1 and %u\n",
+			config->dev_name, CASTKMS_MAX_OUTPUT_OBJECTS);
 		return false;
 	}
 
@@ -278,13 +277,13 @@ static bool valid_encoder_number(const struct castkms_config *config)
 
 static bool valid_encoder_possible_crtcs(const struct castkms_config *config)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	struct castkms_config_crtc *crtc_cfg;
 	struct castkms_config_encoder *encoder_cfg;
 
 	castkms_config_for_each_encoder(config, encoder_cfg) {
 		if (xa_empty(&encoder_cfg->possible_crtcs)) {
-			drm_info(dev, "All encoders must have at least one possible CRTC\n");
+			pr_info("castkms %s: All encoders must have at least one possible CRTC\n",
+				config->dev_name);
 			return false;
 		}
 	}
@@ -304,7 +303,8 @@ static bool valid_encoder_possible_crtcs(const struct castkms_config *config)
 		}
 
 		if (!crtc_has_encoder) {
-			drm_info(dev, "All CRTCs must have at least one possible encoder\n");
+			pr_info("castkms %s: All CRTCs must have at least one possible encoder\n",
+				config->dev_name);
 			return false;
 		}
 	}
@@ -314,13 +314,12 @@ static bool valid_encoder_possible_crtcs(const struct castkms_config *config)
 
 static bool valid_connector_number(const struct castkms_config *config)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	size_t n_connectors;
 
 	n_connectors = list_count_nodes((struct list_head *)&config->connectors);
 	if (!n_connectors || n_connectors > CASTKMS_MAX_OUTPUT_OBJECTS) {
-		drm_info(dev, "The number of connectors must be between 1 and %u\n",
-			 CASTKMS_MAX_OUTPUT_OBJECTS);
+		pr_info("castkms %s: The number of connectors must be between 1 and %u\n",
+			config->dev_name, CASTKMS_MAX_OUTPUT_OBJECTS);
 		return false;
 	}
 
@@ -329,13 +328,12 @@ static bool valid_connector_number(const struct castkms_config *config)
 
 static bool valid_connector_possible_encoders(const struct castkms_config *config)
 {
-	struct drm_device *dev = config->dev ? &config->dev->drm : NULL;
 	struct castkms_config_connector *connector_cfg;
 
 	castkms_config_for_each_connector(config, connector_cfg) {
 		if (xa_empty(&connector_cfg->possible_encoders)) {
-			drm_info(dev,
-				 "All connectors must have at least one possible encoder\n");
+			pr_info("castkms %s: All connectors must have at least one possible encoder\n",
+				config->dev_name);
 			return false;
 		}
 	}
