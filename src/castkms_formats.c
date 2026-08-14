@@ -548,8 +548,44 @@ static void function_name(const struct castkms_plane_state *plane, int x_start,	
 
 READ_LINE_YUV_SEMIPLANAR(YUV888_semiplanar_read_line, y, uv, u8, u8, castkms_argb_u16_from_yuv161616,
 			 y[0] * 257, uv[0] * 257, uv[1] * 257)
-READ_LINE_YUV_SEMIPLANAR(YUV161616_semiplanar_read_line, y, uv, u16, u16, castkms_argb_u16_from_yuv161616,
-			 y[0], uv[0], uv[1])
+
+static void
+P0XX_read_line(const struct castkms_plane_state *plane, int x_start,
+	       int y_start, enum pixel_read_direction direction, int count,
+	       struct pixel_argb_u16 out_pixel[])
+{
+	const struct castkms_frame_info *frame_info = plane->frame_info;
+	const struct drm_format_info *format = frame_info->fb->format;
+	const struct conversion_matrix *matrix = &plane->conversion_matrix;
+	int subsampling_offset;
+	int subsampling;
+	ptrdiff_t step_y;
+	ptrdiff_t step_uv;
+	u8 *y;
+	u8 *uv;
+
+	packed_pixels_addr_1x1(frame_info, x_start, y_start, 0, &y);
+	packed_pixels_addr_1x1(frame_info, x_start / format->hsub,
+			       y_start / format->vsub, 1, &uv);
+	step_y = get_block_step_bytes(frame_info->fb, direction, 0);
+	step_uv = get_block_step_bytes(frame_info->fb, direction, 1);
+	subsampling = get_subsampling(format, direction);
+	subsampling_offset = get_subsampling_offset(direction, x_start, y_start);
+
+	for (int i = 0; i < count; i++) {
+		u16 y_sample = get_unaligned_le16(y);
+		u16 u_sample = get_unaligned_le16(uv);
+		u16 v_sample = get_unaligned_le16(uv + 2);
+
+		*out_pixel = castkms_argb_u16_from_yuv161616(matrix, y_sample, u_sample, v_sample);
+		out_pixel++;
+		if (i + 1 == count)
+			continue;
+		y += step_y;
+		if ((i + subsampling_offset + 1) % subsampling == 0)
+			uv += step_uv;
+	}
+}
 /*
  * This callback can be used for YUV format where each color component is
  * stored in a different plane (often called planar formats). It will
@@ -747,7 +783,7 @@ pixel_read_line_t castkms_get_pixel_read_line_function(u32 format)
 	case DRM_FORMAT_P010:
 	case DRM_FORMAT_P012:
 	case DRM_FORMAT_P016:
-		return &YUV161616_semiplanar_read_line;
+		return &P0XX_read_line;
 	case DRM_FORMAT_YUV420:
 	case DRM_FORMAT_YUV422:
 	case DRM_FORMAT_YUV444:

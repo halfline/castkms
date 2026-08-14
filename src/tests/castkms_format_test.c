@@ -502,6 +502,54 @@ static void castkms_format_test_unaligned_rgb64_write(struct kunit *test)
 	}
 }
 
+static void castkms_format_test_unaligned_le16_yuv(struct kunit *test)
+{
+	static const u32 formats[] = {
+		DRM_FORMAT_P010,
+		DRM_FORMAT_P012,
+		DRM_FORMAT_P016,
+	};
+	u8 luma[] = { 0xa5, 0x34, 0x12 };
+	u8 chroma[] = { 0xa5, 0x78, 0x56, 0xbc, 0x9a };
+
+	for (size_t i = 0; i < ARRAY_SIZE(formats); i++) {
+		struct castkms_plane_state plane;
+		struct castkms_frame_info frame_info;
+		struct iosys_map map[DRM_FORMAT_MAX_PLANES];
+		struct drm_framebuffer fb;
+		struct conversion_matrix *matrix = &plane.conversion_matrix;
+		enum drm_color_encoding encoding = DRM_COLOR_YCBCR_BT601;
+		enum drm_color_range range = DRM_COLOR_YCBCR_FULL_RANGE;
+		struct pixel_argb_u16 expected;
+		struct pixel_argb_u16 pixel;
+		pixel_read_line_t read_line;
+		u16 y = 0x1234;
+		u16 u = 0x5678;
+		u16 v = 0x9abc;
+
+		castkms_format_test_init_plane(&plane, &frame_info, map, &fb,
+					       formats[i]);
+		fb.pitches[0] = 2;
+		fb.pitches[1] = 4;
+		fb.offsets[0] = 1;
+		fb.offsets[1] = 1;
+		iosys_map_set_vaddr(&map[0], luma);
+		iosys_map_set_vaddr(&map[1], chroma);
+		castkms_get_conversion_matrix_to_argb_u16(formats[i], encoding,
+							  range, matrix);
+
+		read_line = castkms_get_pixel_read_line_function(formats[i]);
+		KUNIT_ASSERT_NOT_NULL(test, read_line);
+		read_line(&plane, 0, 0, READ_LEFT_TO_RIGHT, 1, &pixel);
+		expected = castkms_argb_u16_from_yuv161616(matrix, y, u, v);
+
+		KUNIT_EXPECT_EQ(test, pixel.a, expected.a);
+		KUNIT_EXPECT_EQ(test, pixel.r, expected.r);
+		KUNIT_EXPECT_EQ(test, pixel.g, expected.g);
+		KUNIT_EXPECT_EQ(test, pixel.b, expected.b);
+	}
+}
+
 /*
  * castkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
  * colors to ARGB colors in CASTKMS
@@ -566,6 +614,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_unaligned_rgb64_read),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb565_write),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb64_write),
+	KUNIT_CASE(castkms_format_test_unaligned_le16_yuv),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
 };
