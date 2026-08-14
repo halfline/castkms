@@ -78,7 +78,7 @@ static void packed_pixels_addr(const struct castkms_frame_info *frame_info,
 	int offset;
 
 	packed_pixels_offset(frame_info, x, y, plane_index, &offset, rem_x, rem_y);
-	*addr = (u8 *)frame_info->map[0].vaddr + offset;
+	*addr = (u8 *)frame_info->map[plane_index].vaddr + offset;
 }
 
 /**
@@ -139,7 +139,7 @@ static void packed_pixels_addr_1x1(const struct castkms_frame_info *frame_info,
 
 	packed_pixels_offset(frame_info, x, y, plane_index, &offset, &rem_x,
 			     &rem_y);
-	*addr = (u8 *)frame_info->map[0].vaddr + offset;
+	*addr = (u8 *)frame_info->map[plane_index].vaddr + offset;
 }
 
 /**
@@ -757,6 +757,7 @@ pixel_read_line_t castkms_get_pixel_read_line_function(u32 format)
 		BUG();
 	}
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_get_pixel_read_line_function);
 
 /*
  * Those matrices were generated using the colour python framework
