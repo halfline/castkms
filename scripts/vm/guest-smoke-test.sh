@@ -137,6 +137,8 @@ test "$running_release" = "$expected_release"
 printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
 
 make clean
+test ! -e ./castkms.ko
+test ! -e ./src/tests/castkms-kunit-tests.ko
 make kunit W=1 2>&1 | tee "$result_dir/build.log"
 
 test "$(modinfo -F name ./castkms.ko)" = castkms
