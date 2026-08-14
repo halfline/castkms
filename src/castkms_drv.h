@@ -327,4 +327,9 @@ int castkms_enable_writeback_connector(struct castkms_device *castkmsdev, struct
 /* Colorops */
 int castkms_initialize_colorops(struct drm_plane *plane);
 
+#if IS_ENABLED(CONFIG_KUNIT)
+void castkms_sort_plane_states(struct castkms_plane_state **planes,
+			       size_t count);
+#endif
+
 #endif /* _CASTKMS_DRV_H_ */

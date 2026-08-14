@@ -199,6 +199,8 @@ struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
 	struct castkms_plane *plane;
 	u32 *formats;
 	int num_formats;
+	unsigned int max_zpos = CASTKMS_MAX_OUTPUT_OBJECTS;
+	unsigned int max_overlay_zpos = max_zpos - 1;
 	int ret;
 
 	num_formats = castkms_plane_formats_alloc(&formats);
@@ -218,6 +220,22 @@ struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
 
 	ret = drm_plane_create_rotation_property(&plane->base, DRM_MODE_ROTATE_0,
 					 DRM_MODE_ROTATE_MASK | DRM_MODE_REFLECT_MASK);
+	if (ret)
+		return ERR_PTR(ret);
+
+	switch (castkms_config_plane_get_type(plane_cfg)) {
+	case DRM_PLANE_TYPE_PRIMARY:
+		ret = drm_plane_create_zpos_immutable_property(&plane->base, 0);
+		break;
+	case DRM_PLANE_TYPE_CURSOR:
+		ret = drm_plane_create_zpos_immutable_property(&plane->base, max_zpos);
+		break;
+	case DRM_PLANE_TYPE_OVERLAY:
+		ret = drm_plane_create_zpos_property(&plane->base, 1, 1, max_overlay_zpos);
+		break;
+	default:
+		return ERR_PTR(-EINVAL);
+	}
 	if (ret)
 		return ERR_PTR(ret);
 
