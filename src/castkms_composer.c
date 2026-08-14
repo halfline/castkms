@@ -663,6 +663,7 @@ void castkms_composer_worker(struct work_struct *work)
 		crtc_state->wb_pending = false;
 		crtc_state->active_writeback = NULL;
 		spin_unlock_irq(&out->composer_lock);
+		castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
 		drm_writeback_signal_completion(&out->wb_connector, ret);
 	}
 
@@ -716,19 +717,98 @@ int castkms_verify_crc_source(struct drm_crtc *crtc, const char *src_name,
 	return 0;
 }
 
-void castkms_set_composer(struct castkms_output *out, bool enabled)
+VISIBLE_IF_KUNIT int
+castkms_composer_demand_get(struct castkms_composer_demand *demand,
+			    enum castkms_composer_client client,
+			    int vblank_ret, bool *keep_vblank)
 {
-	bool old_enabled;
+	bool was_active = castkms_composer_demand_is_active(demand);
 
-	if (enabled)
-		drm_crtc_vblank_get(&out->crtc);
+	*keep_vblank = false;
+	if (vblank_ret)
+		return vblank_ret;
+
+	switch (client) {
+	case CASTKMS_COMPOSER_CLIENT_CRC:
+		if (demand->crc_enabled)
+			return 0;
+		demand->crc_enabled = true;
+		break;
+	case CASTKMS_COMPOSER_CLIENT_WRITEBACK:
+		if (WARN_ON(demand->writeback_count == UINT_MAX))
+			return -EOVERFLOW;
+		demand->writeback_count++;
+		break;
+	default:
+		WARN_ON(1);
+		return -EINVAL;
+	}
+
+	*keep_vblank = !was_active;
+	return 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_composer_demand_get);
+
+VISIBLE_IF_KUNIT bool
+castkms_composer_demand_put(struct castkms_composer_demand *demand,
+			    enum castkms_composer_client client)
+{
+	bool was_active = castkms_composer_demand_is_active(demand);
+
+	switch (client) {
+	case CASTKMS_COMPOSER_CLIENT_CRC:
+		if (!demand->crc_enabled)
+			return false;
+		demand->crc_enabled = false;
+		break;
+	case CASTKMS_COMPOSER_CLIENT_WRITEBACK:
+		if (WARN_ON(!demand->writeback_count))
+			return false;
+		demand->writeback_count--;
+		break;
+	default:
+		WARN_ON(1);
+		return false;
+	}
+
+	return was_active && !castkms_composer_demand_is_active(demand);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_composer_demand_put);
+
+int castkms_composer_get(struct castkms_output *out,
+			 enum castkms_composer_client client)
+{
+	bool keep_vblank;
+	int ret, vblank_ret;
+
+	/*
+	 * Get optimistically so the vblank implementation never runs under
+	 * out->lock. The demand state decides whether this reference becomes the
+	 * aggregate reference or is an extra reference that must be returned.
+	 */
+	vblank_ret = drm_crtc_vblank_get(&out->crtc);
 
 	spin_lock_irq(&out->lock);
-	old_enabled = out->composer_enabled;
-	out->composer_enabled = enabled;
+	ret = castkms_composer_demand_get(&out->composer_demand, client,
+					  vblank_ret, &keep_vblank);
 	spin_unlock_irq(&out->lock);
 
-	if (old_enabled)
+	if (!vblank_ret && !keep_vblank)
+		drm_crtc_vblank_put(&out->crtc);
+
+	return ret;
+}
+
+void castkms_composer_put(struct castkms_output *out,
+			  enum castkms_composer_client client)
+{
+	bool put_vblank;
+
+	spin_lock_irq(&out->lock);
+	put_vblank = castkms_composer_demand_put(&out->composer_demand, client);
+	spin_unlock_irq(&out->lock);
+
+	if (put_vblank)
 		drm_crtc_vblank_put(&out->crtc);
 }
 
@@ -742,7 +822,10 @@ int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name)
 	if (ret)
 		return ret;
 
-	castkms_set_composer(out, enabled);
+	if (enabled)
+		ret = castkms_composer_get(out, CASTKMS_COMPOSER_CLIENT_CRC);
+	else
+		castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_CRC);
 
 	return ret;
 }

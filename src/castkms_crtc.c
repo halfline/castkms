@@ -50,7 +50,7 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 		DRM_ERROR("castkms failure on handling vblank");
 
 	state = output->composer_state;
-	if (state && output->composer_enabled) {
+	if (state && castkms_composer_demand_is_active(&output->composer_demand)) {
 		u64 frame = drm_crtc_accurate_vblank_count(crtc);
 
 		/* update frame_start only if a queued castkms_composer_worker()

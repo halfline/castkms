@@ -105,9 +105,6 @@ static void castkms_wb_cleanup_job(struct drm_writeback_connector *connector,
 				struct drm_writeback_job *job)
 {
 	struct castkms_writeback_job *castkmsjob = job->priv;
-	struct castkms_output *castkms_output = container_of(connector,
-						       struct castkms_output,
-						       wb_connector);
 
 	if (!job->fb)
 		return;
@@ -116,7 +113,6 @@ static void castkms_wb_cleanup_job(struct drm_writeback_connector *connector,
 
 	drm_framebuffer_put(castkmsjob->wb_frame_info.fb);
 
-	castkms_set_composer(castkms_output, false);
 	kfree(castkmsjob);
 }
 
@@ -153,6 +149,10 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 	drm_rect_init(&wb_frame_info->src, 0, 0, crtc_width, crtc_height);
 	drm_rect_init(&wb_frame_info->dst, 0, 0, crtc_width, crtc_height);
 
+	ret = castkms_composer_get(output, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
+	if (ret)
+		goto err_complete_job;
+
 	drm_writeback_queue_job(wb_conn, connector_state);
 
 	spin_lock_irq(&output->composer_lock);
@@ -160,7 +160,6 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 	crtc_state->wb_pending = true;
 	spin_unlock_irq(&output->composer_lock);
 
-	castkms_set_composer(output, true);
 	/*
 	 * A vblank can race with this connector hook after atomic_flush() has
 	 * published the CRTC state. Queue the state directly so that a newer
