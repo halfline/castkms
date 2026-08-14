@@ -288,6 +288,56 @@ static void castkms_format_test_distinct_multiplane_maps(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, pixel.b, expected.b);
 }
 
+static void castkms_format_test_packed_vertical_step(struct kunit *test)
+{
+	static const struct {
+		u32 format;
+		unsigned int bits_per_pixel;
+	} cases[] = {
+		{ DRM_FORMAT_R1, 1 },
+		{ DRM_FORMAT_R2, 2 },
+		{ DRM_FORMAT_R4, 4 },
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
+		struct castkms_plane_state plane;
+		struct castkms_frame_info frame_info;
+		struct iosys_map map[DRM_FORMAT_MAX_PLANES];
+		struct drm_framebuffer fb;
+		struct pixel_argb_u16 pixels[3];
+		pixel_read_line_t read_line;
+		u16 first_level = 0xffff / ((1 << cases[i].bits_per_pixel) - 1);
+		u8 data[7];
+		u8 *base = data;
+
+		memset(data, 0xa5, sizeof(data));
+		base[0] = 1 << (8 - cases[i].bits_per_pixel);
+		base[3] = ((1 << cases[i].bits_per_pixel) - 1) <<
+			   (8 - cases[i].bits_per_pixel);
+		base[6] = 0;
+
+		castkms_format_test_init_plane(&plane, &frame_info, map, &fb,
+					       cases[i].format);
+		fb.pitches[0] = 3;
+		iosys_map_set_vaddr(&map[0], base);
+
+		read_line = castkms_get_pixel_read_line_function(cases[i].format);
+		KUNIT_ASSERT_NOT_NULL(test, read_line);
+		read_line(&plane, 0, 0, READ_TOP_TO_BOTTOM, ARRAY_SIZE(pixels),
+			  pixels);
+
+		KUNIT_EXPECT_EQ(test, pixels[0].r, first_level);
+		KUNIT_EXPECT_EQ(test, pixels[1].r, (u16)0xffff);
+		KUNIT_EXPECT_EQ(test, pixels[2].r, (u16)0);
+
+		read_line(&plane, 0, 2, READ_BOTTOM_TO_TOP, ARRAY_SIZE(pixels),
+			  pixels);
+		KUNIT_EXPECT_EQ(test, pixels[0].r, (u16)0);
+		KUNIT_EXPECT_EQ(test, pixels[1].r, (u16)0xffff);
+		KUNIT_EXPECT_EQ(test, pixels[2].r, first_level);
+	}
+}
+
 /*
  * castkms_format_test_yuv_u16_to_argb_u16 - Testing the conversion between YUV
  * colors to ARGB colors in CASTKMS
@@ -345,6 +395,7 @@ KUNIT_ARRAY_PARAM(yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_cases,
 static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_framebuffer_offset),
 	KUNIT_CASE(castkms_format_test_distinct_multiplane_maps),
+	KUNIT_CASE(castkms_format_test_packed_vertical_step),
 	KUNIT_CASE_PARAM(castkms_format_test_yuv_u16_to_argb_u16, yuv_u16_to_argb_u16_gen_params),
 	{}
 };
