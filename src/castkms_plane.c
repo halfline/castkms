@@ -256,7 +256,16 @@ static int castkms_prepare_fb(struct drm_plane *plane,
 	if (ret)
 		return ret;
 
-	return drm_gem_fb_vmap(fb, shadow_plane_state->map, NULL);
+	ret = drm_gem_fb_vmap(fb, shadow_plane_state->map, NULL);
+	if (ret)
+		return ret;
+
+	if (!castkms_framebuffer_maps_are_accessible(fb, shadow_plane_state->map)) {
+		drm_gem_fb_vunmap(fb, shadow_plane_state->map);
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
 }
 
 static void castkms_cleanup_fb(struct drm_plane *plane,
