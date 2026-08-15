@@ -59,6 +59,20 @@ castkms_packed_pixels_offset(const struct drm_framebuffer *fb,
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_packed_pixels_offset);
 
+bool castkms_framebuffer_maps_are_accessible(const struct drm_framebuffer *fb,
+					     const struct iosys_map *map)
+{
+	if (!fb || !fb->format || !map)
+		return false;
+
+	for (unsigned int i = 0; i < fb->format->num_planes; i++)
+		if (iosys_map_is_null(&map[i]) || map[i].is_iomem)
+			return false;
+
+	return true;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_framebuffer_maps_are_accessible);
+
 bool castkms_framebuffer_read_strides_are_valid(const struct drm_framebuffer *fb)
 {
 	for (unsigned int i = 0; i < fb->format->num_planes; i++) {

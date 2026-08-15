@@ -11,6 +11,8 @@ int castkms_writeback_formats_alloc(u32 **formats);
 pixel_read_line_t castkms_get_pixel_read_line_function(u32 format);
 
 pixel_write_t castkms_get_pixel_write_function(u32 format);
+bool castkms_framebuffer_maps_are_accessible(const struct drm_framebuffer *fb,
+					     const struct iosys_map *map);
 bool castkms_framebuffer_read_strides_are_valid(const struct drm_framebuffer *fb);
 size_t castkms_packed_pixels_offset(const struct drm_framebuffer *fb,
 				    int x, int y, unsigned int plane_index,
