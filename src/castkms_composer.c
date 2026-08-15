@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/crc32.h>
+#include <linux/dma-direction.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
@@ -546,6 +547,59 @@ static bool plane_frame_maps_are_valid(struct castkms_crtc_state *crtc_state)
 	return true;
 }
 
+static bool
+plane_framebuffer_appears_before(struct castkms_plane_state **planes,
+				 size_t index)
+{
+	struct drm_framebuffer *fb = planes[index]->frame_info->fb;
+
+	for (size_t i = 0; i < index; i++)
+		if (planes[i]->frame_info->fb == fb)
+			return true;
+
+	return false;
+}
+
+static void
+plane_framebuffers_end_cpu_access(struct castkms_crtc_state *crtc_state,
+				  size_t count)
+{
+	struct castkms_plane_state **planes = crtc_state->active_planes;
+
+	while (count) {
+		struct drm_framebuffer *fb;
+
+		count--;
+		if (plane_framebuffer_appears_before(planes, count))
+			continue;
+
+		fb = planes[count]->frame_info->fb;
+		drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
+	}
+}
+
+static int plane_framebuffers_begin_cpu_access(struct castkms_crtc_state *crtc_state)
+{
+	struct castkms_plane_state **planes = crtc_state->active_planes;
+	size_t count = crtc_state->num_active_planes;
+	size_t i;
+	int ret;
+
+	for (i = 0; i < count; i++) {
+		if (plane_framebuffer_appears_before(planes, i))
+			continue;
+
+		ret = drm_gem_fb_begin_cpu_access(planes[i]->frame_info->fb,
+						  DMA_FROM_DEVICE);
+		if (ret) {
+			plane_framebuffers_end_cpu_access(crtc_state, i);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 static int compose_active_planes(const struct castkms_output_buffer *destination,
 				 struct castkms_crtc_state *crtc_state,
 				 u32 *crc32)
@@ -589,9 +643,16 @@ static int compose_active_planes(const struct castkms_output_buffer *destination
 		goto free_stage_buffer;
 	}
 
+	ret = plane_framebuffers_begin_cpu_access(crtc_state);
+	if (ret)
+		goto free_output_buffer;
+
 	blend(destination, crtc_state, crc32, &stage_buffer,
 	      &output_buffer, line_width * pixel_size);
 
+	plane_framebuffers_end_cpu_access(crtc_state,
+					  crtc_state->num_active_planes);
+free_output_buffer:
 	kvfree(output_buffer.pixels);
 free_stage_buffer:
 	kvfree(stage_buffer.pixels);
