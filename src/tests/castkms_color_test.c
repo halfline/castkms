@@ -395,6 +395,49 @@ static void castkms_color_ctm_3x4_bt709(struct kunit *test)
 	KUNIT_EXPECT_LT(test, out.b, 0x100);
 }
 
+static void castkms_color_pipeline_clamps_curve_input(struct kunit *test)
+{
+	struct castkms_colorop_snapshot colorops[] = {
+		{
+			.type = DRM_COLOROP_CTM_3X4,
+			.has_ctm = true,
+			.ctm.matrix = {
+				2ULL << 32, 0, 0, 0,
+				0, BIT_ULL(63) | (1ULL << 32), 0, 0,
+				0, 0, 1ULL << 32, 0,
+			},
+		},
+		{
+			.type = DRM_COLOROP_1D_CURVE,
+			.curve_1d_type = DRM_COLOROP_1D_CURVE_SRGB_EOTF,
+		},
+	};
+	struct castkms_plane_state plane_state = {
+		.num_colorops = ARRAY_SIZE(colorops),
+		.colorops = colorops,
+	};
+	struct pixel_argb_u16 pixel = {
+		.a = 0xffff,
+		.r = 0x8000,
+		.g = 0x4000,
+		.b = 0x2020,
+	};
+	struct line_buffer buffer = {
+		.n_pixels = 1,
+		.pixels = &pixel,
+	};
+	u16 expected_b;
+
+	expected_b = castkms_apply_lut_to_channel_value(&castkms_srgb_eotf, pixel.b, LUT_BLUE);
+
+	castkms_apply_colorops(&plane_state, &buffer);
+
+	KUNIT_EXPECT_EQ(test, pixel.a, (u16)0xffff);
+	KUNIT_EXPECT_EQ(test, pixel.r, (u16)0xffff);
+	KUNIT_EXPECT_EQ(test, pixel.g, (u16)0);
+	KUNIT_EXPECT_EQ(test, pixel.b, expected_b);
+}
+
 static void castkms_color_pipeline_owns_queued_values(struct kunit *test)
 {
 	struct drm_color_ctm_3x4 swap_red_green = {
@@ -476,6 +519,7 @@ static struct kunit_case castkms_color_test_cases[] = {
 	KUNIT_CASE(castkms_color_srgb_inv_srgb),
 	KUNIT_CASE(castkms_color_ctm_3x4_50_desat),
 	KUNIT_CASE(castkms_color_ctm_3x4_bt709),
+	KUNIT_CASE(castkms_color_pipeline_clamps_curve_input),
 	KUNIT_CASE(castkms_color_pipeline_owns_queued_values),
 	{}
 };
