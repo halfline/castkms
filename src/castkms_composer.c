@@ -647,9 +647,18 @@ static int compose_active_planes(const struct castkms_output_buffer *destination
 	if (ret)
 		goto free_output_buffer;
 
+	if (destination) {
+		ret = castkms_output_buffer_begin_cpu_access(destination);
+		if (ret)
+			goto end_plane_access;
+	}
+
 	blend(destination, crtc_state, crc32, &stage_buffer,
 	      &output_buffer, line_width * pixel_size);
 
+	if (destination)
+		castkms_output_buffer_end_cpu_access(destination);
+end_plane_access:
 	plane_framebuffers_end_cpu_access(crtc_state,
 					  crtc_state->num_active_planes);
 free_output_buffer:
