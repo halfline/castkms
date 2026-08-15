@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include <linux/iosys-map.h>
-
 #include <drm/drm_atomic.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_fourcc.h>
@@ -9,11 +7,11 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_atomic_helper.h>
-#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
 
 #include "castkms_drv.h"
 #include "castkms_formats.h"
+#include "castkms_output_buffer.h"
 
 static const struct drm_connector_funcs castkms_wb_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
@@ -72,48 +70,41 @@ static int castkms_wb_connector_get_modes(struct drm_connector *connector)
 static int castkms_wb_prepare_job(struct drm_writeback_connector *wb_connector,
 			       struct drm_writeback_job *job)
 {
-	struct castkms_writeback_job *castkmsjob;
+	struct castkms_output_buffer *output_buffer;
 	int ret;
 
 	if (!job->fb)
 		return 0;
 
-	castkmsjob = kzalloc_obj(*castkmsjob);
-	if (!castkmsjob)
+	output_buffer = kzalloc_obj(*output_buffer);
+	if (!output_buffer)
 		return -ENOMEM;
 
-	ret = drm_gem_fb_vmap(job->fb, castkmsjob->map, NULL);
+	ret = castkms_output_buffer_init(output_buffer, job->fb);
 	if (ret) {
-		DRM_ERROR("vmap failed: %d\n", ret);
+		DRM_ERROR("output buffer initialization failed: %d\n", ret);
 		goto err_kfree;
 	}
 
-	castkmsjob->wb_frame_info.fb = job->fb;
-	castkmsjob->wb_frame_info.map = castkmsjob->map;
-	drm_framebuffer_get(castkmsjob->wb_frame_info.fb);
-
-	job->priv = castkmsjob;
+	job->priv = output_buffer;
 
 	return 0;
 
 err_kfree:
-	kfree(castkmsjob);
+	kfree(output_buffer);
 	return ret;
 }
 
 static void castkms_wb_cleanup_job(struct drm_writeback_connector *connector,
 				struct drm_writeback_job *job)
 {
-	struct castkms_writeback_job *castkmsjob = job->priv;
+	struct castkms_output_buffer *output_buffer = job->priv;
 
 	if (!job->fb)
 		return;
 
-	drm_gem_fb_vunmap(job->fb, castkmsjob->map);
-
-	drm_framebuffer_put(castkmsjob->wb_frame_info.fb);
-
-	kfree(castkmsjob);
+	castkms_output_buffer_fini(output_buffer);
+	kfree(output_buffer);
 }
 
 static void castkms_wb_atomic_commit(struct drm_connector *conn,
@@ -126,11 +117,7 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 	struct drm_crtc_state *new_crtc_state =
 		drm_atomic_get_new_crtc_state(state, connector_state->crtc);
 	struct castkms_crtc_state *crtc_state;
-	struct drm_framebuffer *fb = connector_state->writeback_job->fb;
-	struct castkms_writeback_job *active_wb;
-	struct castkms_frame_info *wb_frame_info;
-	u16 crtc_height;
-	u16 crtc_width;
+	struct castkms_output_buffer *active_wb;
 	int ret;
 
 	if (WARN_ON(!new_crtc_state)) {
@@ -139,15 +126,7 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 	}
 
 	crtc_state = to_castkms_crtc_state(new_crtc_state);
-	crtc_height = new_crtc_state->mode.vdisplay;
-	crtc_width = new_crtc_state->mode.hdisplay;
-
 	active_wb = connector_state->writeback_job->priv;
-	wb_frame_info = &active_wb->wb_frame_info;
-
-	active_wb->pixel_write = castkms_get_pixel_write_function(fb->format->format);
-	drm_rect_init(&wb_frame_info->src, 0, 0, crtc_width, crtc_height);
-	drm_rect_init(&wb_frame_info->dst, 0, 0, crtc_width, crtc_height);
 
 	ret = castkms_composer_get(output, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
 	if (ret)

@@ -17,6 +17,7 @@
 #include "castkms_composer.h"
 #include "castkms_formats.h"
 #include "castkms_luts.h"
+#include "castkms_output_buffer.h"
 
 static u16 pre_mul_blend_channel(u16 src, u16 dst, u16 alpha)
 {
@@ -461,7 +462,7 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 
 /**
  * blend - blend the pixels from all planes and compute crc
- * @wb: The writeback frame buffer metadata
+ * @destination: Optional destination for the composed frame
  * @crtc_state: The crtc state
  * @crc32: The crc output of the final frame
  * @output_buffer: A buffer of a row that will receive the result of the blend(s)
@@ -470,9 +471,9 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
  *
  * This function blends the pixels (Using the `pre_mul_alpha_blend`)
  * from all planes, calculates the crc32 of the output from the former step,
- * and, if necessary, convert and store the output to the writeback buffer.
+ * and, if necessary, convert and store the output in @destination.
  */
-static void blend(struct castkms_writeback_job *wb,
+static void blend(const struct castkms_output_buffer *destination,
 		  struct castkms_crtc_state *crtc_state,
 		  u32 *crc32, struct line_buffer *stage_buffer,
 		  struct line_buffer *output_buffer, size_t row_size)
@@ -510,13 +511,12 @@ static void blend(struct castkms_writeback_job *wb,
 
 		*crc32 = crc32_le(*crc32, (void *)output_buffer->pixels, row_size);
 
-		if (wb)
-			castkms_writeback_row(wb, output_buffer, y);
+		if (destination)
+			castkms_output_buffer_write_row(destination, output_buffer, y);
 	}
 }
 
-static bool format_funcs_are_valid(struct castkms_crtc_state *crtc_state,
-				   struct castkms_writeback_job *active_wb)
+static bool plane_format_funcs_are_valid(struct castkms_crtc_state *crtc_state)
 {
 	struct castkms_plane_state **planes = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
@@ -524,9 +524,6 @@ static bool format_funcs_are_valid(struct castkms_crtc_state *crtc_state,
 	for (size_t i = 0; i < n_active_planes; i++)
 		if (!planes[i]->pixel_read_line)
 			return false;
-
-	if (active_wb && !active_wb->pixel_write)
-		return false;
 
 	return true;
 }
@@ -537,8 +534,7 @@ static bool frame_maps_are_valid(const struct castkms_frame_info *frame_info)
 								    frame_info->map);
 }
 
-static bool iosys_maps_are_valid(struct castkms_crtc_state *crtc_state,
-				 struct castkms_writeback_job *active_wb)
+static bool plane_frame_maps_are_valid(struct castkms_crtc_state *crtc_state)
 {
 	struct castkms_plane_state **plane_state = crtc_state->active_planes;
 	u32 n_active_planes = crtc_state->num_active_planes;
@@ -547,10 +543,10 @@ static bool iosys_maps_are_valid(struct castkms_crtc_state *crtc_state,
 		if (!frame_maps_are_valid(plane_state[i]->frame_info))
 			return false;
 
-	return !active_wb || frame_maps_are_valid(&active_wb->wb_frame_info);
+	return true;
 }
 
-static int compose_active_planes(struct castkms_writeback_job *active_wb,
+static int compose_active_planes(const struct castkms_output_buffer *destination,
 				 struct castkms_crtc_state *crtc_state,
 				 u32 *crc32)
 {
@@ -566,10 +562,14 @@ static int compose_active_planes(struct castkms_writeback_job *active_wb,
 	 */
 	static_assert(sizeof(struct pixel_argb_u16) == 8);
 
-	if (WARN_ON(!iosys_maps_are_valid(crtc_state, active_wb)))
+	if (WARN_ON(!plane_frame_maps_are_valid(crtc_state)))
 		return -EINVAL;
 
-	if (WARN_ON(!format_funcs_are_valid(crtc_state, active_wb)))
+	if (WARN_ON(!plane_format_funcs_are_valid(crtc_state)))
+		return -EINVAL;
+
+	if (WARN_ON(destination &&
+		    !castkms_output_buffer_is_valid(destination)))
 		return -EINVAL;
 
 	line_width = crtc_state->base.mode.hdisplay;
@@ -589,7 +589,7 @@ static int compose_active_planes(struct castkms_writeback_job *active_wb,
 		goto free_stage_buffer;
 	}
 
-	blend(active_wb, crtc_state, crc32, &stage_buffer,
+	blend(destination, crtc_state, crc32, &stage_buffer,
 	      &output_buffer, line_width * pixel_size);
 
 	kvfree(output_buffer.pixels);
@@ -614,7 +614,7 @@ void castkms_composer_worker(struct work_struct *work)
 							  struct castkms_crtc_state,
 							  composer_work);
 	struct drm_crtc *crtc = crtc_state->base.crtc;
-	struct castkms_writeback_job *active_wb;
+	struct castkms_output_buffer *active_wb;
 	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
 	bool crc_pending, wb_pending;
 	u64 frame_start, frame_end;

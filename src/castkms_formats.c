@@ -670,11 +670,8 @@ static void planar_yuv_read_line(const struct castkms_plane_state *plane, int x_
 }
 
 /*
- * The following functions take one &struct pixel_argb_u16 and convert it to a specific format.
- * The result is stored in @out_pixel.
- *
- * They are used in castkms_writeback_row() to convert and store a pixel from the src_buffer to
- * the writeback buffer.
+ * The following functions take one &struct pixel_argb_u16 and convert it to a
+ * specific format. The result is stored in @out_pixel.
  */
 static void argb_u16_to_ARGB8888(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel)
 {
@@ -740,30 +737,6 @@ static void argb_u16_to_RGB565(u8 *out_pixel, const struct pixel_argb_u16 *in_pi
 	u16 b = drm_fixp2int(drm_fixp_div(fp_b, fp_rb_ratio));
 
 	put_unaligned_le16(r << 11 | g << 5 | b, out_pixel);
-}
-
-/**
- * castkms_writeback_row() - Generic loop for all supported writeback format. It is executed just
- * after the blending to write a line in the writeback buffer.
- *
- * @wb: Job where to insert the final image
- * @src_buffer: Line to write
- * @y: Row to write in the writeback buffer
- */
-void castkms_writeback_row(struct castkms_writeback_job *wb,
-			const struct line_buffer *src_buffer, int y)
-{
-	struct castkms_frame_info *frame_info = &wb->wb_frame_info;
-	int x_dst = frame_info->dst.x1;
-	u8 *dst_pixels;
-	int rem_x, rem_y;
-
-	packed_pixels_addr(frame_info, x_dst, y, 0, &dst_pixels, &rem_x, &rem_y);
-	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
-	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst), src_buffer->n_pixels);
-
-	for (size_t x = 0; x < x_limit; x++, dst_pixels += frame_info->fb->format->cpp[0])
-		wb->pixel_write(dst_pixels, &in_pixels[x]);
 }
 
 struct castkms_plane_format {
