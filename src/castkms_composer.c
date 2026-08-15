@@ -83,12 +83,21 @@ VISIBLE_IF_KUNIT s64 castkms_get_lut_index(const struct castkms_color_lut *lut, 
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_get_lut_index);
 
-VISIBLE_IF_KUNIT u16 castkms_apply_lut_to_channel_value(const struct castkms_color_lut *lut, u16 channel_value,
-						enum lut_channel channel)
+VISIBLE_IF_KUNIT u16
+castkms_apply_lut_to_channel_value(const struct castkms_color_lut *lut,
+				   s32 channel_value,
+				   enum lut_channel channel)
 {
-	s64 lut_index = castkms_get_lut_index(lut, channel_value);
-	u16 *floor_lut_value, *ceil_lut_value;
+	u16 lut_input = clamp_val(channel_value, 0, 0xffff);
+	s64 lut_index = castkms_get_lut_index(lut, lut_input);
+	const u16 *floor_lut_value, *ceil_lut_value;
 	u16 floor_channel_value, ceil_channel_value;
+
+	/*
+	 * A 1D LUT has a normalized input domain. Matrix operations retain a
+	 * signed, extended-range value between stages, so clamp that value at
+	 * the LUT boundary rather than narrowing it to u16 and wrapping it.
+	 */
 
 	/*
 	 * This checks if `struct drm_color_lut` has any gap added by the compiler
@@ -96,12 +105,12 @@ VISIBLE_IF_KUNIT u16 castkms_apply_lut_to_channel_value(const struct castkms_col
 	 */
 	static_assert(sizeof(struct drm_color_lut) == sizeof(__u16) * 4);
 
-	floor_lut_value = (__u16 *)&lut->base[drm_fixp2int(lut_index)];
+	floor_lut_value = (const u16 *)&lut->base[drm_fixp2int(lut_index)];
 	if (drm_fixp2int(lut_index) == (lut->lut_length - 1))
 		/* We're at the end of the LUT array, use same value for ceil and floor */
 		ceil_lut_value = floor_lut_value;
 	else
-		ceil_lut_value = (__u16 *)&lut->base[drm_fixp2int_ceil(lut_index)];
+		ceil_lut_value = (const u16 *)&lut->base[drm_fixp2int_ceil(lut_index)];
 
 	floor_channel_value = floor_lut_value[channel];
 	ceil_channel_value = ceil_lut_value[channel];
@@ -195,8 +204,9 @@ castkms_apply_colorops(const struct castkms_plane_state *plane_state,
 	for (size_t x = 0; x < output_buffer->n_pixels; x++) {
 		/*
 		 * Some operations, such as applying a BT709 encoding matrix,
-		 * followed by a decoding matrix, require that we preserve
-		 * values above 1.0 and below 0.0 until the end of the pipeline.
+		 * followed by a decoding matrix, require that we preserve values
+		 * above 1.0 and below 0.0 between matrix stages. A 1D curve clamps
+		 * its input to its normalized domain.
 		 *
 		 * Pack the 16-bit UNORM values into s32 to give us head-room to
 		 * avoid clipping until we're at the end of the pipeline. Clip
