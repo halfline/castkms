@@ -325,6 +325,26 @@ static void castkms_format_test_stride_range(struct kunit *test)
 			(bool)(sizeof(ptrdiff_t) > sizeof(u32)));
 }
 
+static void castkms_format_test_mapping_access(struct kunit *test)
+{
+	struct drm_framebuffer fb = {
+		.format = drm_format_info(DRM_FORMAT_NV12),
+	};
+	struct iosys_map map[DRM_FORMAT_MAX_PLANES] = {};
+	u8 storage[2];
+
+	KUNIT_EXPECT_FALSE(test, castkms_framebuffer_maps_are_accessible(&fb, map));
+
+	iosys_map_set_vaddr(&map[0], &storage[0]);
+	KUNIT_EXPECT_FALSE(test, castkms_framebuffer_maps_are_accessible(&fb, map));
+
+	iosys_map_set_vaddr(&map[1], &storage[1]);
+	KUNIT_EXPECT_TRUE(test, castkms_framebuffer_maps_are_accessible(&fb, map));
+
+	map[1].is_iomem = true;
+	KUNIT_EXPECT_FALSE(test, castkms_framebuffer_maps_are_accessible(&fb, map));
+}
+
 static void castkms_format_test_packed_vertical_step(struct kunit *test)
 {
 	static const struct {
@@ -625,6 +645,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_distinct_multiplane_maps),
 	KUNIT_CASE(castkms_format_test_wide_framebuffer_offset),
 	KUNIT_CASE(castkms_format_test_stride_range),
+	KUNIT_CASE(castkms_format_test_mapping_access),
 	KUNIT_CASE(castkms_format_test_packed_vertical_step),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb565_read),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb64_read),
