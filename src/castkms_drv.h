@@ -89,12 +89,6 @@ struct line_buffer {
  */
 typedef void (*pixel_write_t)(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel);
 
-struct castkms_writeback_job {
-	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
-	struct castkms_frame_info wb_frame_info;
-	pixel_write_t pixel_write;
-};
-
 enum castkms_composer_client {
 	CASTKMS_COMPOSER_CLIENT_CRC,
 	CASTKMS_COMPOSER_CLIENT_WRITEBACK,
@@ -128,6 +122,7 @@ enum pixel_read_direction {
 };
 
 struct castkms_plane_state;
+struct castkms_output_buffer;
 
 /**
  * typedef pixel_read_line_t - These functions are used to read a pixel line in the source frame,
@@ -221,7 +216,7 @@ struct castkms_color_lut {
  * @num_active_planes: Number of active planes
  * @active_planes: List containing all the active planes (counted by
  *		   @num_active_planes). They should be stored in z-order.
- * @active_writeback: Current active writeback job
+ * @active_writeback: Current active writeback destination buffer
  * @gamma_lut: Look up table for gamma used in this CRTC
  * @crc_pending: Protected by @castkms_output.composer_lock, true when the frame CRC is not computed
  *		 yet. Used by vblank to detect if the composer is too slow.
@@ -237,7 +232,7 @@ struct castkms_crtc_state {
 
 	int num_active_planes;
 	struct castkms_plane_state **active_planes;
-	struct castkms_writeback_job *active_writeback;
+	struct castkms_output_buffer *active_writeback;
 	struct castkms_color_lut gamma_lut;
 
 	bool crc_pending;
@@ -368,7 +363,6 @@ int castkms_composer_get(struct castkms_output *out,
 			 enum castkms_composer_client client);
 void castkms_composer_put(struct castkms_output *out,
 			  enum castkms_composer_client client);
-void castkms_writeback_row(struct castkms_writeback_job *wb, const struct line_buffer *src_buffer, int y);
 
 /* Writeback */
 int castkms_enable_writeback_connector(struct castkms_device *castkmsdev, struct castkms_output *castkms_out);
