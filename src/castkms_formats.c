@@ -17,7 +17,7 @@
 /**
  * castkms_packed_pixels_offset() - Locate a packed pixel block
  *
- * @frame_info: Buffer metadata
+ * @fb: Framebuffer metadata
  * @x: The x coordinate of the wanted pixel in the buffer
  * @y: The y coordinate of the wanted pixel in the buffer
  * @plane_index: The index of the plane to use
@@ -33,13 +33,12 @@
  *
  * With this function, the caller just have to extract the correct pixel from the block.
  */
-VISIBLE_IF_KUNIT size_t
-castkms_packed_pixels_offset(const struct castkms_frame_info *frame_info,
+size_t
+castkms_packed_pixels_offset(const struct drm_framebuffer *fb,
 			     int x, int y, unsigned int plane_index,
 			     int *rem_x, int *rem_y)
 {
-	struct drm_framebuffer *fb = frame_info->fb;
-	const struct drm_format_info *format = frame_info->fb->format;
+	const struct drm_format_info *format = fb->format;
 	/* Directly using x and y to multiply pitches and format->ccp is not sufficient because
 	 * in some formats a block can represent multiple pixels.
 	 *
@@ -97,7 +96,7 @@ static void packed_pixels_addr(const struct castkms_frame_info *frame_info,
 {
 	size_t offset;
 
-	offset = castkms_packed_pixels_offset(frame_info, x, y, plane_index,
+	offset = castkms_packed_pixels_offset(frame_info->fb, x, y, plane_index,
 					      rem_x, rem_y);
 	*addr = (u8 *)frame_info->map[plane_index].vaddr + offset;
 }
@@ -164,7 +163,7 @@ static void packed_pixels_addr_1x1(const struct castkms_frame_info *frame_info,
 					       plane_index) != 1,
 		"%s() only support formats with block_h == 1", __func__);
 
-	offset = castkms_packed_pixels_offset(frame_info, x, y, plane_index,
+	offset = castkms_packed_pixels_offset(frame_info->fb, x, y, plane_index,
 					      &rem_x, &rem_y);
 	*addr = (u8 *)frame_info->map[plane_index].vaddr + offset;
 }

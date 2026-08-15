@@ -304,7 +304,7 @@ static void castkms_format_test_wide_framebuffer_offset(struct kunit *test)
 		fb.offsets[0] = (u32)INT_MAX + 1;
 		fb.pitches[0] = (u32)INT_MAX + 2;
 
-		offset = castkms_packed_pixels_offset(&frame_info, 3, 1, 0,
+		offset = castkms_packed_pixels_offset(&fb, 3, 1, 0,
 						      &rem_x, &rem_y);
 		expected = (u64)fb.offsets[0] + fb.pitches[0] + 3;
 
