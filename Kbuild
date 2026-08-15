@@ -7,6 +7,7 @@ castkms-y := \
 	src/castkms_drv.o \
 	src/castkms_plane.o \
 	src/castkms_output.o \
+	src/castkms_output_buffer.o \
 	src/castkms_formats.o \
 	src/castkms_crtc.o \
 	src/castkms_composer.o \

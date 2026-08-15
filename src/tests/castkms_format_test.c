@@ -6,6 +6,7 @@
 #include <drm/drm_fourcc.h>
 
 #include "../castkms_formats.h"
+#include "../castkms_output_buffer.h"
 
 #define TEST_BUFF_SIZE 50
 
@@ -522,6 +523,53 @@ static void castkms_format_test_unaligned_rgb64_write(struct kunit *test)
 	}
 }
 
+static void castkms_format_test_output_buffer_row(struct kunit *test)
+{
+	struct pixel_argb_u16 pixels[] = {
+		{ .a = 0xffff, .r = 0xffff },
+		{ .a = 0xffff, .b = 0xffff },
+	};
+	struct line_buffer line = {
+		.n_pixels = ARRAY_SIZE(pixels),
+		.pixels = pixels,
+	};
+	struct drm_framebuffer fb = {
+		.format = drm_format_info(DRM_FORMAT_XRGB8888),
+		.width = 3,
+		.height = 2,
+	};
+	struct castkms_output_buffer output = {
+		.fb = &fb,
+	};
+	u8 destination[32];
+	size_t row_offset;
+
+	memset(destination, 0xa5, sizeof(destination));
+	fb.pitches[0] = 16;
+	fb.offsets[0] = 3;
+	iosys_map_set_vaddr(&output.map[0], destination);
+	KUNIT_EXPECT_FALSE(test, castkms_output_buffer_is_valid(&output));
+
+	output.write_pixel =
+		castkms_get_pixel_write_function(DRM_FORMAT_XRGB8888);
+	KUNIT_ASSERT_NOT_NULL(test, output.write_pixel);
+	KUNIT_EXPECT_TRUE(test, castkms_output_buffer_is_valid(&output));
+
+	castkms_output_buffer_write_row(&output, &line, 1);
+
+	row_offset = fb.offsets[0] + fb.pitches[0];
+	KUNIT_EXPECT_EQ(test, destination[row_offset - 1], (u8)0xa5);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 0], (u8)0x00);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 1], (u8)0x00);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 2], (u8)0xff);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 3], (u8)0xff);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 4], (u8)0xff);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 5], (u8)0x00);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 6], (u8)0x00);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 7], (u8)0xff);
+	KUNIT_EXPECT_EQ(test, destination[row_offset + 8], (u8)0xa5);
+}
+
 static void castkms_format_test_unaligned_le16_yuv(struct kunit *test)
 {
 	static const u32 formats[] = {
@@ -651,6 +699,7 @@ static struct kunit_case castkms_format_test_cases[] = {
 	KUNIT_CASE(castkms_format_test_unaligned_rgb64_read),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb565_write),
 	KUNIT_CASE(castkms_format_test_unaligned_rgb64_write),
+	KUNIT_CASE(castkms_format_test_output_buffer_row),
 	KUNIT_CASE(castkms_format_test_unaligned_le16_yuv),
 	KUNIT_CASE(castkms_format_test_unknown_callbacks),
 	KUNIT_CASE(castkms_format_test_registries),
