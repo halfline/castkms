@@ -15,6 +15,7 @@
 #include <kunit/visibility.h>
 
 #include "castkms_composer.h"
+#include "castkms_formats.h"
 #include "castkms_luts.h"
 
 static u16 pre_mul_blend_channel(u16 src, u16 dst, u16 alpha)
@@ -532,14 +533,8 @@ static bool format_funcs_are_valid(struct castkms_crtc_state *crtc_state,
 
 static bool frame_maps_are_valid(const struct castkms_frame_info *frame_info)
 {
-	if (!frame_info || !frame_info->fb || !frame_info->map)
-		return false;
-
-	for (unsigned int i = 0; i < frame_info->fb->format->num_planes; i++)
-		if (iosys_map_is_null(&frame_info->map[i]))
-			return false;
-
-	return true;
+	return frame_info && castkms_framebuffer_maps_are_accessible(frame_info->fb,
+								    frame_info->map);
 }
 
 static bool iosys_maps_are_valid(struct castkms_crtc_state *crtc_state,
