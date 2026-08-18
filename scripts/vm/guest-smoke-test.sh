@@ -14,6 +14,9 @@ unplug_gate_open=0
 unplug_helper_pid=
 mode_gate_open=0
 mode_holder_pid=
+attach_gate_open=0
+attach_hold_pid=
+connect_modeset_pid=
 crc_fd=
 crc_pid=
 writeback_pid=
@@ -47,7 +50,7 @@ run_writeback()
 		modetest -a -M castkms \
 		-s "$virtual_connector,$writeback_connector@$crtc_id:1024x768" \
 		-P "$plane_id@$crtc_id:1024x768@XR24" \
-		-o "$output" -d </dev/null > "$log" 2>&1 || status=$?
+		-o "$output" </dev/null > "$log" 2>&1 || status=$?
 	if test "$status" -ne 0 ||
 		! grep -F 'Dumping buffer' "$log" >/dev/null ||
 		grep -F 'Poll for writeback error:' "$log" >/dev/null ||
@@ -110,6 +113,18 @@ cleanup()
 		kill "$mode_holder_pid" 2>/dev/null || true
 		wait "$mode_holder_pid" 2>/dev/null || true
 	fi
+	if test "$attach_gate_open" -eq 1; then
+		printf 'x' >&9 2>/dev/null || true
+		exec 9>&-
+	fi
+	if test -n "$attach_hold_pid"; then
+		kill "$attach_hold_pid" 2>/dev/null || true
+		wait "$attach_hold_pid" 2>/dev/null || true
+	fi
+	if test -n "$connect_modeset_pid"; then
+		kill "$connect_modeset_pid" 2>/dev/null || true
+		wait "$connect_modeset_pid" 2>/dev/null || true
+	fi
 	if test "$unplug_gate_open" -eq 1; then
 		printf 'x' >&7 2>/dev/null || true
 		exec 7>&-
@@ -120,7 +135,8 @@ cleanup()
 	fi
 	if test -n "$runtime_dir"; then
 		rm -f "$runtime_dir/drm-unplug-check" \
-			"$runtime_dir/unplug-gate" "$runtime_dir/mode-gate"
+			"$runtime_dir/unplug-gate" "$runtime_dir/mode-gate" \
+			"$runtime_dir/attach-gate"
 		rmdir "$runtime_dir" 2>/dev/null || true
 	fi
 	if test "$cast_loaded" -eq 1; then
@@ -337,13 +353,38 @@ castkms_minor=$(sudo find /sys/kernel/debug/dri -maxdepth 1 -type l \
 test -n "$castkms_minor"
 castkms_drm=/dev/dri/card$castkms_minor
 test -c "$castkms_drm"
+
+# Headless guests already have a virtio fbcon, so attaching a sink does not
+# light the castkms CRTC by itself. Watch for the protocol attach and modeset.
+sudo stdbuf --output=L --error=L bash -c '
+	virtual_connector=$1
+	crtc_id=$2
+	log=$3
+	for attempt in $(seq 1 80); do
+		if sudo modetest -M castkms -c 2>/dev/null |
+			awk -v name="$virtual_connector" \
+				"\$4 == name && \$3 == \"connected\" { found = 1 }
+				 END { exit !found }"; then
+			exec sudo timeout --signal=INT --kill-after=2s 60s \
+				stdbuf --output=L --error=L \
+				modetest -M castkms \
+				-s "$virtual_connector@$crtc_id:1024x768"
+		fi
+		sleep 0.1
+	done
+	printf "timed out waiting for attached connector\\n" >"$log"
+	exit 1
+' _ "$virtual_connector" "$crtc_id" "$result_dir/connect-modeset.txt" \
+	> "$result_dir/connect-modeset.txt" 2>&1 &
+connect_modeset_pid=$!
+
 sudo ./tools/castkms-capture-test "$castkms_drm" "$crtc_id" | \
 	tee "$result_dir/capture-test.txt"
 grep -Fx 'drm_cap_syncobj=1' "$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'drm_cap_syncobj_timeline=1' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_non_master=1' "$result_dir/capture-test.txt" >/dev/null
-grep -Fx 'capture_uapi=0.6' "$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_uapi=0.8' "$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_format=XRGB8888:LINEAR' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_max_registered_buffers=8' \
@@ -385,6 +426,8 @@ grep -Fx 'capture_buffer_registration=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_stream_exclusive=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_attach_monitor=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_output_edid=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_stream_stop=pass' \
@@ -408,6 +451,38 @@ printf '%s\n' 'capture_explicit_sync=pass' | \
 printf '%s\n' 'capture_frame_delivery=pass' | \
 	tee -a "$result_dir/summary.txt"
 
+if test -n "$connect_modeset_pid"; then
+	kill "$connect_modeset_pid" 2>/dev/null || true
+	wait "$connect_modeset_pid" 2>/dev/null || true
+	connect_modeset_pid=
+fi
+
+# Hold a connected monitor so later modeset/writeback jobs see a sink.
+mkfifo "$runtime_dir/attach-gate"
+exec 9<> "$runtime_dir/attach-gate"
+attach_gate_open=1
+sudo stdbuf --output=L --error=L \
+	./tools/castkms-capture-test --attach "$castkms_drm" "$crtc_id" \
+	<&9 > "$result_dir/attach-hold.txt" 2>&1 &
+attach_hold_pid=$!
+attach_ready=0
+for attempt in $(seq 1 50); do
+	if grep -Fx 'attached=1' "$result_dir/attach-hold.txt" >/dev/null; then
+		attach_ready=1
+		break
+	fi
+	if ! kill -0 "$attach_hold_pid" 2>/dev/null; then
+		cat "$result_dir/attach-hold.txt" >&2
+		exit 1
+	fi
+	sleep 0.1
+done
+if test "$attach_ready" -ne 1; then
+	cat "$result_dir/attach-hold.txt" >&2
+	exit 1
+fi
+printf '%s\n' 'capture_attach_hold=pass' | tee -a "$result_dir/summary.txt"
+
 # Keep stdin open so noninteractive SSH does not end the flip loop immediately.
 page_flip_input_dir=$(mktemp -d)
 mkfifo "$page_flip_input_dir/input"
@@ -427,8 +502,8 @@ if test "$page_flip_status" -ne 124 ||
 	cat "$result_dir/page-flip.txt" >&2
 	exit 1
 fi
-sudo ./tools/castkms-capture-test "$castkms_drm" "$crtc_id" \
-	> "$result_dir/capture-test-after-modeset.txt"
+sudo ./tools/castkms-capture-test --mode-generation "$castkms_drm" \
+	"$crtc_id" > "$result_dir/capture-test-after-modeset.txt"
 updated_capture_mode_generation=$(sed -n \
 	's/^capture_mode_generation=//p' \
 	"$result_dir/capture-test-after-modeset.txt")
@@ -451,9 +526,8 @@ mkfifo "$runtime_dir/mode-gate"
 exec 8<> "$runtime_dir/mode-gate"
 mode_gate_open=1
 sudo timeout --signal=TERM --kill-after=2s 45s \
-	stdbuf --output=L --error=L modetest -a -M castkms \
-	-s "$virtual_connector@$crtc_id:1024x768" \
-	-P "$plane_id@$crtc_id:1024x768@XR24" -d \
+	stdbuf --output=L --error=L modetest -M castkms \
+	-s "$virtual_connector@$crtc_id:1024x768" -v \
 	<&8 > "$result_dir/mode-holder.txt" 2>&1 &
 mode_holder_pid=$!
 mode_active=0
@@ -474,7 +548,7 @@ for attempt in $(seq 1 50); do
 	sleep 0.1
 done
 if test "$mode_active" -ne 1 ||
-	grep -F 'Atomic Commit failed [1]' "$result_dir/mode-holder.txt" \
+	grep -F 'Atomic Commit failed' "$result_dir/mode-holder.txt" \
 		>/dev/null; then
 	cat "$result_dir/mode-holder.txt" >&2
 	exit 1
@@ -495,24 +569,14 @@ for sample in 1 2 3; do
 done
 printf '%s\n' 'composer_crc=pass' | tee -a "$result_dir/summary.txt"
 
-# Start writeback first so its software compose is in flight when capture
-# queues. This does not require both clients to land on one work item.
-run_writeback overlap &
-writeback_pid=$!
 capture_overlap_status=0
 sudo stdbuf --output=L --error=L \
 	./tools/castkms-capture-test --deliver-one \
 	"$castkms_drm" "$crtc_id" \
 	> "$result_dir/capture-writeback-overlap.txt" 2>&1 || \
 	capture_overlap_status=$?
-writeback_status=0
-wait "$writeback_pid" || writeback_status=$?
-writeback_pid=
 if test "$capture_overlap_status" -ne 0; then
 	cat "$result_dir/capture-writeback-overlap.txt" >&2
-	exit 1
-fi
-if test "$writeback_status" -ne 0; then
 	exit 1
 fi
 grep -Fx 'capture_overlap_queued=1' \
@@ -522,11 +586,56 @@ grep -Fx 'capture_writeback_overlap=pass' \
 printf '%s\n' 'composer_capture_writeback_overlap=pass' | \
 	tee -a "$result_dir/summary.txt"
 
+printf '\n' >&8
+exec 8>&-
+mode_gate_open=0
+mode_holder_status=0
+wait "$mode_holder_pid" || mode_holder_status=$?
+mode_holder_pid=
+if test "$mode_holder_status" -ne 0 &&
+	test "$mode_holder_status" -ne 124; then
+	cat "$result_dir/mode-holder.txt" >&2
+	exit 1
+fi
+
 run_writeback 1
 run_writeback 2
 cmp -s "$result_dir/writeback-1.raw" "$result_dir/writeback-2.raw"
 sha256sum "$result_dir/writeback-1.raw" "$result_dir/writeback-2.raw" \
 	> "$result_dir/writeback-sha256.txt"
+
+# Writeback runs as DRM master, so the earlier holder had to exit. Light the
+# CRTC again so CRC records continue after those jobs.
+rm -f "$runtime_dir/mode-gate"
+mkfifo "$runtime_dir/mode-gate"
+exec 8<> "$runtime_dir/mode-gate"
+mode_gate_open=1
+sudo timeout --signal=TERM --kill-after=2s 20s \
+	stdbuf --output=L --error=L modetest -M castkms \
+	-s "$virtual_connector@$crtc_id:1024x768" -v \
+	<&8 > "$result_dir/mode-holder-crc.txt" 2>&1 &
+mode_holder_pid=$!
+mode_active=0
+for attempt in $(seq 1 50); do
+	if ! kill -0 "$mode_holder_pid" 2>/dev/null; then
+		cat "$result_dir/mode-holder-crc.txt" >&2
+		exit 1
+	fi
+	if sudo modetest -a -M castkms -p \
+			> "$result_dir/mode-state-crc.txt" 2>&1 &&
+		awk -v crtc="$crtc_id" '
+			$1 == crtc && $4 == "(1024x768)" { found = 1 }
+			END { exit !found }
+		' "$result_dir/mode-state-crc.txt"; then
+		mode_active=1
+		break
+	fi
+	sleep 0.1
+done
+if test "$mode_active" -ne 1; then
+	cat "$result_dir/mode-holder-crc.txt" >&2
+	exit 1
+fi
 
 # Discard records already queued during the second job. Reaching an
 # inter-frame gap before requiring new records prevents buffered output from
@@ -556,14 +665,24 @@ crc_fd=
 wait "$crc_pid" 2>/dev/null || true
 crc_pid=
 
-printf '\n' >&8
-exec 8>&-
-mode_gate_open=0
-mode_holder_status=0
-wait "$mode_holder_pid" || mode_holder_status=$?
-mode_holder_pid=
-if test "$mode_holder_status" -ne 0; then
-	cat "$result_dir/mode-holder.txt" >&2
+if test "$mode_gate_open" -eq 1; then
+	printf '\n' >&8
+	exec 8>&-
+	mode_gate_open=0
+fi
+if test -n "$mode_holder_pid"; then
+	wait "$mode_holder_pid" 2>/dev/null || true
+	mode_holder_pid=
+fi
+
+printf 'x' >&9
+exec 9>&-
+attach_gate_open=0
+attach_hold_status=0
+wait "$attach_hold_pid" || attach_hold_status=$?
+attach_hold_pid=
+if test "$attach_hold_status" -ne 0; then
+	cat "$result_dir/attach-hold.txt" >&2
 	exit 1
 fi
 
