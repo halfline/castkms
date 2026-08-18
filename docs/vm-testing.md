@@ -37,7 +37,10 @@ into that kernel. Re-running it is safe and idempotent.
    connector;
 7. verifies syncobj and timeline-syncobj DRM capabilities, drops DRM master,
    performs the capture format query's count and data calls, requires linear
-   `XRGB8888`, and verifies exclusive stream ownership; registers mapped
+   `XRGB8888`, and verifies exclusive stream ownership; publishes a valid
+   output EDID onto the display connector, rejects invalid blobs and foreign
+   stream owners, and clears that EDID on an explicit clear, stream stop, and
+   file close; registers mapped
    buffers in implicit and explicit synchronization modes; rejects stale
    generations, wrong dimensions, invalid timeline points, shared syncobj
    ownership, and foreign ownership; and verifies buffer cleanup on unregister,

@@ -343,7 +343,7 @@ grep -Fx 'drm_cap_syncobj=1' "$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'drm_cap_syncobj_timeline=1' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_non_master=1' "$result_dir/capture-test.txt" >/dev/null
-grep -Fx 'capture_uapi=0.5' "$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_uapi=0.6' "$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_format=XRGB8888:LINEAR' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_max_registered_buffers=8' \
@@ -384,6 +384,8 @@ grep -Fx 'capture_buffer_postclose=pass' \
 grep -Fx 'capture_buffer_registration=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_stream_exclusive=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_output_edid=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_stream_stop=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
