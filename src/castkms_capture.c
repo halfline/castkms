@@ -54,6 +54,7 @@ static const struct drm_castkms_capture_format castkms_capture_formats[] = {
 static_assert(sizeof(struct drm_castkms_capture_format) == 16);
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_capture_start) == 24);
+static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 
 
 static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream)
@@ -257,5 +258,29 @@ out_unlock_output:
 	}
 
 	return ret;
+}
+
+int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
+			       struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_stop *args = data;
+	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_stream *stream;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	mutex_lock(&capture_file->lock);
+	stream = xa_load(&capture_file->streams, args->stream_id);
+	if (!stream) {
+		mutex_unlock(&capture_file->lock);
+		return -ENOENT;
+	}
+
+	xa_erase(&capture_file->streams, stream->id);
+	castkms_capture_stream_destroy(stream);
+	mutex_unlock(&capture_file->lock);
+
+	return 0;
 }
 

@@ -23,6 +23,8 @@ static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
 	      "capture query ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_start) == 24,
 	      "capture start ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_stop) == 16,
+	      "capture stop ABI size changed");
 
 static int check_driver_name(int fd)
 {
@@ -103,6 +105,18 @@ static int start_capture(int fd, uint32_t crtc_id,
 		.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE,
 	};
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_START, start) < 0)
+		return -errno;
+
+	return 0;
+}
+
+static int stop_capture(int fd, uint32_t stream_id)
+{
+	struct drm_castkms_capture_stop stop = {
+		.stream_id = stream_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_STOP, &stop) < 0)
 		return -errno;
 
 	return 0;
@@ -229,11 +243,30 @@ int main(int argc, char **argv)
 		goto out_close;
 	}
 
+	competitor_fd = open_capture_device(argv[1], false);
+	if (competitor_fd < 0)
+		goto out_close;
+	ioctl_ret = start_capture(competitor_fd, crtc_id, &second_stream);
+	if (ioctl_ret != -EBUSY) {
+		fprintf(stderr, "competing capture start returned %d, expected %d\n",
+			ioctl_ret, -EBUSY);
+		goto out_close;
+	}
+	ioctl_ret = stop_capture(competitor_fd, first_stream.stream_id);
+	if (ioctl_ret != -ENOENT) {
+		fprintf(stderr, "foreign capture stop returned %d, expected %d\n",
+			ioctl_ret, -ENOENT);
+		goto out_close;
+	}
+	printf("capture_stream_exclusive=pass\n");
+
 	ret = EXIT_SUCCESS;
 
 out_close:
 	if (verifier_fd >= 0)
 		close(verifier_fd);
+	if (competitor_fd >= 0)
+		close(competitor_fd);
 	close(fd);
 	return ret;
 }

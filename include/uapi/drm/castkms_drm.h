@@ -107,8 +107,21 @@ struct drm_castkms_capture_start {
 	__u64 mode_generation;
 };
 
+/**
+ * struct drm_castkms_capture_stop - stop an owned capture stream
+ * @stream_id: file-local stream identifier returned by start
+ * @flags: must be zero
+ * @reserved: must be zero
+ */
+struct drm_castkms_capture_stop {
+	__u32 stream_id;
+	__u32 flags;
+	__u64 reserved;
+};
+
 #define DRM_CASTKMS_CAPTURE_QUERY_CAPS	0x00
 #define DRM_CASTKMS_CAPTURE_START	0x01
+#define DRM_CASTKMS_CAPTURE_STOP	0x02
 
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
@@ -116,6 +129,9 @@ struct drm_castkms_capture_start {
 #define DRM_IOCTL_CASTKMS_CAPTURE_START \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_START, \
 		 struct drm_castkms_capture_start)
+#define DRM_IOCTL_CASTKMS_CAPTURE_STOP \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_STOP, \
+		struct drm_castkms_capture_stop)
 
 #if defined(__cplusplus)
 }
