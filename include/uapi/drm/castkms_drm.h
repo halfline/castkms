@@ -184,6 +184,15 @@ struct drm_castkms_capture_unregister_buffer {
 #define DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC	(1U << 0)
 
 /**
+ * DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC:
+ *
+ * Queue a buffer registered with timeline syncobjs. The buffer becomes
+ * eligible after its reuse point signals, and its ready point signals when
+ * capture completes or fails.
+ */
+#define DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC	(1U << 1)
+
+/**
  * struct drm_castkms_capture_queue_buffer - queue one capture destination
  * @stream_id: file-local capture stream identifier
  * @buffer_id: stream-local registered buffer identifier

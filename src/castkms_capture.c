@@ -478,6 +478,93 @@ err_put_producer:
 	return ret;
 }
 
+static int
+castkms_capture_get_reuse_fence(struct drm_syncobj *syncobj, u64 point,
+				struct dma_fence **reuse_fence)
+{
+	struct dma_fence *fence;
+	int ret;
+
+	*reuse_fence = NULL;
+	if (!point)
+		return 0;
+
+	fence = drm_syncobj_fence_get(syncobj);
+	if (!fence)
+		return -EINVAL;
+
+	ret = dma_fence_chain_find_seqno(&fence, point);
+	if (ret) {
+		dma_fence_put(fence);
+		return ret;
+	}
+	if (!fence)
+		fence = dma_fence_get_stub();
+	if (dma_fence_is_signaled(fence)) {
+		dma_fence_put(fence);
+		return 0;
+	}
+
+	*reuse_fence = fence;
+	return 0;
+}
+
+static bool
+castkms_capture_ready_point_is_new(struct drm_syncobj *syncobj, u64 point)
+{
+	struct dma_fence *fence = drm_syncobj_fence_get(syncobj);
+	struct dma_fence_chain *chain = to_dma_fence_chain(fence);
+	bool is_new = !chain || point > chain->base.seqno;
+
+	dma_fence_put(fence);
+	return is_new;
+}
+
+static int
+castkms_capture_prepare_explicit_sync(struct castkms_capture_buffer *buffer,
+				      u64 ready_point, u64 reuse_point,
+				      struct dma_fence **dependency,
+				      struct dma_fence **completion_fence,
+				      struct dma_fence_chain **ready_chain)
+{
+	struct dma_fence *producer;
+	int ret;
+
+	if (!ready_point || ready_point <= buffer->last_ready_point ||
+	    !castkms_capture_ready_point_is_new(buffer->ready_syncobj,
+						ready_point))
+		return -EINVAL;
+	if (buffer->last_ready_point &&
+	    (!reuse_point || reuse_point <= buffer->last_reuse_point))
+		return -EINVAL;
+
+	ret = castkms_capture_get_reuse_fence(buffer->reuse_syncobj,
+					      reuse_point, dependency);
+	if (ret)
+		return ret;
+
+	producer = castkms_capture_fence_create();
+	if (!producer) {
+		ret = -ENOMEM;
+		goto err_put_dependency;
+	}
+
+	*ready_chain = dma_fence_chain_alloc();
+	if (!*ready_chain) {
+		ret = -ENOMEM;
+		goto err_put_producer;
+	}
+
+	*completion_fence = producer;
+	return 0;
+
+err_put_producer:
+	dma_fence_put(producer);
+err_put_dependency:
+	dma_fence_put(*dependency);
+	*dependency = NULL;
+	return ret;
+}
 
 static bool
 castkms_capture_syncobjs_are_available(struct castkms_capture_file *capture_file,
@@ -992,14 +1079,17 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	struct castkms_capture_buffer *buffer;
 	struct castkms_capture_output *capture;
 	struct castkms_capture_stream *stream;
+	struct dma_fence_chain *ready_chain = NULL;
 	struct dma_fence *completion_fence = NULL;
 	struct dma_fence *dependency = NULL;
+	struct dma_fence *ready_fence = NULL;
 	unsigned long flags;
 	bool remove_callback = false;
 	int ret;
 
 	if (args->reserved ||
-	    args->flags != DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC)
+	    (args->flags != DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
+	     args->flags != DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC))
 		return -EINVAL;
 	if (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
 	    (args->ready_point || args->reuse_point))
@@ -1026,7 +1116,10 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto out_unlock;
 	}
-	if (buffer->sync_mode != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC) {
+	if ((args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
+	     buffer->sync_mode != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC) ||
+	    (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC &&
+	     buffer->sync_mode != DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC)) {
 		ret = -EINVAL;
 		goto out_unlock;
 	}
@@ -1057,14 +1150,42 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	if (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC)
 		ret = castkms_capture_prepare_implicit_sync(buffer, &dependency,
 							    &completion_fence);
+	else
+		ret = castkms_capture_prepare_explicit_sync(buffer,
+							    args->ready_point,
+							    args->reuse_point,
+							    &dependency,
+							    &completion_fence,
+							    &ready_chain);
 	if (ret)
 		goto out_cancel_event;
+	if (ready_chain) {
+		if (dependency)
+			ready_fence =
+				dma_fence_unwrap_merge(dependency,
+						       completion_fence);
+		else
+			ready_fence = dma_fence_get(completion_fence);
+		if (!ready_fence) {
+			ret = -ENOMEM;
+			goto out_signal_fence;
+		}
+	}
 
 	ret = castkms_composer_get(stream->output,
 				   CASTKMS_COMPOSER_CLIENT_CAPTURE);
 	if (ret)
 		goto out_signal_fence;
 
+	if (ready_chain) {
+		drm_syncobj_add_point(buffer->ready_syncobj, ready_chain,
+				      ready_fence, args->ready_point);
+		ready_chain = NULL;
+		dma_fence_put(ready_fence);
+		ready_fence = NULL;
+		buffer->last_ready_point = args->ready_point;
+		buffer->last_reuse_point = args->reuse_point;
+	}
 
 	/*
 	 * Arm an existing dependency before publishing the buffer to vblank or
@@ -1155,6 +1276,8 @@ out_put_composer:
 		goto out_unlock;
 	}
 out_signal_fence:
+	dma_fence_chain_free(ready_chain);
+	dma_fence_put(ready_fence);
 	castkms_capture_signal_fence(completion_fence, ret);
 	dma_fence_put(dependency);
 out_cancel_event:
