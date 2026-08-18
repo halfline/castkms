@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_encoder.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_probe_helper.h>
 
@@ -56,7 +59,10 @@ static int castkms_conn_get_modes(struct drm_connector *connector)
 {
 	int count;
 
-	/* Use the default modes list from DRM */
+	count = drm_edid_connector_add_modes(connector);
+	if (count)
+		return count;
+
 	count = drm_add_modes_noedid(connector, XRES_MAX, YRES_MAX);
 	drm_set_preferred_mode(connector, XRES_DEF, YRES_DEF);
 
@@ -103,4 +109,65 @@ void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev)
 	struct drm_device *dev = &castkmsdev->drm;
 
 	drm_kms_helper_hotplug_event(dev);
+}
+
+static struct drm_connector *
+castkms_connector_for_crtc(struct drm_crtc *crtc)
+{
+	struct drm_device *dev = crtc->dev;
+	struct drm_connector_list_iter conn_iter;
+	struct drm_connector *connector;
+	struct drm_connector *found = NULL;
+
+	drm_connector_list_iter_begin(dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
+		struct drm_encoder *encoder;
+		bool matches = false;
+
+		if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
+			continue;
+
+		drm_connector_for_each_possible_encoder(connector, encoder) {
+			if (encoder->possible_crtcs & drm_crtc_mask(crtc)) {
+				matches = true;
+				break;
+			}
+		}
+		if (!matches || found)
+			continue;
+
+		drm_connector_get(connector);
+		found = connector;
+	}
+	drm_connector_list_iter_end(&conn_iter);
+
+	return found;
+}
+
+int castkms_connector_update_edid(struct drm_crtc *crtc,
+				  const struct drm_edid *drm_edid)
+{
+	struct drm_device *dev = crtc->dev;
+	struct drm_connector *connector;
+	int idx;
+	int ret;
+
+	connector = castkms_connector_for_crtc(crtc);
+	if (!connector)
+		return -ENOENT;
+
+	if (!drm_dev_enter(dev, &idx)) {
+		drm_connector_put(connector);
+		return -ENODEV;
+	}
+
+	mutex_lock(&dev->mode_config.mutex);
+	ret = drm_edid_connector_update(connector, drm_edid);
+	mutex_unlock(&dev->mode_config.mutex);
+	if (!ret)
+		drm_kms_helper_hotplug_event(dev);
+	drm_dev_exit(idx);
+	drm_connector_put(connector);
+
+	return ret;
 }
