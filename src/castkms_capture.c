@@ -478,6 +478,39 @@ err_put_producer:
 	return ret;
 }
 
+
+static bool
+castkms_capture_syncobjs_are_available(struct castkms_capture_file *capture_file,
+				       struct drm_syncobj *ready_syncobj,
+				       struct drm_syncobj *reuse_syncobj)
+{
+	struct dma_fence *ready_fence;
+	struct castkms_capture_stream *stream;
+	struct castkms_capture_buffer *buffer;
+	unsigned long buffer_id;
+	unsigned long stream_id;
+
+	if (ready_syncobj == reuse_syncobj)
+		return false;
+	ready_fence = drm_syncobj_fence_get(ready_syncobj);
+	if (ready_fence) {
+		dma_fence_put(ready_fence);
+		return false;
+	}
+
+	xa_for_each(&capture_file->streams, stream_id, stream) {
+		xa_for_each(&stream->buffers, buffer_id, buffer) {
+			if (buffer->ready_syncobj == ready_syncobj ||
+			    buffer->ready_syncobj == reuse_syncobj ||
+			    buffer->reuse_syncobj == ready_syncobj ||
+			    buffer->reuse_syncobj == reuse_syncobj)
+				return false;
+		}
+	}
+
+	return true;
+}
+
 int castkms_capture_file_open(struct drm_device *dev,
 			      struct drm_file *file_priv)
 {
@@ -802,7 +835,11 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 	args->buffer_id = 0;
 	if (args->flags != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC)
 		return -EINVAL;
-	if (args->ready_syncobj_handle || args->reuse_syncobj_handle)
+	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC &&
+	    (args->ready_syncobj_handle || args->reuse_syncobj_handle))
+		return -EINVAL;
+	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC &&
+	    (!args->ready_syncobj_handle || !args->reuse_syncobj_handle))
 		return -EINVAL;
 
 	mutex_lock(&capture_file->lock);
@@ -846,6 +883,27 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 	}
 	init_completion(&buffer->delivery_done);
 	complete_all(&buffer->delivery_done);
+
+	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC) {
+		buffer->ready_syncobj =
+			drm_syncobj_find(file_priv, args->ready_syncobj_handle);
+		if (!buffer->ready_syncobj) {
+			ret = -ENOENT;
+			goto out_destroy_buffer;
+		}
+		buffer->reuse_syncobj =
+			drm_syncobj_find(file_priv, args->reuse_syncobj_handle);
+		if (!buffer->reuse_syncobj) {
+			ret = -ENOENT;
+			goto out_destroy_buffer;
+		}
+		if (!castkms_capture_syncobjs_are_available(capture_file,
+							    buffer->ready_syncobj,
+							    buffer->reuse_syncobj)) {
+			ret = -EINVAL;
+			goto out_destroy_buffer;
+		}
+	}
 
 	ret = castkms_output_buffer_init(&buffer->output, fb);
 	if (ret)

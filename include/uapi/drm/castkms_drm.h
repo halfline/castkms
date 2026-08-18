@@ -129,6 +129,15 @@ struct drm_castkms_capture_stop {
 #define DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC	(1U << 0)
 
 /**
+ * DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC:
+ *
+ * Use the supplied ready and reuse timeline syncobjs. Each explicit buffer
+ * requires a dedicated pair of distinct syncobjs that is not shared with
+ * another buffer. The ready timeline must be empty at registration and is then
+ * owned by the driver; userspace must not signal or otherwise modify it.
+ */
+#define DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC	(1U << 1)
+/**
  * struct drm_castkms_capture_register_buffer - register a capture destination
  * @stream_id: file-local capture stream identifier
  * @fb_id: framebuffer object ID visible to this DRM file
