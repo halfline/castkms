@@ -12,11 +12,15 @@ DRM_LIBS := $(shell pkg-config --libs libdrm)
 
 .PHONY: all clean
 
-all: pw-castkms
+all: pw-castkms pw-castkms-test
 
 pw-castkms: pw-castkms.c ../../include/uapi/drm/castkms_drm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) $(PW_CFLAGS) $(DRM_CFLAGS) \
 		-o $@ $< $(PW_LIBS) $(DRM_LIBS)
 
+pw-castkms-test: pw-castkms-test.c
+	$(CC) $(CFLAGS) $(WARN_CFLAGS) $(PW_CFLAGS) $(DRM_CFLAGS) \
+		-o $@ $< $(PW_LIBS)
+
 clean:
-	$(RM) pw-castkms
+	$(RM) pw-castkms pw-castkms-test
