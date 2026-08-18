@@ -302,6 +302,19 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 	if (err)
 		return ERR_PTR(err);
 
+	/*
+	 * capture_workq MUST be allocated before composer_workq.  drmm
+	 * teardown is LIFO, so the later allocation is destroyed first.
+	 * Destroying composer_workq first drains any in-flight composer
+	 * work that might queue a capture job; the capture_workq is still
+	 * alive at that point and drains second.  Reversing the order
+	 * would destroy capture_workq while the composer could still
+	 * enqueue onto it.
+	 */
+	castkms_out->capture_workq = drmm_alloc_ordered_workqueue(dev, "castkms_capture", 0);
+	if (IS_ERR(castkms_out->capture_workq))
+		return ERR_CAST(castkms_out->capture_workq);
+
 	castkms_out->composer_workq = drmm_alloc_ordered_workqueue(dev, "castkms_composer", 0);
 	if (IS_ERR(castkms_out->composer_workq))
 		return ERR_CAST(castkms_out->composer_workq);

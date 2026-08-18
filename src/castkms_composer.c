@@ -725,8 +725,17 @@ void castkms_composer_worker(struct work_struct *work)
 	active_capture = crtc_state->active_capture;
 	crtc_state->frame_start = 0;
 	crtc_state->frame_end = 0;
+	/*
+	 * crc_pending is cleared eagerly here so the vblank timer can
+	 * detect a slow composer and accumulate frame_start/frame_end.
+	 * capture_pending and wb_pending are cleared after composition
+	 * completes, because their flag also guards the active_capture
+	 * and active_writeback pointers consumed by the worker below.
+	 */
 	crtc_state->crc_pending = false;
 
+	/* Recomputed each invocation because the blob pointer in base.gamma_lut
+	 * can change between duplicate_state and the worker running. */
 	if (crtc_state->base.gamma_lut) {
 		s64 max_lut_index_fp;
 		s64 u16_max_fp = drm_int2fixp(0xffff);
@@ -752,6 +761,27 @@ void castkms_composer_worker(struct work_struct *work)
 	if (!crc_pending && !wb_pending && !capture_pending)
 		return;
 
+	if (capture_pending && !crc_pending && !wb_pending) {
+		struct castkms_frame_snapshot *snapshot;
+
+		spin_lock_irq(&out->composer_lock);
+		crtc_state->capture_pending = false;
+		crtc_state->active_capture = NULL;
+		spin_unlock_irq(&out->composer_lock);
+
+		if (WARN_ON(!active_capture))
+			return;
+
+		snapshot = castkms_frame_snapshot_create(crtc_state);
+		if (IS_ERR(snapshot))
+			castkms_capture_complete_frame(out, active_capture,
+						       PTR_ERR(snapshot));
+		else
+			castkms_capture_queue_job(out, active_capture,
+						  snapshot);
+		return;
+	}
+
 	if (capture_pending) {
 		if (WARN_ON(!active_capture))
 			ret = -EINVAL;
@@ -766,21 +796,26 @@ void castkms_composer_worker(struct work_struct *work)
 					    capture_dest, crtc_state, &crc32);
 
 	if (capture_pending) {
+		int capture_ret = active_capture ? ret : -EINVAL;
+
 		spin_lock_irq(&out->composer_lock);
 		crtc_state->capture_pending = false;
 		crtc_state->active_capture = NULL;
 		spin_unlock_irq(&out->composer_lock);
 		if (active_capture)
-			castkms_capture_complete_frame(out, active_capture, ret);
+			castkms_capture_complete_frame(out, active_capture,
+						       capture_ret);
 	}
 
 	if (wb_pending) {
+		int wb_ret = active_wb ? ret : -EINVAL;
+
 		spin_lock_irq(&out->composer_lock);
 		crtc_state->wb_pending = false;
 		crtc_state->active_writeback = NULL;
 		spin_unlock_irq(&out->composer_lock);
 		castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
-		drm_writeback_signal_completion(&out->wb_connector, ret);
+		drm_writeback_signal_completion(&out->wb_connector, wb_ret);
 	}
 
 	if (ret || !crc_pending)

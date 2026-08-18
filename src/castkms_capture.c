@@ -333,8 +333,10 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream)
 		castkms_composer_put(stream->output,
 				     CASTKMS_COMPOSER_CLIENT_CAPTURE);
 	castkms_capture_cancel_completion(stream->output, &completion);
-	if (in_flight)
+	if (in_flight) {
 		flush_workqueue(stream->output->composer_workq);
+		flush_workqueue(stream->output->capture_workq);
+	}
 	xa_for_each(&stream->buffers, id, buffer)
 		wait_for_completion(&buffer->delivery_done);
 }

@@ -73,7 +73,6 @@ static int castkms_snapshot_attach_read_fences(struct castkms_frame_snapshot *sn
 	struct dma_fence *fence = snapshot->source_fence;
 	struct drm_gem_object *seen[DRM_FORMAT_MAX_PLANES * 8];
 	int n_seen = 0;
-	long wait_ret;
 	int i, ret;
 
 	/*
@@ -88,6 +87,7 @@ static int castkms_snapshot_attach_read_fences(struct castkms_frame_snapshot *sn
 
 		for (j = 0; j < fb->format->num_planes; j++) {
 			struct drm_gem_object *obj = fb->obj[j];
+			struct dma_fence *dependency = NULL;
 			int k;
 			bool already_seen = false;
 
@@ -107,25 +107,26 @@ static int castkms_snapshot_attach_read_fences(struct castkms_frame_snapshot *sn
 				return -EOVERFLOW;
 			seen[n_seen++] = obj;
 
-			/*
-			 * Wait for any in-flight writers before reading.
-			 * This is the implicit-sync reader protocol: we
-			 * must not sample the BO while a GPU or CPU writer
-			 * still holds a WRITE fence.
-			 */
-			wait_ret = dma_resv_wait_timeout(obj->resv,
-						     DMA_RESV_USAGE_WRITE,
-						     false,
-						     MAX_SCHEDULE_TIMEOUT);
-			if (wait_ret <= 0)
-				return wait_ret ?: -ETIMEDOUT;
-
 			ret = dma_resv_lock(obj->resv, NULL);
 			if (ret)
 				return ret;
 
+			/*
+			 * Snapshot existing writers while holding the reservation lock,
+			 * then publish our read fence. Future writers depend on the read
+			 * fence; only the captured dependencies may run ahead of us.
+			 */
+			ret = dma_resv_get_singleton(obj->resv,
+						     DMA_RESV_USAGE_WRITE,
+						     &dependency);
+			if (ret) {
+				dma_resv_unlock(obj->resv);
+				return ret;
+			}
+
 			ret = dma_resv_reserve_fences(obj->resv, 1);
 			if (ret) {
+				dma_fence_put(dependency);
 				dma_resv_unlock(obj->resv);
 				return ret;
 			}
@@ -133,7 +134,32 @@ static int castkms_snapshot_attach_read_fences(struct castkms_frame_snapshot *sn
 			dma_resv_add_fence(obj->resv, fence,
 					   DMA_RESV_USAGE_READ);
 			dma_resv_unlock(obj->resv);
+
+			if (dependency && dma_fence_is_signaled(dependency)) {
+				dma_fence_put(dependency);
+				dependency = NULL;
+			}
+			if (dependency)
+				snapshot->source_dependencies[
+					snapshot->num_source_dependencies++] = dependency;
 		}
+	}
+
+	return 0;
+}
+
+static int
+castkms_frame_snapshot_wait_for_sources(struct castkms_frame_snapshot *snapshot)
+{
+	unsigned int i;
+
+	for (i = 0; i < snapshot->num_source_dependencies; i++) {
+		long ret = dma_fence_wait_timeout(snapshot->source_dependencies[i],
+						  false,
+						  MAX_SCHEDULE_TIMEOUT);
+
+		if (ret <= 0)
+			return ret ?: -ETIMEDOUT;
 	}
 
 	return 0;
@@ -161,8 +187,11 @@ static void castkms_frame_snapshot_release(struct kref *kref)
 		drm_gem_fb_vunmap(sp->frame_info.fb, sp->map);
 		drm_framebuffer_put(sp->frame_info.fb);
 	}
+	for (i = 0; i < snapshot->num_source_dependencies; i++)
+		dma_fence_put(snapshot->source_dependencies[i]);
 
 	kfree(snapshot->gamma_lut_data);
+	kfree(snapshot->source_dependencies);
 	kfree(snapshot->plane_ptrs);
 	kfree(snapshot);
 }
@@ -187,6 +216,16 @@ castkms_frame_snapshot_create(struct castkms_crtc_state *crtc_state)
 	if (!snapshot->plane_ptrs) {
 		kfree(snapshot);
 		return ERR_PTR(-ENOMEM);
+	}
+	if (num_planes) {
+		snapshot->source_dependencies = kcalloc(
+			num_planes * DRM_FORMAT_MAX_PLANES,
+			sizeof(*snapshot->source_dependencies), GFP_KERNEL);
+		if (!snapshot->source_dependencies) {
+			kfree(snapshot->plane_ptrs);
+			kfree(snapshot);
+			return ERR_PTR(-ENOMEM);
+		}
 	}
 
 	for (i = 0; i < num_planes; i++) {
@@ -292,7 +331,9 @@ static void capture_composition_worker(struct work_struct *work)
 	int ret;
 
 	dest = castkms_capture_buffer_output(job->buffer);
-	ret = castkms_compose_snapshot(job->snapshot, dest);
+	ret = castkms_frame_snapshot_wait_for_sources(job->snapshot);
+	if (!ret)
+		ret = castkms_compose_snapshot(job->snapshot, dest);
 	castkms_capture_complete_frame(job->output, job->buffer, ret);
 	castkms_frame_snapshot_put(job->snapshot);
 	kfree(job);

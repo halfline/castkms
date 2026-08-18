@@ -31,6 +31,9 @@ struct castkms_snapshot_plane {
  * @refcount: Reference count for shared ownership
  * @source_fence: Read fence published on each source BO's dma_resv, signaled
  *                when the snapshot is released so writers know capture is done
+ * @source_dependencies: Writer fences that existed before @source_fence was
+ *                       published and must resolve before composition
+ * @num_source_dependencies: Number of entries in @source_dependencies
  * @num_planes: Number of active planes in this snapshot
  * @plane_ptrs: Array of pointers into @planes[].state, satisfying the
  *              castkms_plane_state** interface used by compose_active_planes()
@@ -44,6 +47,8 @@ struct castkms_snapshot_plane {
 struct castkms_frame_snapshot {
 	struct kref refcount;
 	struct dma_fence *source_fence;
+	struct dma_fence **source_dependencies;
+	unsigned int num_source_dependencies;
 	int num_planes;
 	struct castkms_plane_state **plane_ptrs;
 	struct castkms_color_lut gamma_lut;

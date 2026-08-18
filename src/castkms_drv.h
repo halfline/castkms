@@ -267,6 +267,11 @@ struct castkms_crtc_state {
  * @composer_state: Protected by @lock, current state of this CASTKMS output
  * @composer_lock: Lock used internally to protect @composer_state members
  * @capture: Passive capture ownership and mode-generation state
+ *
+ * Lock ordering (outermost first):
+ *   1. @lock              — vblank scheduling, composer state assignment
+ *   2. capture state_lock — per-stream buffer state machine (in castkms_capture.c)
+ *   3. @composer_lock     — per-frame pending flags and worker fields
  */
 struct castkms_output {
 	struct drm_crtc crtc;
