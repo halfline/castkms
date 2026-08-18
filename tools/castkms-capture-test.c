@@ -1621,6 +1621,76 @@ int main(int argc, char **argv)
 	destroy_syncobj(fd, &ready_syncobj);
 	printf("capture_buffer_explicit=pass\n");
 
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    second_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		first_stream.mode_generation, &second_buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("register dependency source for stop cleanup");
+		goto out_close;
+	}
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, second_buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data + 5, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue dependency source for stop cleanup");
+		goto out_close;
+	}
+	second_fence_fd = export_write_fence(second_dmabuf_fd);
+	if (second_fence_fd < 0 ||
+	    import_read_fence(dmabuf_fd, second_fence_fd))
+		goto out_close;
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("register cancellation target for stop cleanup");
+		goto out_close;
+	}
+	ioctl_ret = queue_capture_when_available(fd, first_stream.stream_id,
+		buffer_id, DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+		first_stream.mode_generation, capture_user_data + 6, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue cancellation target for stop cleanup");
+		goto out_close;
+	}
+	capture_fence_fd = export_write_fence(dmabuf_fd);
+	if (capture_fence_fd < 0)
+		goto out_close;
+	ioctl_ret = stop_capture(fd, first_stream.stream_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("stop first capture stream");
+		goto out_close;
+	}
+	if (wait_for_capture_fence(second_fence_fd) ||
+	    wait_for_capture_fence_error(capture_fence_fd, -ECANCELED))
+		goto out_close;
+	close(second_fence_fd);
+	second_fence_fd = -1;
+	close(capture_fence_fd);
+	capture_fence_fd = -1;
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      buffer_id);
+	if (ioctl_ret != -ENOENT) {
+		fprintf(stderr,
+			"unregister after stream stop returned %d, expected %d\n",
+			ioctl_ret, -ENOENT);
+		goto out_close;
+	}
+	destroy_test_framebuffer(fd, &wrong_size_buffer);
+	destroy_test_framebuffer(fd, &second_buffer);
+	destroy_test_framebuffer(fd, &first_buffer);
+	printf("capture_stop_cancellation=pass\n");
+	printf("capture_buffer_stop_cleanup=pass\n");
+
 	ret = EXIT_SUCCESS;
 
 out_close:
