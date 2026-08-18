@@ -64,6 +64,11 @@ static bool create_default_dev = true;
 module_param_named(create_default_dev, create_default_dev, bool, 0444);
 MODULE_PARM_DESC(create_default_dev, "Create or not the default CASTKMS device");
 
+static unsigned int max_outputs = 1;
+module_param_named(max_outputs, max_outputs, uint, 0444);
+MODULE_PARM_DESC(max_outputs,
+		 "Number of display outputs on the default device (1-31)");
+
 DEFINE_DRM_GEM_FOPS(castkms_driver_fops);
 
 static const struct drm_ioctl_desc castkms_ioctls[] = {
@@ -268,8 +273,18 @@ static int __init castkms_init(void)
 	if (!create_default_dev)
 		return 0;
 
-	config = castkms_config_default_create(enable_cursor, enable_writeback,
-					    enable_overlay, enable_plane_pipeline);
+	if (!max_outputs || max_outputs > CASTKMS_MAX_OUTPUT_OBJECTS) {
+		DRM_ERROR("max_outputs must be between 1 and %u\n",
+			  CASTKMS_MAX_OUTPUT_OBJECTS);
+		ret = -EINVAL;
+		goto err_configfs;
+	}
+
+	config = castkms_config_default_create_outputs(enable_cursor,
+						       enable_writeback,
+						       enable_overlay,
+						       enable_plane_pipeline,
+						       max_outputs);
 	if (IS_ERR(config)) {
 		ret = PTR_ERR(config);
 		goto err_configfs;

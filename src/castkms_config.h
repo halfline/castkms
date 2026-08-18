@@ -208,6 +208,24 @@ struct castkms_config *castkms_config_default_create(bool enable_cursor,
 					       bool enable_plane_pipeline);
 
 /**
+ * castkms_config_default_create_outputs() - Default device with N outputs
+ * @enable_cursor: Create or not a cursor plane per output
+ * @enable_writeback: Create or not a writeback connector per output
+ * @enable_overlay: Create or not a shared overlay-plane pool
+ * @enable_plane_pipeline: Enable the default plane color pipeline
+ * @num_outputs: Number of CRTC/encoder/connector tuples to create
+ *
+ * Returns:
+ * The default castkms_config or an error. Display connectors start
+ * disconnected.
+ */
+struct castkms_config *castkms_config_default_create_outputs(bool enable_cursor,
+					       bool enable_writeback,
+					       bool enable_overlay,
+					       bool enable_plane_pipeline,
+					       unsigned int num_outputs);
+
+/**
  * castkms_config_destroy() - Free a CASTKMS configuration
  * @config: castkms_config to free
  */
