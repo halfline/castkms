@@ -152,11 +152,25 @@ struct drm_castkms_capture_register_buffer {
 	__u64 mode_generation;
 };
 
+/**
+ * struct drm_castkms_capture_unregister_buffer - release a capture buffer
+ * @stream_id: file-local capture stream identifier
+ * @buffer_id: stream-local capture buffer identifier
+ * @flags: must be zero
+ * @reserved: must be zero
+ */
+struct drm_castkms_capture_unregister_buffer {
+	__u32 stream_id;
+	__u32 buffer_id;
+	__u32 flags;
+	__u32 reserved;
+};
 
 #define DRM_CASTKMS_CAPTURE_QUERY_CAPS	0x00
 #define DRM_CASTKMS_CAPTURE_START	0x01
 #define DRM_CASTKMS_CAPTURE_STOP		0x02
 #define DRM_CASTKMS_CAPTURE_REGISTER_BUFFER	0x03
+#define DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER	0x04
 
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
@@ -170,6 +184,9 @@ struct drm_castkms_capture_register_buffer {
 #define DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_REGISTER_BUFFER, \
 		 struct drm_castkms_capture_register_buffer)
+#define DRM_IOCTL_CASTKMS_CAPTURE_UNREGISTER_BUFFER \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER, \
+		struct drm_castkms_capture_unregister_buffer)
 
 #if defined(__cplusplus)
 }

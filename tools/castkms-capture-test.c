@@ -27,6 +27,8 @@ static_assert(sizeof(struct drm_castkms_capture_stop) == 16,
 	      "capture stop ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32,
 	      "capture register ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
+	      "capture unregister ABI size changed");
 
 struct test_framebuffer {
 	uint32_t handle;
@@ -152,6 +154,20 @@ static int register_capture_buffer(int fd, uint32_t stream_id,
 		return -errno;
 
 	*buffer_id = buffer.buffer_id;
+	return 0;
+}
+
+static int unregister_capture_buffer(int fd, uint32_t stream_id,
+				     uint32_t buffer_id)
+{
+	struct drm_castkms_capture_unregister_buffer buffer = {
+		.stream_id = stream_id,
+		.buffer_id = buffer_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_UNREGISTER_BUFFER, &buffer) < 0)
+		return -errno;
+
 	return 0;
 }
 
@@ -443,6 +459,15 @@ int main(int argc, char **argv)
 	if (ioctl_ret || !buffer_id) {
 		errno = ioctl_ret ? -ioctl_ret : EPROTO;
 		perror("register implicit capture buffer");
+		goto out_close;
+	}
+	ioctl_ret = unregister_capture_buffer(competitor_fd,
+					      first_stream.stream_id,
+					      buffer_id);
+	if (ioctl_ret != -ENOENT) {
+		fprintf(stderr,
+			"foreign buffer unregister returned %d, expected %d\n",
+			ioctl_ret, -ENOENT);
 		goto out_close;
 	}
 
