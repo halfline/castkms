@@ -957,6 +957,8 @@ int main(int argc, char **argv)
 	struct test_framebuffer wrong_size_buffer = {};
 	uint32_t extra_buffer_ids[6] = {};
 	uint32_t buffer_id;
+	uint32_t competitor_ready_syncobj = 0;
+	uint32_t competitor_reuse_syncobj = 0;
 	uint32_t crtc_id;
 	uint32_t height;
 	uint32_t ready_syncobj = 0;
@@ -1691,6 +1693,75 @@ int main(int argc, char **argv)
 	printf("capture_stop_cancellation=pass\n");
 	printf("capture_buffer_stop_cleanup=pass\n");
 
+	ioctl_ret = start_capture(competitor_fd, crtc_id, &second_stream);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("start capture stream after stop");
+		goto out_close;
+	}
+	if (second_stream.mode_generation != first_stream.mode_generation) {
+		fprintf(stderr, "mode generation changed without a modeset\n");
+		goto out_close;
+	}
+	printf("capture_stream_stop=pass\n");
+	if (create_test_framebuffer(competitor_fd, width, height,
+				    &competitor_buffer) ||
+	    create_syncobj(competitor_fd, &competitor_ready_syncobj) ||
+	    create_syncobj(competitor_fd, &competitor_reuse_syncobj))
+		goto out_close;
+	ioctl_ret = register_capture_buffer(competitor_fd,
+					    second_stream.stream_id,
+					    competitor_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC,
+		competitor_ready_syncobj, competitor_reuse_syncobj,
+		second_stream.mode_generation, &buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("register capture buffer for file-close cleanup");
+		goto out_close;
+	}
+	ioctl_ret = queue_capture_buffer(competitor_fd,
+					 second_stream.stream_id, buffer_id,
+					 DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+					 second_stream.mode_generation,
+					 capture_user_data + 6, 1, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue capture buffer for file-close cleanup");
+		goto out_close;
+	}
+
+	unmap_test_framebuffer(&competitor_buffer);
+	close(competitor_fd);
+	competitor_fd = -1;
+	competitor_buffer = (struct test_framebuffer) {};
+	competitor_ready_syncobj = 0;
+	competitor_reuse_syncobj = 0;
+	verifier_fd = open_capture_device(argv[1], false);
+	if (verifier_fd < 0)
+		goto out_close;
+	ioctl_ret = start_capture(verifier_fd, crtc_id, &verifier_stream);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("start capture stream after file close");
+		goto out_close;
+	}
+	if (verifier_stream.mode_generation != first_stream.mode_generation) {
+		fprintf(stderr, "mode generation changed without a modeset\n");
+		goto out_close;
+	}
+	ioctl_ret = stop_capture(verifier_fd, verifier_stream.stream_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("stop verifier capture stream");
+		goto out_close;
+	}
+	printf("capture_mode_generation=%llu\n",
+	       (unsigned long long)verifier_stream.mode_generation);
+	printf("capture_buffer_postclose=pass\n");
+	printf("capture_buffer_registration=pass\n");
+	printf("capture_stream_postclose=pass\n");
+	printf("capture_stream_lifecycle=pass\n");
 	ret = EXIT_SUCCESS;
 
 out_close:
