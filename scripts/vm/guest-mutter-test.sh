@@ -10,11 +10,18 @@ cast_loaded=0
 keep_session=0
 uid=$(id -u)
 
+stop_attach_service()
+{
+	sudo systemctl stop castkms-attach.service >/dev/null 2>&1 || true
+	sudo pkill -x castkms-capture-test >/dev/null 2>&1 || true
+}
+
 cleanup()
 {
 	if test "$keep_session" -eq 1; then
 		return
 	fi
+	stop_attach_service
 	if test "$cast_loaded" -eq 1; then
 		sudo systemctl stop gdm.service 2>/dev/null || true
 		sleep 1
@@ -33,8 +40,20 @@ printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
 
 make clean
 make W=1 2>&1 | tee "$result_dir/build.log"
+make tools 2>&1 | tee -a "$result_dir/build.log"
 test -f ./castkms.ko
+test -f ./tools/castkms-capture-test
 
+stop_attach_service
+if lsmod | grep -Eq '^vkms\b'; then
+	printf '%s\n' 'refusing to disturb a pre-existing vkms module' >&2
+	exit 1
+fi
+if lsmod | grep -Eq '^castkms\b'; then
+	sudo systemctl stop gdm.service 2>/dev/null || true
+	sleep 1
+	sudo rmmod castkms
+fi
 if lsmod | grep -Eq '^(vkms|castkms)\b'; then
 	printf '%s\n' 'refusing to disturb a pre-existing vkms or castkms module' >&2
 	exit 1
@@ -74,7 +93,7 @@ fi
 printf '%s\n' 'mutter_udev_ignore=absent' | tee -a "$result_dir/summary.txt"
 
 sudo drm_info > "$result_dir/drm-info.txt" 2>&1 || true
-if ! sudo modetest -a -M castkms -c \
+if ! sudo modetest -a -M castkms -c -p \
 		> "$result_dir/modetest.txt" 2>&1; then
 	cat "$result_dir/modetest.txt" >&2
 	exit 1
@@ -113,11 +132,36 @@ gdbus call --session \
 	--dest org.gnome.Mutter.DisplayConfig \
 	--object-path /org/gnome/Mutter/DisplayConfig \
 	--method org.gnome.Mutter.DisplayConfig.GetCurrentState \
-	> "$result_dir/mutter-display-config.txt"
+	> "$result_dir/mutter-display-config-before-attach.txt"
 
-if ! grep -F "$virtual_connector" \
-		"$result_dir/mutter-display-config.txt" >/dev/null; then
-	printf '%s\n' 'Mutter DisplayConfig does not list the castkms connector' >&2
+if grep -F "$virtual_connector" \
+		"$result_dir/mutter-display-config-before-attach.txt" >/dev/null; then
+	printf '%s\n' 'Mutter listed the castkms connector before attach' >&2
+	cat "$result_dir/mutter-display-config-before-attach.txt" >&2
+	exit 1
+fi
+printf '%s\n' 'mutter_disconnected=pass' | tee -a "$result_dir/summary.txt"
+
+bash "$repo_dir/scripts/vm/guest-desktop-runtime.sh" --no-build "$repo_dir" \
+	> "$result_dir/attach-service.txt"
+printf '%s\n' 'capture_attach_hold=pass' | tee -a "$result_dir/summary.txt"
+
+display_ready=0
+for attempt in $(seq 1 30); do
+	gdbus call --session \
+		--dest org.gnome.Mutter.DisplayConfig \
+		--object-path /org/gnome/Mutter/DisplayConfig \
+		--method org.gnome.Mutter.DisplayConfig.GetCurrentState \
+		> "$result_dir/mutter-display-config.txt"
+	if grep -F "$virtual_connector" \
+			"$result_dir/mutter-display-config.txt" >/dev/null; then
+		display_ready=1
+		break
+	fi
+	sleep 1
+done
+if test "$display_ready" -ne 1; then
+	printf '%s\n' 'Mutter DisplayConfig does not list the attached connector' >&2
 	cat "$result_dir/mutter-display-config.txt" >&2
 	exit 1
 fi
