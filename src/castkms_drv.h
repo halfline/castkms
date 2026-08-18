@@ -261,6 +261,7 @@ struct castkms_crtc_state {
  * @wb_connector: DRM writeback connector used for this output
  * @wb_encoder: DRM encoder used by @wb_connector
  * @composer_workq: Ordered workqueue for @composer_state.composer_work.
+ * @capture_workq: Ordered workqueue for deferred capture composition jobs
  * @lock: Lock used to protect the current composer state and scheduling
  * @composer_demand: Protected by @lock, clients keeping the composer active
  * @composer_state: Protected by @lock, current state of this CASTKMS output
@@ -272,6 +273,7 @@ struct castkms_output {
 	struct drm_writeback_connector wb_connector;
 	struct drm_encoder wb_encoder;
 	struct workqueue_struct *composer_workq;
+	struct workqueue_struct *capture_workq;
 	spinlock_t lock;
 
 	struct castkms_composer_demand composer_demand;

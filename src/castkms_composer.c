@@ -19,6 +19,7 @@
 #include "castkms_formats.h"
 #include "castkms_luts.h"
 #include "castkms_output_buffer.h"
+#include "castkms_snapshot.h"
 
 static u16 pre_mul_blend_channel(u16 src, u16 dst, u16 alpha)
 {
@@ -791,6 +792,30 @@ void castkms_composer_worker(struct work_struct *work)
 	while (frame_start <= frame_end)
 		drm_crtc_add_crc_entry(crtc, true, frame_start++, &crc32);
 }
+
+int castkms_compose_snapshot(const struct castkms_frame_snapshot *snapshot,
+			     const struct castkms_output_buffer *destination)
+{
+	struct castkms_crtc_state *state;
+	u32 crc32 = 0;
+	int ret;
+
+	state = kzalloc(sizeof(*state), GFP_KERNEL);
+	if (!state)
+		return -ENOMEM;
+
+	state->active_planes = snapshot->plane_ptrs;
+	state->num_active_planes = snapshot->num_planes;
+	state->base.mode.hdisplay = snapshot->hdisplay;
+	state->base.mode.vdisplay = snapshot->vdisplay;
+	state->base.background_color = snapshot->background_color;
+	state->gamma_lut = snapshot->gamma_lut;
+
+	ret = compose_active_planes(destination, NULL, state, &crc32);
+	kfree(state);
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_compose_snapshot);
 
 static const char *const pipe_crc_sources[] = { "auto" };
 

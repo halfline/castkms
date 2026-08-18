@@ -17,6 +17,12 @@ enum lut_channel {
 	LUT_RESERVED
 };
 
+struct castkms_frame_snapshot;
+struct castkms_output_buffer;
+
+int castkms_compose_snapshot(const struct castkms_frame_snapshot *snapshot,
+			     const struct castkms_output_buffer *destination);
+
 #if IS_ENABLED(CONFIG_KUNIT)
 void castkms_apply_colorops(const struct castkms_plane_state *plane_state,
 			    struct line_buffer *output_buffer);
