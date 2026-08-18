@@ -3,6 +3,7 @@
 #include <linux/build_bug.h>
 #include <linux/completion.h>
 #include <linux/dma-fence.h>
+#include <linux/err.h>
 #include <linux/dma-fence-chain.h>
 #include <linux/dma-fence-unwrap.h>
 #include <linux/dma-resv.h>
@@ -16,6 +17,7 @@
 #include <drm/castkms_drm.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_edid.h>
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
@@ -25,6 +27,7 @@
 #include <drm/drm_syncobj.h>
 
 #include "castkms_capture.h"
+#include "castkms_connector.h"
 #include "castkms_drv.h"
 #include "castkms_output_buffer.h"
 
@@ -44,6 +47,7 @@ struct castkms_capture_stream {
 	u32 id;
 	u32 num_buffers;
 	bool active;
+	bool output_edid_owned;
 };
 
 enum castkms_capture_buffer_state {
@@ -101,6 +105,7 @@ static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32);
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
+static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24);
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80);
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76);
 static const char *
@@ -343,6 +348,17 @@ static void castkms_capture_stream_detach(struct castkms_capture_stream *stream)
 	capture->stream = NULL;
 	mutex_unlock(&capture->lock);
 }
+
+static void
+castkms_capture_stream_clear_output_edid(struct castkms_capture_stream *stream)
+{
+	if (!stream->output_edid_owned)
+		return;
+
+	stream->output_edid_owned = false;
+	castkms_connector_update_edid(&stream->output->crtc, NULL);
+}
+
 static void castkms_capture_stream_destroy(struct castkms_capture_stream *stream)
 {
 	struct castkms_capture_buffer *buffer;
@@ -354,6 +370,7 @@ static void castkms_capture_stream_destroy(struct castkms_capture_stream *stream
 	xa_destroy(&stream->buffers);
 
 	castkms_capture_stream_detach(stream);
+	castkms_capture_stream_clear_output_edid(stream);
 	kfree(stream);
 }
 
@@ -906,6 +923,63 @@ int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
 	mutex_unlock(&capture_file->lock);
 
 	return 0;
+}
+
+int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
+					  struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_set_output_edid *args = data;
+	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_stream *stream;
+	const struct drm_edid *drm_edid = NULL;
+	void *edid;
+	int ret;
+
+	(void)dev;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	if (!args->edid_size) {
+		if (args->edid_ptr)
+			return -EINVAL;
+	} else if (!args->edid_ptr ||
+		   args->edid_size % EDID_LENGTH ||
+		   args->edid_size > EDID_LENGTH * 4) {
+		return -EINVAL;
+	} else {
+		edid = memdup_user(u64_to_user_ptr(args->edid_ptr),
+				   args->edid_size);
+		if (IS_ERR(edid))
+			return PTR_ERR(edid);
+
+		drm_edid = drm_edid_alloc(edid, args->edid_size);
+		kfree(edid);
+		if (!drm_edid)
+			return -ENOMEM;
+		if (!drm_edid_valid(drm_edid)) {
+			drm_edid_free(drm_edid);
+			return -EINVAL;
+		}
+	}
+
+	mutex_lock(&capture_file->lock);
+	stream = xa_load(&capture_file->streams, args->stream_id);
+	if (!stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	ret = castkms_connector_update_edid(&stream->output->crtc, drm_edid);
+	if (!ret)
+		stream->output_edid_owned = drm_edid != NULL;
+
+out_unlock:
+	mutex_unlock(&capture_file->lock);
+	if (drm_edid)
+		drm_edid_free(drm_edid);
+
+	return ret;
 }
 
 int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,

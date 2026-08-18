@@ -79,6 +79,8 @@ static const struct drm_ioctl_desc castkms_ioctls[] = {
 			  castkms_capture_unregister_buffer_ioctl, DRM_ROOT_ONLY),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_QUEUE_BUFFER,
 			  castkms_capture_queue_buffer_ioctl, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_SET_OUTPUT_EDID,
+			  castkms_capture_set_output_edid_ioctl, DRM_ROOT_ONLY),
 };
 
 static void castkms_atomic_commit_tail(struct drm_atomic_state *old_state)

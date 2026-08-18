@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define DRM_CASTKMS_CAPTURE_UAPI_MAJOR	0
-#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	5
+#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	6
 
 /**
  * DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE:
@@ -235,6 +235,36 @@ struct drm_castkms_capture_queue_buffer {
 };
 
 /**
+ * struct drm_castkms_capture_set_output_edid - publish an EDID for the captured output
+ * @stream_id: file-local capture stream identifier
+ * @flags: must be zero
+ * @edid_size: EDID blob size in bytes; zero clears the published EDID
+ * @reserved: must be zero
+ * @edid_ptr: userspace pointer to @edid_size bytes, or zero when clearing
+ *
+ * The stream owner may push a complete EDID at any time. The driver copies
+ * and validates the blob, updates the CRTC's display connector, and emits a
+ * standard KMS hotplug so compositors reread identity and modes. Call again
+ * when the sink identity changes. A zero-length blob, stream stop, or file
+ * close clears the published EDID and hotplugs again.
+ *
+ * This ioctl is fire-and-forget. Capture completion events do not report
+ * EDID changes; the client is the source of truth and already knows what it
+ * wrote. Consumers observe the connector EDID property and KMS hotplug.
+ *
+ * When setting, @edid_size must be a non-zero multiple of 128 and at most
+ * 512. Invalid EDIDs return -EINVAL. A stream that is not owned by this file
+ * returns -ENOENT.
+ */
+struct drm_castkms_capture_set_output_edid {
+	__u32 stream_id;
+	__u32 flags;
+	__u32 edid_size;
+	__u32 reserved;
+	__u64 edid_ptr;
+};
+
+/**
  * DRM_CASTKMS_CAPTURE_EVENT_FRAME:
  *
  * Driver-private event type carrying a completed capture frame.
@@ -300,6 +330,7 @@ struct drm_event_castkms_capture_frame {
 #define DRM_CASTKMS_CAPTURE_REGISTER_BUFFER	0x03
 #define DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER	0x04
 #define DRM_CASTKMS_CAPTURE_QUEUE_BUFFER	0x05
+#define DRM_CASTKMS_CAPTURE_SET_OUTPUT_EDID	0x06
 
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
@@ -319,6 +350,9 @@ struct drm_event_castkms_capture_frame {
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUEUE_BUFFER \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUEUE_BUFFER, \
 		struct drm_castkms_capture_queue_buffer)
+#define DRM_IOCTL_CASTKMS_CAPTURE_SET_OUTPUT_EDID \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_SET_OUTPUT_EDID, \
+		struct drm_castkms_capture_set_output_edid)
 
 #if defined(__cplusplus)
 }
