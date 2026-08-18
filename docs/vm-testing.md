@@ -103,5 +103,42 @@ port `5909`:
 CASTKMS_VM_VNC_DISPLAY=9 ./scripts/vm/castkms-vm start
 ```
 
-The base cloud image is intentionally minimal. GNOME/Mutter installation and
-interactive display testing are a separate step from the kernel smoke test.
+## Mutter visibility
+
+The kernel smoke test stays on the minimal cloud image. Mutter visibility uses
+the same harness, base image, SSH key, and pinned kernel, but a separate
+`desktop` instance so GNOME packages never land on the default guest.
+
+```sh
+./scripts/vm/castkms-vm desktop-provision
+./scripts/vm/castkms-vm desktop-test
+```
+
+Those commands default to instance `desktop`, SSH port `22223`, 8 GiB of
+guest memory, and VNC display `9` (`127.0.0.1:5909`). Override them with the
+same `CASTKMS_VM_*` variables used by the headless instance.
+
+`desktop-provision` runs the ordinary kernel/toolchain install, then adds
+GNOME Shell, Mutter, GDM, Mesa GBM/software renderers, enables the graphical
+target, and configures passwordless GDM autologin for the `castkms` user.
+
+`desktop-test` then:
+
+1. builds and loads `castkms` with a default virtual connector and no extra
+   planes or writeback;
+2. requires the card's udev properties not to carry `mutter-device-ignore`
+   (Mutter's stock rules match only `platform-vkms` and `/devices/faux/vkms/`);
+3. restarts GDM so the session enumerates the new KMS device;
+4. waits for `org.gnome.Shell` and `org.gnome.Mutter.DisplayConfig`;
+5. requires `GetCurrentState` to list the Virtual connector reported by
+   `modetest`.
+
+Results are copied to `~/.cache/castkms-vm/results/desktop/`. Use
+`./scripts/vm/castkms-vm desktop-shell` and a VNC client on port `5909` to
+inspect GNOME Settings by hand.
+
+```sh
+./scripts/vm/castkms-vm desktop-status
+./scripts/vm/castkms-vm desktop-shell
+./scripts/vm/castkms-vm desktop-stop
+```

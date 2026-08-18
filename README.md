@@ -70,6 +70,14 @@ that cannot load unsigned modules:
 ./scripts/vm/castkms-vm test
 ```
 
+A separate desktop instance installs GNOME/Mutter and checks that the virtual
+connector is visible to the compositor:
+
+```sh
+./scripts/vm/castkms-vm desktop-provision
+./scripts/vm/castkms-vm desktop-test
+```
+
 See [`docs/vm-testing.md`](docs/vm-testing.md) for lifecycle commands,
 configuration, test coverage, and graphical-console setup.
 
