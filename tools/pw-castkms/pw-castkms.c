@@ -788,7 +788,8 @@ static void on_signal(void *data, int signal_number)
 static void usage(const char *prog)
 {
 	fprintf(stderr,
-		"Usage: %s [-d /dev/dri/cardN] [-c crtc-id] [-e edid.bin] [-n name]\n",
+		"Usage: %s [-d /dev/dri/cardN] [-c crtc-id] [-e edid.bin] [-n name]\n"
+		"  Default output name is \"VirtualScreen\" (EDID names are at most 13 characters).\n",
 		prog);
 }
 
@@ -911,6 +912,12 @@ int main(int argc, char *argv[])
 		if (read_edid_file(edid_path, &edid_alloc, &edid_size))
 			goto out_capture;
 		edid = edid_alloc;
+	} else if (fill_named_edid(named_edid, NULL)) {
+		fprintf(stderr, "failed to build default output EDID\n");
+		goto out_capture;
+	} else {
+		edid = named_edid;
+		edid_size = sizeof(named_edid);
 	}
 	if (edid_size) {
 		ioctl_ret = capture_set_output_edid(b->drm_fd, b->stream_id,
