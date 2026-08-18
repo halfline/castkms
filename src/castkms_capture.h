@@ -9,6 +9,7 @@
 
 struct drm_crtc_state;
 struct drm_device;
+struct drm_edid;
 struct drm_pending_event;
 struct drm_file;
 struct dma_fence;
@@ -98,5 +99,8 @@ castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
+
+int castkms_capture_edid_parse(const void *raw, u32 size,
+			       const struct drm_edid **drm_edid);
 
 #endif /* _CASTKMS_CAPTURE_H_ */

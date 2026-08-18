@@ -374,6 +374,56 @@ static void castkms_capture_stream_destroy(struct castkms_capture_stream *stream
 	kfree(stream);
 }
 
+int castkms_capture_edid_parse(const void *raw, u32 size,
+			       const struct drm_edid **drm_edid)
+{
+	const struct drm_edid *parsed;
+
+	*drm_edid = NULL;
+	if (!size)
+		return 0;
+
+	if (size % EDID_LENGTH || size > EDID_LENGTH * 4)
+		return -EINVAL;
+
+	parsed = drm_edid_alloc(raw, size);
+	if (!parsed)
+		return -ENOMEM;
+	if (!drm_edid_valid(parsed)) {
+		drm_edid_free(parsed);
+		return -EINVAL;
+	}
+
+	*drm_edid = parsed;
+	return 0;
+}
+
+static int castkms_capture_edid_from_user(u32 edid_size, u64 edid_ptr,
+					  const struct drm_edid **drm_edid)
+{
+	void *edid;
+	int ret;
+
+	*drm_edid = NULL;
+	if (!edid_size) {
+		if (edid_ptr)
+			return -EINVAL;
+		return 0;
+	}
+	if (!edid_ptr ||
+	    edid_size % EDID_LENGTH ||
+	    edid_size > EDID_LENGTH * 4)
+		return -EINVAL;
+
+	edid = memdup_user(u64_to_user_ptr(edid_ptr), edid_size);
+	if (IS_ERR(edid))
+		return PTR_ERR(edid);
+
+	ret = castkms_capture_edid_parse(edid, edid_size, drm_edid);
+	kfree(edid);
+	return ret;
+}
+
 static void
 castkms_capture_stream_snapshot_mode(struct castkms_capture_stream *stream)
 {
@@ -932,7 +982,6 @@ int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
 	struct castkms_capture_file *capture_file = file_priv->driver_priv;
 	struct castkms_capture_stream *stream;
 	const struct drm_edid *drm_edid = NULL;
-	void *edid;
 	int ret;
 
 	(void)dev;
@@ -940,28 +989,10 @@ int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
 	if (args->flags || args->reserved)
 		return -EINVAL;
 
-	if (!args->edid_size) {
-		if (args->edid_ptr)
-			return -EINVAL;
-	} else if (!args->edid_ptr ||
-		   args->edid_size % EDID_LENGTH ||
-		   args->edid_size > EDID_LENGTH * 4) {
-		return -EINVAL;
-	} else {
-		edid = memdup_user(u64_to_user_ptr(args->edid_ptr),
-				   args->edid_size);
-		if (IS_ERR(edid))
-			return PTR_ERR(edid);
-
-		drm_edid = drm_edid_alloc(edid, args->edid_size);
-		kfree(edid);
-		if (!drm_edid)
-			return -ENOMEM;
-		if (!drm_edid_valid(drm_edid)) {
-			drm_edid_free(drm_edid);
-			return -EINVAL;
-		}
-	}
+	ret = castkms_capture_edid_from_user(args->edid_size, args->edid_ptr,
+					     &drm_edid);
+	if (ret)
+		return ret;
 
 	mutex_lock(&capture_file->lock);
 	stream = xa_load(&capture_file->streams, args->stream_id);
