@@ -11,6 +11,7 @@ all: castkms-capture-test
 	$(MAKE) -C pw-castkms
 
 castkms-capture-test: castkms-capture-test.c \
+		virtualscreen-edid.h \
 		../include/uapi/drm/castkms_drm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ $<
 

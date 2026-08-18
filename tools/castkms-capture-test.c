@@ -21,6 +21,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "virtualscreen-edid.h"
 static_assert(sizeof(struct drm_castkms_capture_format) == 16,
 	      "capture format ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
@@ -204,91 +205,11 @@ static int queue_capture_buffer(int fd, uint32_t stream_id,
 	return 0;
 }
 
-#define TEST_EDID_BLOCK 128
-
-static void edid_set_checksum(uint8_t *edid, size_t size)
-{
-	size_t block;
-
-	for (block = 0; block < size; block += TEST_EDID_BLOCK) {
-		unsigned int sum = 0;
-		unsigned int i;
-
-		edid[block + TEST_EDID_BLOCK - 1] = 0;
-		for (i = 0; i < TEST_EDID_BLOCK; i++)
-			sum += edid[block + i];
-		edid[block + TEST_EDID_BLOCK - 1] =
-			(uint8_t)(256 - (sum & 0xff));
-	}
-}
+#define TEST_EDID_BLOCK CASTKMS_EDID_BLOCK
 
 static int fill_named_edid(uint8_t edid[TEST_EDID_BLOCK], const char *name)
 {
-	size_t name_len;
-	size_t i;
-
-	if (!name)
-		name = "VirtualScreen";
-	name_len = strlen(name);
-	if (name_len > 13)
-		return -1;
-
-	memset(edid, 0, TEST_EDID_BLOCK);
-	edid[0] = 0x00;
-	edid[1] = 0xff;
-	edid[2] = 0xff;
-	edid[3] = 0xff;
-	edid[4] = 0xff;
-	edid[5] = 0xff;
-	edid[6] = 0xff;
-	edid[7] = 0x00;
-	edid[8] = 0x0d;
-	edid[9] = 0x6d;
-	edid[10] = 0x01;
-	edid[16] = 1;
-	edid[17] = 34;
-	edid[18] = 1;
-	edid[19] = 3;
-	edid[20] = 0x80;
-	edid[23] = 120;
-	edid[24] = 0x0a;
-	edid[25] = 0xee;
-	edid[26] = 0x91;
-	edid[27] = 0xa3;
-	edid[28] = 0x54;
-	edid[29] = 0x4c;
-	edid[30] = 0x99;
-	edid[31] = 0x26;
-	edid[32] = 0x0f;
-	edid[33] = 0x50;
-	edid[34] = 0x54;
-	edid[35] = 0x21;
-	edid[36] = 0x08;
-	for (i = 38; i < 54; i += 2) {
-		edid[i] = 0x01;
-		edid[i + 1] = 0x01;
-	}
-	edid[54] = 0x64;
-	edid[55] = 0x19;
-	edid[57] = 0x40;
-	edid[58] = 0x41;
-	edid[60] = 0x26;
-	edid[61] = 0x30;
-	edid[62] = 0x18;
-	edid[63] = 0x88;
-	edid[64] = 0x36;
-	edid[71] = 0x18;
-	edid[75] = 0xfc;
-	memcpy(&edid[77], name, name_len);
-	if (name_len < 13) {
-		edid[77 + name_len] = 0x0a;
-		for (i = name_len + 1; i < 13; i++)
-			edid[77 + i] = 0x20;
-	}
-	edid[93] = 0x10;
-	edid[111] = 0x10;
-	edid_set_checksum(edid, TEST_EDID_BLOCK);
-	return 0;
+	return castkms_fill_named_edid(edid, name);
 }
 
 static int set_output_edid(int fd, uint32_t stream_id, const void *edid,
