@@ -24,7 +24,7 @@ make KDIR=/path/to/kernel/build W=1
 
 ## Experimental capture protocol
 
-The experimental version 0.5 capture interface provides a per-CRTC capability
+The experimental version 0.6 capture interface provides a per-CRTC capability
 query, exclusive stream ownership, persistent destination-buffer registration,
 and bounded frame delivery. It accepts up to eight linear `XRGB8888`
 framebuffers per stream, keeps at most one capture in flight, and can queue the
@@ -42,6 +42,13 @@ must be GEM
 objects created by castkms and may be exported as DMA-BUFs for consumers. Each
 explicit buffer uses a dedicated ready/reuse syncobj pair retained at
 registration.
+
+The stream owner may push a complete EDID for the captured output. The driver
+validates the blob, publishes it on the CRTC's display connector, and emits a
+standard KMS hotplug so compositors reread the name and modes. Call the same
+ioctl again when the sink identity changes. A zero-length blob, stream stop,
+or file close clears the published EDID. Capture events do not report EDID
+changes; the client already knows what it wrote.
 
 Starting a stream observes a CRTC without activating or modesetting it.
 After a mode change, stop that generation-bound stream and start a new one
