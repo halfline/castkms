@@ -88,6 +88,7 @@ Commands:
   desktop-provision   Provision a separate desktop instance with GNOME/Mutter
   sync        Mirror the current source tree into the guest
   test        Sync, build, load, and smoke-test castkms in the guest
+  desktop-test        Sync, load castkms, and check Mutter can see the connector
   shell       Open an interactive shell in the guest
   status      Show VM and guest-kernel status
   logs        Follow the guest serial console log
@@ -354,6 +355,29 @@ run_tests()
 	printf 'Guest smoke test passed; results: %s\n' "$RESULT_DIR"
 }
 
+run_desktop_tests()
+{
+	local status
+
+	provision_desktop
+	sync_source
+	set +e
+	ssh_guest bash "$GUEST_REPO/scripts/vm/guest-mutter-test.sh" \
+		"$GUEST_REPO" "$KERNEL_RELEASE"
+	status=$?
+	set -e
+
+	mkdir -p "$RESULT_DIR"
+	rsync -az --delete -e "ssh ${SSH_OPTIONS[*]}" \
+		"$SSH_USER@127.0.0.1:$GUEST_REPO/test-results/vm-mutter/" \
+		"$RESULT_DIR/" 2>/dev/null || true
+
+	if test "$status" -ne 0; then
+		die "guest Mutter visibility test failed with status $status; results: $RESULT_DIR"
+	fi
+	printf 'Guest Mutter visibility test passed; results: %s\n' "$RESULT_DIR"
+}
+
 show_status()
 {
 	if ! vm_running; then
@@ -425,6 +449,7 @@ case "$command" in
 	desktop-provision) provision_desktop ;;
 	sync) sync_source ;;
 	test) run_tests ;;
+	desktop-test) run_desktop_tests ;;
 	shell)
 		vm_running || die 'VM is not running; run provision first'
 		ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1"
