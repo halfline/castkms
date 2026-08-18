@@ -119,74 +119,165 @@ static int find_castkms_card(char *path, size_t pathlen)
 	return -1;
 }
 
-static int find_active_crtc(int drm_fd, uint32_t *out_crtc_id,
-			     uint32_t *out_connector_id,
-			     char *conn_name, size_t conn_name_len,
-			     uint32_t *out_width, uint32_t *out_height,
-			     uint32_t *out_refresh)
+static int connector_can_drive_crtc(int drm_fd, drmModeConnector *conn,
+				    uint32_t crtc_id)
 {
 	drmModeRes *res = drmModeGetResources(drm_fd);
+	int crtc_idx = -1;
+	int i;
+
+	if (!res)
+		return 0;
+
+	for (i = 0; i < res->count_crtcs; i++) {
+		if (res->crtcs[i] == crtc_id) {
+			crtc_idx = i;
+			break;
+		}
+	}
+	if (crtc_idx < 0) {
+		drmModeFreeResources(res);
+		return 0;
+	}
+
+	for (i = 0; i < conn->count_encoders; i++) {
+		drmModeEncoder *enc = drmModeGetEncoder(drm_fd, conn->encoders[i]);
+
+		if (!enc)
+			continue;
+		if (enc->possible_crtcs & (1u << crtc_idx)) {
+			drmModeFreeEncoder(enc);
+			drmModeFreeResources(res);
+			return 1;
+		}
+		drmModeFreeEncoder(enc);
+	}
+
+	drmModeFreeResources(res);
+	return 0;
+}
+
+static int find_display_connector(int drm_fd, uint32_t crtc_id,
+				  uint32_t *out_connector_id,
+				  char *conn_name, size_t conn_name_len)
+{
+	drmModeRes *res = drmModeGetResources(drm_fd);
+	drmModeConnector *fallback = NULL;
+	uint32_t fallback_id = 0;
 
 	if (!res) {
 		perror("drmModeGetResources");
 		return -1;
 	}
 
-	for (int i = 0; i < res->count_crtcs; i++) {
-		drmModeCrtc *crtc = drmModeGetCrtc(drm_fd, res->crtcs[i]);
+	for (int i = 0; i < res->count_connectors; i++) {
+		drmModeConnector *conn;
 
-		if (!crtc)
+		conn = drmModeGetConnector(drm_fd, res->connectors[i]);
+		if (!conn)
 			continue;
-
-		if (!crtc->mode_valid || !crtc->mode.hdisplay ||
-		    !crtc->mode.vdisplay) {
-			drmModeFreeCrtc(crtc);
+		if (conn->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
+			drmModeFreeConnector(conn);
+			continue;
+		}
+		if (crtc_id && !connector_can_drive_crtc(drm_fd, conn, crtc_id)) {
+			drmModeFreeConnector(conn);
 			continue;
 		}
 
-		*out_crtc_id = crtc->crtc_id;
-		*out_width = crtc->mode.hdisplay;
-		*out_height = crtc->mode.vdisplay;
-		*out_refresh = crtc->mode.vrefresh ? crtc->mode.vrefresh : 60;
-
-		for (int j = 0; j < res->count_connectors; j++) {
-			drmModeConnector *conn;
-			drmModeEncoder *enc;
-
-			conn = drmModeGetConnector(drm_fd, res->connectors[j]);
-			if (!conn)
-				continue;
-
-			if (conn->connection != DRM_MODE_CONNECTED ||
-			    !conn->encoder_id) {
-				drmModeFreeConnector(conn);
-				continue;
-			}
-
-			enc = drmModeGetEncoder(drm_fd, conn->encoder_id);
-			if (!enc || enc->crtc_id != crtc->crtc_id) {
-				drmModeFreeEncoder(enc);
-				drmModeFreeConnector(conn);
-				continue;
-			}
-
+		if (conn->connection == DRM_MODE_DISCONNECTED) {
 			*out_connector_id = conn->connector_id;
 			snprintf(conn_name, conn_name_len, "%s-%u",
 				 drmModeGetConnectorTypeName(conn->connector_type),
 				 conn->connector_type_id);
-
-			drmModeFreeEncoder(enc);
 			drmModeFreeConnector(conn);
-			drmModeFreeCrtc(crtc);
 			drmModeFreeResources(res);
 			return 0;
 		}
 
-		drmModeFreeCrtc(crtc);
+		if (!fallback) {
+			fallback = conn;
+			fallback_id = conn->connector_id;
+			continue;
+		}
+		drmModeFreeConnector(conn);
+	}
+
+	if (fallback) {
+		*out_connector_id = fallback_id;
+		snprintf(conn_name, conn_name_len, "%s-%u",
+			 drmModeGetConnectorTypeName(fallback->connector_type),
+			 fallback->connector_type_id);
+		drmModeFreeConnector(fallback);
+		drmModeFreeResources(res);
+		return 0;
 	}
 
 	drmModeFreeResources(res);
-	fprintf(stderr, "no active CRTC found\n");
+	fprintf(stderr, "no display connector found\n");
+	return -1;
+}
+
+static int read_active_crtc(int drm_fd, uint32_t connector_id,
+			    uint32_t prefer_crtc, uint32_t *out_crtc_id,
+			    uint32_t *out_width, uint32_t *out_height,
+			    uint32_t *out_refresh)
+{
+	drmModeConnector *conn = drmModeGetConnector(drm_fd, connector_id);
+	drmModeEncoder *enc;
+	drmModeCrtc *crtc;
+	uint32_t crtc_id;
+
+	if (!conn)
+		return -1;
+	if (conn->connection != DRM_MODE_CONNECTED || !conn->encoder_id) {
+		drmModeFreeConnector(conn);
+		return -1;
+	}
+
+	enc = drmModeGetEncoder(drm_fd, conn->encoder_id);
+	drmModeFreeConnector(conn);
+	if (!enc || !enc->crtc_id) {
+		drmModeFreeEncoder(enc);
+		return -1;
+	}
+
+	crtc_id = enc->crtc_id;
+	drmModeFreeEncoder(enc);
+	if (prefer_crtc && crtc_id != prefer_crtc)
+		return -1;
+
+	crtc = drmModeGetCrtc(drm_fd, crtc_id);
+	if (!crtc || !crtc->mode_valid || !crtc->mode.hdisplay ||
+	    !crtc->mode.vdisplay) {
+		drmModeFreeCrtc(crtc);
+		return -1;
+	}
+
+	*out_crtc_id = crtc->crtc_id;
+	*out_width = crtc->mode.hdisplay;
+	*out_height = crtc->mode.vdisplay;
+	*out_refresh = crtc->mode.vrefresh ? crtc->mode.vrefresh : 60;
+	drmModeFreeCrtc(crtc);
+	return 0;
+}
+
+static int wait_active_crtc(int drm_fd, uint32_t connector_id,
+			    uint32_t prefer_crtc, uint32_t *out_crtc_id,
+			    uint32_t *out_width, uint32_t *out_height,
+			    uint32_t *out_refresh)
+{
+	int attempt;
+
+	for (attempt = 0; attempt < 60; attempt++) {
+		if (!read_active_crtc(drm_fd, connector_id, prefer_crtc,
+				      out_crtc_id, out_width, out_height,
+				      out_refresh))
+			return 0;
+		usleep(500000);
+	}
+
+	fprintf(stderr, "no active CRTC after attach\n");
 	return -1;
 }
 
@@ -278,6 +369,21 @@ static int capture_set_output_edid(int fd, uint32_t stream_id,
 	};
 
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_SET_OUTPUT_EDID, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
+static int capture_attach_monitor(int fd, uint32_t connector_id,
+				  const void *edid, uint32_t size)
+{
+	struct drm_castkms_capture_attach_monitor args = {
+		.connector_id = connector_id,
+		.edid_size = size,
+		.edid_ptr = (uint64_t)(uintptr_t)edid,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR, &args) < 0)
 		return -errno;
 
 	return 0;
@@ -782,30 +888,46 @@ int main(int argc, char *argv[])
 
 	ioctl(b->drm_fd, DRM_IOCTL_DROP_MASTER, 0);
 
-	if (crtc_specified) {
-		struct drm_mode_crtc mc = { .crtc_id = target_crtc };
+	if (edid_name) {
+		if (fill_named_edid(named_edid, edid_name)) {
+			fprintf(stderr,
+				"monitor name must be at most 13 characters\n");
+			goto out;
+		}
+		edid = named_edid;
+		edid_size = sizeof(named_edid);
+	} else if (edid_path) {
+		if (read_edid_file(edid_path, &edid_alloc, &edid_size))
+			goto out;
+		edid = edid_alloc;
+	} else if (fill_named_edid(named_edid, NULL)) {
+		fprintf(stderr, "failed to build default output EDID\n");
+		goto out;
+	} else {
+		edid = named_edid;
+		edid_size = sizeof(named_edid);
+	}
 
-		if (ioctl(b->drm_fd, DRM_IOCTL_MODE_GETCRTC, &mc) < 0) {
-			perror("DRM_IOCTL_MODE_GETCRTC");
-			goto out;
-		}
-		if (!mc.mode_valid || !mc.mode.hdisplay || !mc.mode.vdisplay) {
-			fprintf(stderr, "CRTC %u has no active mode\n",
-				target_crtc);
-			goto out;
-		}
-		b->crtc_id = target_crtc;
-		b->width = mc.mode.hdisplay;
-		b->height = mc.mode.vdisplay;
-		b->refresh = mc.mode.vrefresh ? mc.mode.vrefresh : 60;
-		snprintf(b->connector_name, sizeof(b->connector_name),
-			 "crtc-%u", target_crtc);
-	} else if (find_active_crtc(b->drm_fd, &b->crtc_id,
-				    &b->connector_id, b->connector_name,
-				    sizeof(b->connector_name), &b->width,
-				    &b->height, &b->refresh)) {
+	if (find_display_connector(b->drm_fd,
+				   crtc_specified ? target_crtc : 0,
+				   &b->connector_id, b->connector_name,
+				   sizeof(b->connector_name)))
+		goto out;
+
+	ioctl_ret = capture_attach_monitor(b->drm_fd, b->connector_id, edid,
+					   edid_size);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("ATTACH_MONITOR");
 		goto out;
 	}
+	fprintf(stderr, "attached %s with %u-byte EDID\n",
+		b->connector_name, edid_size);
+
+	if (wait_active_crtc(b->drm_fd, b->connector_id,
+			     crtc_specified ? target_crtc : 0, &b->crtc_id,
+			     &b->width, &b->height, &b->refresh))
+		goto out;
 
 	fprintf(stderr, "CRTC %u (%s): %ux%u@%u\n",
 		b->crtc_id, b->connector_name,
@@ -822,25 +944,6 @@ int main(int argc, char *argv[])
 	fprintf(stderr, "capture stream %u, mode generation %llu\n",
 		b->stream_id, (unsigned long long)b->mode_generation);
 
-	if (edid_name) {
-		if (fill_named_edid(named_edid, edid_name)) {
-			fprintf(stderr,
-				"monitor name must be at most 13 characters\n");
-			goto out_capture;
-		}
-		edid = named_edid;
-		edid_size = sizeof(named_edid);
-	} else if (edid_path) {
-		if (read_edid_file(edid_path, &edid_alloc, &edid_size))
-			goto out_capture;
-		edid = edid_alloc;
-	} else if (fill_named_edid(named_edid, NULL)) {
-		fprintf(stderr, "failed to build default output EDID\n");
-		goto out_capture;
-	} else {
-		edid = named_edid;
-		edid_size = sizeof(named_edid);
-	}
 	if (edid_size) {
 		ioctl_ret = capture_set_output_edid(b->drm_fd, b->stream_id,
 						    edid, edid_size);
@@ -849,7 +952,6 @@ int main(int argc, char *argv[])
 			perror("SET_OUTPUT_EDID");
 			goto out_capture;
 		}
-		fprintf(stderr, "published %u-byte output EDID\n", edid_size);
 	}
 
 	pw_init(&argc, &argv);
