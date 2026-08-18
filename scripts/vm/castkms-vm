@@ -39,6 +39,24 @@ refresh_paths()
 	RESULT_DIR=$STATE_DIR/results/$INSTANCE_NAME
 }
 
+apply_desktop_defaults()
+{
+	if test -z "${CASTKMS_VM_INSTANCE+x}"; then
+		INSTANCE_NAME=desktop
+	fi
+	if test -z "${CASTKMS_VM_SSH_PORT+x}"; then
+		SSH_PORT=22223
+	fi
+	if test -z "${CASTKMS_VM_MEMORY_MB+x}"; then
+		CASTKMS_VM_MEMORY_MB=8192
+	fi
+	if test -z "${CASTKMS_VM_VNC_DISPLAY+x}"; then
+		CASTKMS_VM_VNC_DISPLAY=9
+	fi
+	refresh_paths
+	refresh_ssh_options
+}
+
 SSH_OPTIONS=()
 
 refresh_ssh_options()
@@ -67,6 +85,7 @@ Commands:
   start       Start the VM in the background
   wait        Wait until the guest accepts SSH connections
   provision   Start the VM, install the pinned kernel/toolchain, and reboot it
+  desktop-provision   Provision a separate desktop instance with GNOME/Mutter
   sync        Mirror the current source tree into the guest
   test        Sync, build, load, and smoke-test castkms in the guest
   shell       Open an interactive shell in the guest
@@ -276,6 +295,22 @@ provision()
 	printf 'Guest is provisioned on %s\n' "$current_release"
 }
 
+provision_desktop()
+{
+	apply_desktop_defaults
+	provision
+	ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1" \
+		bash -s -- "$SSH_USER" \
+		< "$SCRIPT_DIR/guest-desktop-bootstrap.sh"
+
+	printf 'Rebooting desktop guest into the graphical target\n'
+	ssh_guest sudo systemctl reboot || true
+	wait_for_ssh_disconnect
+	wait_for_ssh
+	printf 'Desktop guest is ready (VNC 127.0.0.1:%s)\n' \
+		"$((5900 + ${CASTKMS_VM_VNC_DISPLAY:-9}))"
+}
+
 sync_source()
 {
 	vm_running || die 'VM is not running; run provision first'
@@ -387,6 +422,7 @@ case "$command" in
 	start) start ;;
 	wait) wait_for_ssh ;;
 	provision) provision ;;
+	desktop-provision) provision_desktop ;;
 	sync) sync_source ;;
 	test) run_tests ;;
 	shell)
