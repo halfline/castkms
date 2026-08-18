@@ -89,19 +89,23 @@ Commands:
   sync        Mirror the current source tree into the guest
   test        Sync, build, load, and smoke-test castkms in the guest
   desktop-test        Sync, load castkms, and check Mutter can see the connector
-  shell       Open an interactive shell in the guest
-  status      Show VM and guest-kernel status
+  shell               Open an interactive shell in the guest
+  desktop-shell       Open a shell on the desktop instance
+  status              Show VM and guest-kernel status
+  desktop-status      Show desktop-instance status
   logs        Follow the guest serial console log
-  stop        Ask the guest to power off, with a bounded fallback
+  stop                Ask the guest to power off, with a bounded fallback
+  desktop-stop        Stop the desktop instance
   reset       Stop and archive the disposable instance, then create a fresh one
 
 Environment:
   CASTKMS_VM_STATE_DIR       VM cache/state directory
-  CASTKMS_VM_INSTANCE        Instance name (default: default)
-  CASTKMS_VM_SSH_PORT        Host SSH forward (default: 22222)
-  CASTKMS_VM_MEMORY_MB       Guest memory in MiB (default: 4096)
+  CASTKMS_VM_INSTANCE        Instance name (default: default, desktop: desktop)
+  CASTKMS_VM_SSH_PORT        Host SSH forward (default: 22222, desktop: 22223)
+  CASTKMS_VM_MEMORY_MB       Guest memory in MiB (default: 4096, desktop: 8192)
   CASTKMS_VM_CPUS            Guest vCPU count (default: 4)
   CASTKMS_VM_VNC_DISPLAY     Optional localhost VNC display number
+                             (desktop commands default to 9)
 EOF
 }
 
@@ -454,12 +458,25 @@ case "$command" in
 		vm_running || die 'VM is not running; run provision first'
 		ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1"
 		;;
+	desktop-shell)
+		apply_desktop_defaults
+		vm_running || die 'desktop VM is not running; run desktop-provision first'
+		ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1"
+		;;
 	status) show_status ;;
+	desktop-status)
+		apply_desktop_defaults
+		show_status
+		;;
 	logs)
 		test -f "$SERIAL_LOG" || die "serial log not found: $SERIAL_LOG"
 		tail -f "$SERIAL_LOG"
 		;;
 	stop) stop ;;
+	desktop-stop)
+		apply_desktop_defaults
+		stop
+		;;
 	reset) reset ;;
 	-h|--help|help|'') usage ;;
 	*) usage >&2; die "unknown command: $command" ;;
