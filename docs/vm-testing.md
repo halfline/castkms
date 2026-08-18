@@ -23,7 +23,8 @@ into that kernel. Re-running it is safe and idempotent.
 
 `test` mirrors the current working tree into the guest and then:
 
-1. builds `castkms.ko` and the four-suite KUnit module with `W=1`;
+1. builds `castkms.ko`, the four-suite KUnit module with `W=1`, and the
+   userspace capture protocol test;
 2. verifies both modules' names, vermagic, dependencies, legacy strings, and
    exported symbols;
 3. loads stock `vkms` and `castkms` together without default devices;
@@ -34,11 +35,28 @@ into that kernel. Re-running it is safe and idempotent.
    removal;
 6. creates a default `castkms` DRM card with a color pipeline and writeback
    connector;
-7. performs a bounded preferred-mode, vsynced page-flip test;
-8. keeps CRC capture open across two writeback jobs, verifies both fences and
-   output buffers, and requires fresh CRC records after writeback cleanup;
-9. records `modetest`, `drm_info`, CRC, writeback, and lifecycle output;
-10. unloads every module it loaded and verifies cleanup.
+7. verifies syncobj and timeline-syncobj DRM capabilities, drops DRM master,
+   performs the capture format query's count and data calls, requires linear
+   `XRGB8888`, and verifies exclusive stream ownership; registers mapped
+   buffers in implicit and explicit synchronization modes; rejects stale
+   generations, wrong dimensions, invalid timeline points, shared syncobj
+   ownership, and foreign ownership; and verifies buffer cleanup on unregister,
+   stream stop, and file close; queues an implicit destination for a future
+   vblank, exports its DMA-BUF reservation fence, imports that fence as a reader
+   of a second destination, and records whether scheduling left the dependency
+   pending when the second buffer was queued; repeats the reuse sequence with
+   explicit ready and reuse syncobj timeline points; verifies that all producer
+   fences signal in sequence, then checks bounded dropped-frame metadata,
+   completion events, full damage metadata, and composed pixels;
+8. performs a bounded `800x600`, vsynced page-flip test and verifies that its
+   modeset advances the capture mode generation;
+9. keeps CRC capture open, queues one capture destination while a writeback
+   job is composing, verifies the capture event, producer fence, and composed
+   pixels, then runs two further writeback jobs, checks both fences and output
+   buffers, and requires fresh CRC records after writeback cleanup;
+10. records `modetest`, `drm_info`, capture, CRC, writeback, and lifecycle
+    output;
+11. unloads every module it loaded and verifies cleanup.
 
 The pinned Fedora kernel publishes the KUnit ABI in its development package
 but does not ship the corresponding `kunit.ko`, so the VM currently provides

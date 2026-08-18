@@ -16,6 +16,7 @@ mode_gate_open=0
 mode_holder_pid=
 crc_fd=
 crc_pid=
+writeback_pid=
 
 append_crc_record()
 {
@@ -97,6 +98,10 @@ cleanup()
 		kill "$crc_pid" 2>/dev/null || true
 		wait "$crc_pid" 2>/dev/null || true
 	fi
+	if test -n "$writeback_pid"; then
+		kill "$writeback_pid" 2>/dev/null || true
+		wait "$writeback_pid" 2>/dev/null || true
+	fi
 	if test "$mode_gate_open" -eq 1; then
 		printf '\n' >&8 2>/dev/null || true
 		exec 8>&-
@@ -139,7 +144,10 @@ printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
 make clean
 test ! -e ./castkms.ko
 test ! -e ./src/tests/castkms-kunit-tests.ko
+test ! -e ./tools/castkms-capture-test
 make kunit W=1 2>&1 | tee "$result_dir/build.log"
+make tools 2>&1 | tee "$result_dir/tools-build.log"
+test -x ./tools/castkms-capture-test
 
 test "$(modinfo -F name ./castkms.ko)" = castkms
 case "$(modinfo -F vermagic ./castkms.ko)" in
@@ -158,6 +166,7 @@ case ",$(modinfo -F depends ./src/tests/castkms-kunit-tests.ko)," in
 	*) printf '%s\n' 'KUnit module dependencies are incomplete' >&2; exit 1 ;;
 esac
 printf '%s\n' 'kunit_build=pass' | tee -a "$result_dir/summary.txt"
+printf '%s\n' 'capture_probe_build=pass' | tee -a "$result_dir/summary.txt"
 
 if ! strings ./castkms.ko > "$result_dir/module-strings.txt"; then
 	printf '%s\n' 'could not inspect the module string table' >&2
@@ -319,6 +328,80 @@ test -n "$writeback_connector"
 test -n "$crtc_id"
 test -n "$plane_id"
 
+castkms_minor=$(sudo find /sys/kernel/debug/dri -maxdepth 1 -type l \
+	-lname castkms -printf '%f\n')
+test -n "$castkms_minor"
+castkms_drm=/dev/dri/card$castkms_minor
+test -c "$castkms_drm"
+sudo ./tools/castkms-capture-test "$castkms_drm" "$crtc_id" | \
+	tee "$result_dir/capture-test.txt"
+grep -Fx 'drm_cap_syncobj=1' "$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'drm_cap_syncobj_timeline=1' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_non_master=1' "$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_uapi=0.5' "$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_format=XRGB8888:LINEAR' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_max_registered_buffers=8' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_dmabuf_import=unsupported' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_query=pass' "$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_buffer_rejections=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_buffer_limit=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_buffer_busy=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_buffer_implicit=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_implicit_fence=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_reuse_dependency=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Eq '^capture_reuse_wait=(observed|not-observed)$' \
+	"$result_dir/capture-test.txt"
+grep -Fx 'capture_frame_delivery=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_buffer_explicit=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_explicit_timeline=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_explicit_reuse_dependency=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Eq '^capture_explicit_reuse_wait=(observed|not-observed)$' \
+	"$result_dir/capture-test.txt"
+grep -Fx 'capture_buffer_stop_cleanup=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_stop_cancellation=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_buffer_postclose=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_buffer_registration=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_stream_exclusive=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_stream_stop=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_stream_postclose=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_stream_lifecycle=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+initial_capture_mode_generation=$(sed -n \
+	's/^capture_mode_generation=//p' "$result_dir/capture-test.txt")
+[[ $initial_capture_mode_generation =~ ^[0-9]+$ ]]
+printf '%s\n' 'capture_capabilities=pass' | tee -a "$result_dir/summary.txt"
+printf '%s\n' 'capture_stream_lifecycle=pass' | \
+	tee -a "$result_dir/summary.txt"
+printf '%s\n' 'capture_buffer_registration=pass' | \
+	tee -a "$result_dir/summary.txt"
+printf '%s\n' 'capture_implicit_sync=pass' | \
+	tee -a "$result_dir/summary.txt"
+printf '%s\n' 'capture_explicit_sync=pass' | \
+	tee -a "$result_dir/summary.txt"
+printf '%s\n' 'capture_frame_delivery=pass' | \
+	tee -a "$result_dir/summary.txt"
+
 # Keep stdin open so noninteractive SSH does not end the flip loop immediately.
 page_flip_input_dir=$(mktemp -d)
 mkfifo "$page_flip_input_dir/input"
@@ -328,7 +411,8 @@ rmdir "$page_flip_input_dir"
 
 page_flip_status=0
 sudo timeout --signal=INT --kill-after=2s 5s \
-	stdbuf --output=L --error=L modetest -M castkms -r -v \
+	stdbuf --output=L --error=L modetest -M castkms \
+	-s "$virtual_connector@$crtc_id:800x600" -v \
 	<&3 > "$result_dir/page-flip.txt" 2>&1 || \
 	page_flip_status=$?
 exec 3>&-
@@ -337,6 +421,16 @@ if test "$page_flip_status" -ne 124 ||
 	cat "$result_dir/page-flip.txt" >&2
 	exit 1
 fi
+sudo ./tools/castkms-capture-test "$castkms_drm" "$crtc_id" \
+	> "$result_dir/capture-test-after-modeset.txt"
+updated_capture_mode_generation=$(sed -n \
+	's/^capture_mode_generation=//p' \
+	"$result_dir/capture-test-after-modeset.txt")
+[[ $updated_capture_mode_generation =~ ^[0-9]+$ ]]
+test "$updated_capture_mode_generation" -gt \
+	"$initial_capture_mode_generation"
+printf '%s\n' 'capture_mode_generation=pass' | \
+	tee -a "$result_dir/summary.txt"
 if ! sudo drm_info > "$result_dir/drm-info.txt" 2>&1; then
 	cat "$result_dir/drm-info.txt" >&2
 	exit 1
@@ -394,6 +488,33 @@ for sample in 1 2 3; do
 	append_crc_record "$result_dir/crc.txt" baseline
 done
 printf '%s\n' 'composer_crc=pass' | tee -a "$result_dir/summary.txt"
+
+# Start writeback first so its software compose is in flight when capture
+# queues. This does not require both clients to land on one work item.
+run_writeback overlap &
+writeback_pid=$!
+capture_overlap_status=0
+sudo stdbuf --output=L --error=L \
+	./tools/castkms-capture-test --deliver-one \
+	"$castkms_drm" "$crtc_id" \
+	> "$result_dir/capture-writeback-overlap.txt" 2>&1 || \
+	capture_overlap_status=$?
+writeback_status=0
+wait "$writeback_pid" || writeback_status=$?
+writeback_pid=
+if test "$capture_overlap_status" -ne 0; then
+	cat "$result_dir/capture-writeback-overlap.txt" >&2
+	exit 1
+fi
+if test "$writeback_status" -ne 0; then
+	exit 1
+fi
+grep -Fx 'capture_overlap_queued=1' \
+	"$result_dir/capture-writeback-overlap.txt" >/dev/null
+grep -Fx 'capture_writeback_overlap=pass' \
+	"$result_dir/capture-writeback-overlap.txt" >/dev/null
+printf '%s\n' 'composer_capture_writeback_overlap=pass' | \
+	tee -a "$result_dir/summary.txt"
 
 run_writeback 1
 run_writeback 2
