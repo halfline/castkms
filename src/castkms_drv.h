@@ -13,6 +13,8 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_writeback.h>
 
+#include "castkms_capture.h"
+
 #define DEFAULT_DEVICE_NAME "castkms"
 
 #define XRES_MIN    10
@@ -252,6 +254,7 @@ struct castkms_crtc_state {
  * @composer_demand: Protected by @lock, clients keeping the composer active
  * @composer_state: Protected by @lock, current state of this CASTKMS output
  * @composer_lock: Lock used internally to protect @composer_state members
+ * @capture: Passive capture ownership and mode-generation state
  */
 struct castkms_output {
 	struct drm_crtc crtc;
@@ -264,6 +267,8 @@ struct castkms_output {
 	struct castkms_crtc_state *composer_state;
 
 	spinlock_t composer_lock;
+
+	struct castkms_capture_output capture;
 };
 
 struct castkms_config;

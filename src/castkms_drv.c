@@ -30,6 +30,9 @@
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_vblank.h>
 
+#include <drm/castkms_drm.h>
+
+#include "castkms_capture.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_drv.h"
@@ -63,6 +66,11 @@ MODULE_PARM_DESC(create_default_dev, "Create or not the default CASTKMS device")
 
 DEFINE_DRM_GEM_FOPS(castkms_driver_fops);
 
+static const struct drm_ioctl_desc castkms_ioctls[] = {
+	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_QUERY_CAPS,
+			  castkms_capture_query_caps_ioctl, 0),
+};
+
 static void castkms_atomic_commit_tail(struct drm_atomic_state *old_state)
 {
 	struct drm_device *dev = old_state->dev;
@@ -92,7 +100,12 @@ static void castkms_atomic_commit_tail(struct drm_atomic_state *old_state)
 }
 
 static const struct drm_driver castkms_driver = {
-	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM,
+	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM |
+			  DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
+	.ioctls			= castkms_ioctls,
+	.num_ioctls		= ARRAY_SIZE(castkms_ioctls),
+	.open			= castkms_capture_file_open,
+	.postclose		= castkms_capture_file_close,
 	.fops			= &castkms_driver_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,

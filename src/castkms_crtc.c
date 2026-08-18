@@ -279,6 +279,9 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 
 	spin_lock_init(&castkms_out->lock);
 	spin_lock_init(&castkms_out->composer_lock);
+	err = castkms_capture_output_init(dev, castkms_out);
+	if (err)
+		return ERR_PTR(err);
 
 	castkms_out->composer_workq = drmm_alloc_ordered_workqueue(dev, "castkms_composer", 0);
 	if (IS_ERR(castkms_out->composer_workq))

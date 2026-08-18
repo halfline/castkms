@@ -5,6 +5,7 @@ obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += src/tests/
 
 castkms-y := \
 	src/castkms_drv.o \
+	src/castkms_capture.o \
 	src/castkms_plane.o \
 	src/castkms_output.o \
 	src/castkms_output_buffer.o \
@@ -18,4 +19,4 @@ castkms-y := \
 	src/castkms_colorop.o \
 	src/castkms_luts.o
 
-ccflags-y += -I$(src)/src
+ccflags-y += -I$(src)/src -I$(src)/include/uapi
