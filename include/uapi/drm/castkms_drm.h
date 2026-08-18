@@ -119,9 +119,44 @@ struct drm_castkms_capture_stop {
 	__u64 reserved;
 };
 
+/**
+ * DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC:
+ *
+ * Register without explicit timeline syncobjs. The initial implementation
+ * accepts GEM objects created on the castkms device and exported to consumers;
+ * importing a destination from another device is not yet supported.
+ */
+#define DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC	(1U << 0)
+
+/**
+ * struct drm_castkms_capture_register_buffer - register a capture destination
+ * @stream_id: file-local capture stream identifier
+ * @fb_id: framebuffer object ID visible to this DRM file
+ * @ready_syncobj_handle: driver-produced timeline, or zero for implicit sync
+ * @reuse_syncobj_handle: consumer-produced timeline, or zero for implicit sync
+ * @flags: exactly one DRM_CASTKMS_CAPTURE_BUFFER_* synchronization mode
+ * @buffer_id: stream-local buffer identifier returned by the driver
+ * @mode_generation: generation returned when the stream was started
+ *
+ * The framebuffer must match the active CRTC mode and an advertised format.
+ * Registration retains and maps it until it is unregistered, its stream is
+ * stopped, or the DRM file is closed. Registration alone never writes it.
+ */
+struct drm_castkms_capture_register_buffer {
+	__u32 stream_id;
+	__u32 fb_id;
+	__u32 ready_syncobj_handle;
+	__u32 reuse_syncobj_handle;
+	__u32 flags;
+	__u32 buffer_id;
+	__u64 mode_generation;
+};
+
+
 #define DRM_CASTKMS_CAPTURE_QUERY_CAPS	0x00
 #define DRM_CASTKMS_CAPTURE_START	0x01
-#define DRM_CASTKMS_CAPTURE_STOP	0x02
+#define DRM_CASTKMS_CAPTURE_STOP		0x02
+#define DRM_CASTKMS_CAPTURE_REGISTER_BUFFER	0x03
 
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
@@ -132,6 +167,9 @@ struct drm_castkms_capture_stop {
 #define DRM_IOCTL_CASTKMS_CAPTURE_STOP \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_STOP, \
 		struct drm_castkms_capture_stop)
+#define DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_REGISTER_BUFFER, \
+		 struct drm_castkms_capture_register_buffer)
 
 #if defined(__cplusplus)
 }

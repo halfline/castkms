@@ -44,6 +44,20 @@ struct castkms_capture_stream {
 	bool active;
 };
 
+enum castkms_capture_buffer_state {
+	CASTKMS_CAPTURE_BUFFER_IDLE,
+};
+
+struct castkms_capture_buffer {
+	struct castkms_capture_stream *stream;
+	struct castkms_output_buffer output;
+	struct completion delivery_done;
+	u64 mode_generation;
+	u32 sync_mode;
+	u32 id;
+	enum castkms_capture_buffer_state state;
+};
+
 static const struct drm_castkms_capture_format castkms_capture_formats[] = {
 	{
 		.format = DRM_FORMAT_XRGB8888,
@@ -55,7 +69,18 @@ static_assert(sizeof(struct drm_castkms_capture_format) == 16);
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_capture_start) == 24);
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
+static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32);
 
+static void
+castkms_capture_buffer_destroy(struct castkms_capture_buffer *buffer)
+{
+	if (!buffer)
+		return;
+
+	WARN_ON(buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE);
+	castkms_output_buffer_fini(&buffer->output);
+	kfree(buffer);
+}
 
 static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream)
 {
@@ -75,8 +100,12 @@ static void castkms_capture_stream_detach(struct castkms_capture_stream *stream)
 }
 static void castkms_capture_stream_destroy(struct castkms_capture_stream *stream)
 {
+	struct castkms_capture_buffer *buffer;
+	unsigned long id;
 
 	castkms_capture_stream_cancel(stream);
+	xa_for_each(&stream->buffers, id, buffer)
+		castkms_capture_buffer_destroy(buffer);
 	xa_destroy(&stream->buffers);
 
 	castkms_capture_stream_detach(stream);
@@ -117,6 +146,42 @@ castkms_capture_validate_mode(const struct castkms_capture_stream *stream,
 
 	return ret;
 }
+
+static bool
+castkms_capture_fb_format_is_supported(const struct drm_framebuffer *fb)
+{
+	for (unsigned int i = 0; i < ARRAY_SIZE(castkms_capture_formats); i++)
+		if (fb->format->format == castkms_capture_formats[i].format &&
+		    fb->modifier == castkms_capture_formats[i].modifier)
+			return true;
+
+	return false;
+}
+
+static bool
+castkms_capture_fb_is_compatible(const struct castkms_capture_stream *stream,
+				 const struct drm_framebuffer *fb)
+{
+	return fb->width == stream->width && fb->height == stream->height &&
+	       fb->format->num_planes == 1 &&
+	       castkms_capture_fb_format_is_supported(fb) &&
+	       !(fb->flags & DRM_MODE_FB_INTERLACED);
+}
+
+static bool castkms_capture_fb_is_local(struct drm_framebuffer *fb)
+{
+	struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, 0);
+
+	/*
+	 * Imported DMA-BUFs need an exporter cache-maintenance operation that
+	 * does not wait on the producer fence castkms itself adds below. The
+	 * generic helper cannot exclude that fence, so keep the initial
+	 * protocol to GEM objects created on this device and exported to its
+	 * consumers.
+	 */
+	return obj && !drm_gem_is_imported(obj);
+}
+
 
 int castkms_capture_file_open(struct drm_device *dev,
 			      struct drm_file *file_priv)
@@ -284,3 +349,92 @@ int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
+int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
+					  struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_register_buffer *args = data;
+	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_buffer *buffer = NULL;
+	struct castkms_capture_stream *stream;
+	struct drm_framebuffer *fb;
+	u32 buffer_id;
+	int ret;
+
+	args->buffer_id = 0;
+	if (args->flags != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC)
+		return -EINVAL;
+	if (args->ready_syncobj_handle || args->reuse_syncobj_handle)
+		return -EINVAL;
+
+	mutex_lock(&capture_file->lock);
+	stream = xa_load(&capture_file->streams, args->stream_id);
+	if (!stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	if (drm_crtc_find(dev, file_priv, stream->output->crtc.base.id) !=
+	    &stream->output->crtc) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	ret = castkms_capture_validate_mode(stream, args->mode_generation);
+	if (ret)
+		goto out_unlock;
+	if (stream->num_buffers >= CASTKMS_CAPTURE_MAX_BUFFERS) {
+		ret = -ENOSPC;
+		goto out_unlock;
+	}
+
+	fb = drm_framebuffer_lookup(dev, file_priv, args->fb_id);
+	if (!fb) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	if (!castkms_capture_fb_is_compatible(stream, fb)) {
+		ret = -EINVAL;
+		goto out_put_framebuffer;
+	}
+	if (!castkms_capture_fb_is_local(fb)) {
+		ret = -EOPNOTSUPP;
+		goto out_put_framebuffer;
+	}
+
+	buffer = kzalloc_obj(*buffer);
+	if (!buffer) {
+		ret = -ENOMEM;
+		goto out_put_framebuffer;
+	}
+	init_completion(&buffer->delivery_done);
+	complete_all(&buffer->delivery_done);
+
+	ret = castkms_output_buffer_init(&buffer->output, fb);
+	if (ret)
+		goto out_destroy_buffer;
+
+	ret = castkms_capture_validate_mode(stream, args->mode_generation);
+	if (ret)
+		goto out_destroy_buffer;
+
+	ret = xa_alloc(&stream->buffers, &buffer_id, buffer,
+		       XA_LIMIT(1, CASTKMS_CAPTURE_MAX_BUFFERS), GFP_KERNEL);
+	if (ret)
+		goto out_destroy_buffer;
+
+	buffer->stream = stream;
+	buffer->id = buffer_id;
+	buffer->mode_generation = stream->mode_generation;
+	buffer->sync_mode = args->flags;
+	stream->num_buffers++;
+	args->buffer_id = buffer_id;
+	ret = 0;
+	goto out_put_framebuffer;
+
+out_destroy_buffer:
+	castkms_capture_buffer_destroy(buffer);
+out_put_framebuffer:
+	drm_framebuffer_put(fb);
+out_unlock:
+	mutex_unlock(&capture_file->lock);
+	return ret;
+}

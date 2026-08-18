@@ -25,6 +25,16 @@ static_assert(sizeof(struct drm_castkms_capture_start) == 24,
 	      "capture start ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16,
 	      "capture stop ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32,
+	      "capture register ABI size changed");
+
+struct test_framebuffer {
+	uint32_t handle;
+	uint32_t fb_id;
+	uint32_t pitch;
+	uint64_t size;
+	void *map;
+};
 
 static int check_driver_name(int fd)
 {
@@ -122,6 +132,139 @@ static int stop_capture(int fd, uint32_t stream_id)
 	return 0;
 }
 
+static int register_capture_buffer(int fd, uint32_t stream_id,
+				   uint32_t fb_id, uint32_t flags,
+				   uint32_t ready_syncobj_handle,
+				   uint32_t reuse_syncobj_handle,
+				   uint64_t mode_generation,
+				   uint32_t *buffer_id)
+{
+	struct drm_castkms_capture_register_buffer buffer = {
+		.stream_id = stream_id,
+		.fb_id = fb_id,
+		.ready_syncobj_handle = ready_syncobj_handle,
+		.reuse_syncobj_handle = reuse_syncobj_handle,
+		.flags = flags,
+		.mode_generation = mode_generation,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER, &buffer) < 0)
+		return -errno;
+
+	*buffer_id = buffer.buffer_id;
+	return 0;
+}
+
+
+static int get_crtc_size(int fd, uint32_t crtc_id,
+			 uint32_t *width, uint32_t *height)
+{
+	struct drm_mode_crtc crtc = {
+		.crtc_id = crtc_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &crtc) < 0) {
+		perror("DRM_IOCTL_MODE_GETCRTC");
+		return -1;
+	}
+	if (!crtc.mode_valid || !crtc.mode.hdisplay || !crtc.mode.vdisplay) {
+		fprintf(stderr, "capture CRTC has no active mode\n");
+		return -1;
+	}
+
+	*width = crtc.mode.hdisplay;
+	*height = crtc.mode.vdisplay;
+	return 0;
+}
+
+static int create_test_framebuffer(int fd, uint32_t width, uint32_t height,
+				   struct test_framebuffer *buffer)
+{
+	struct drm_mode_create_dumb dumb = {
+		.width = width,
+		.height = height,
+		.bpp = 32,
+	};
+	struct drm_mode_fb_cmd2 fb = {
+		.width = width,
+		.height = height,
+		.pixel_format = DRM_FORMAT_XRGB8888,
+	};
+	struct drm_mode_map_dumb map;
+	struct drm_mode_destroy_dumb destroy;
+
+	*buffer = (struct test_framebuffer) {};
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb) < 0) {
+		perror("DRM_IOCTL_MODE_CREATE_DUMB");
+		return -1;
+	}
+
+	fb.handles[0] = dumb.handle;
+	fb.pitches[0] = dumb.pitch;
+	if (ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &fb) < 0) {
+		perror("DRM_IOCTL_MODE_ADDFB2");
+		destroy = (struct drm_mode_destroy_dumb) {
+			.handle = dumb.handle,
+		};
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+		return -1;
+	}
+
+	map = (struct drm_mode_map_dumb) {
+		.handle = dumb.handle,
+	};
+	if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map) < 0) {
+		perror("DRM_IOCTL_MODE_MAP_DUMB");
+		ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb.fb_id);
+		destroy = (struct drm_mode_destroy_dumb) {
+			.handle = dumb.handle,
+		};
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+		return -1;
+	}
+
+	buffer->map = mmap(NULL, dumb.size, PROT_READ | PROT_WRITE,
+			   MAP_SHARED, fd, map.offset);
+	if (buffer->map == MAP_FAILED) {
+		perror("mmap dumb framebuffer");
+		buffer->map = NULL;
+		ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb.fb_id);
+		destroy = (struct drm_mode_destroy_dumb) {
+			.handle = dumb.handle,
+		};
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+		return -1;
+	}
+
+	buffer->handle = dumb.handle;
+	buffer->fb_id = fb.fb_id;
+	buffer->pitch = dumb.pitch;
+	buffer->size = dumb.size;
+	return 0;
+}
+
+static void unmap_test_framebuffer(struct test_framebuffer *buffer)
+{
+	if (buffer->map && munmap(buffer->map, buffer->size) < 0)
+		perror("munmap dumb framebuffer");
+	buffer->map = NULL;
+}
+
+static void destroy_test_framebuffer(int fd, struct test_framebuffer *buffer)
+{
+	struct drm_mode_destroy_dumb destroy = {
+		.handle = buffer->handle,
+	};
+
+	unmap_test_framebuffer(buffer);
+	if (buffer->fb_id && ioctl(fd, DRM_IOCTL_MODE_RMFB, &buffer->fb_id) < 0)
+		perror("DRM_IOCTL_MODE_RMFB");
+	if (buffer->handle &&
+	    ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy) < 0)
+		perror("DRM_IOCTL_MODE_DESTROY_DUMB");
+	*buffer = (struct test_framebuffer) {};
+}
+
 static int parse_crtc_id(const char *text, uint32_t *crtc_id)
 {
 	char *end;
@@ -172,7 +315,13 @@ int main(int argc, char **argv)
 	struct drm_castkms_capture_start first_stream;
 	struct drm_castkms_capture_start second_stream;
 	struct drm_castkms_capture_start verifier_stream;
+	struct test_framebuffer competitor_buffer = {};
+	struct test_framebuffer first_buffer = {};
+	struct test_framebuffer wrong_size_buffer = {};
+	uint32_t buffer_id;
 	uint32_t crtc_id;
+	uint32_t height;
+	uint32_t width;
 	int competitor_fd = -1;
 	int fd;
 	int ioctl_ret;
@@ -242,6 +391,33 @@ int main(int argc, char **argv)
 		fprintf(stderr, "capture start returned invalid stream metadata\n");
 		goto out_close;
 	}
+	if (get_crtc_size(fd, crtc_id, &width, &height) ||
+	    create_test_framebuffer(fd, width, height, &first_buffer) ||
+	    create_test_framebuffer(fd, width + 1, height,
+				    &wrong_size_buffer))
+		goto out_close;
+
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		first_stream.mode_generation + 1, &buffer_id);
+	if (ioctl_ret != -ESTALE) {
+		fprintf(stderr,
+			"stale capture buffer registration returned %d, expected %d\n",
+			ioctl_ret, -ESTALE);
+		goto out_close;
+	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    wrong_size_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"wrong-size capture buffer returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	printf("capture_buffer_rejections=pass\n");
 
 	competitor_fd = open_capture_device(argv[1], false);
 	if (competitor_fd < 0)
@@ -260,13 +436,27 @@ int main(int argc, char **argv)
 	}
 	printf("capture_stream_exclusive=pass\n");
 
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret || !buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("register implicit capture buffer");
+		goto out_close;
+	}
+
 	ret = EXIT_SUCCESS;
 
 out_close:
 	if (verifier_fd >= 0)
 		close(verifier_fd);
-	if (competitor_fd >= 0)
+	if (competitor_fd >= 0) {
+		destroy_test_framebuffer(competitor_fd, &competitor_buffer);
 		close(competitor_fd);
+	}
+	destroy_test_framebuffer(fd, &wrong_size_buffer);
+	destroy_test_framebuffer(fd, &first_buffer);
 	close(fd);
 	return ret;
 }
