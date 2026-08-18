@@ -40,6 +40,7 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 {
 	struct castkms_output *output = drm_crtc_to_castkms_output(crtc);
 	struct castkms_crtc_state *state;
+	bool queue_composer = false;
 	bool ret, fence_cookie;
 
 	fence_cookie = dma_fence_begin_signalling();
@@ -51,23 +52,29 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 
 	state = output->composer_state;
 	if (state && castkms_composer_demand_is_active(&output->composer_demand)) {
-		u64 frame = drm_crtc_accurate_vblank_count(crtc);
+		ktime_t frame_time;
+		u64 frame = drm_crtc_vblank_count_and_time(crtc, &frame_time);
 
-		/* update frame_start only if a queued castkms_composer_worker()
-		 * has read the data
-		 */
-		spin_lock(&output->composer_lock);
-		if (!state->crc_pending)
-			state->frame_start = frame;
-		else
-			DRM_DEBUG_DRIVER("crc worker falling behind, frame_start: %llu, frame_end: %llu\n",
-					 state->frame_start, frame);
-		state->frame_end = frame;
-		state->crc_pending = true;
-		spin_unlock(&output->composer_lock);
+		if (output->composer_demand.crc_enabled) {
+			/* Update frame_start only after the worker consumed it. */
+			spin_lock(&output->composer_lock);
+			if (!state->crc_pending)
+				state->frame_start = frame;
+			else
+				DRM_DEBUG_DRIVER("crc worker behind: start=%llu end=%llu\n",
+						 state->frame_start, frame);
+			state->frame_end = frame;
+			state->crc_pending = true;
+			spin_unlock(&output->composer_lock);
+			queue_composer = true;
+		}
 
-		ret = queue_work(output->composer_workq, &state->composer_work);
-		if (!ret)
+		if (castkms_capture_prepare_frame(output, state, frame,
+						  frame_time))
+			queue_composer = true;
+
+		if (queue_composer &&
+		    !queue_work(output->composer_workq, &state->composer_work))
 			DRM_DEBUG_DRIVER("Composer worker already queued\n");
 	}
 	spin_unlock(&output->lock);
@@ -220,6 +227,8 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 	__releases(&castkms_output->lock)
 {
 	struct castkms_output *castkms_output = drm_crtc_to_castkms_output(crtc);
+	struct castkms_capture_completion capture_completion = {};
+	bool capture_cancelled = false;
 
 	if (crtc->state->event) {
 		spin_lock(&crtc->dev->event_lock);
@@ -235,8 +244,18 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 	}
 
 	castkms_output->composer_state = to_castkms_crtc_state(crtc->state);
+	if (crtc->state->mode_changed || crtc->state->active_changed ||
+	    crtc->state->connectors_changed)
+		capture_cancelled =
+			castkms_capture_mode_changed(castkms_output, crtc->state,
+						     &capture_completion);
 
 	spin_unlock_irq(&castkms_output->lock);
+
+	if (capture_cancelled)
+		castkms_composer_put(castkms_output,
+				     CASTKMS_COMPOSER_CLIENT_CAPTURE);
+	castkms_capture_send_completion(castkms_output, &capture_completion);
 }
 
 static const struct drm_crtc_helper_funcs castkms_crtc_helper_funcs = {

@@ -7,6 +7,9 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/dma-buf.h>
+#include <linux/sync_file.h>
+#include <poll.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,6 +18,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 static_assert(sizeof(struct drm_castkms_capture_format) == 16,
@@ -29,6 +33,12 @@ static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32,
 	      "capture register ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
 	      "capture unregister ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48,
+	      "capture queue ABI size changed");
+static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80,
+	      "capture event ABI size changed");
+static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76,
+	      "capture event ABI layout changed");
 
 struct test_framebuffer {
 	uint32_t handle;
@@ -171,6 +181,127 @@ static int unregister_capture_buffer(int fd, uint32_t stream_id,
 	return 0;
 }
 
+static int queue_capture_buffer(int fd, uint32_t stream_id,
+				uint32_t buffer_id, uint32_t flags,
+				uint64_t mode_generation, uint64_t user_data,
+				uint64_t ready_point, uint64_t reuse_point)
+{
+	struct drm_castkms_capture_queue_buffer buffer = {
+		.stream_id = stream_id,
+		.buffer_id = buffer_id,
+		.flags = flags,
+		.user_data = user_data,
+		.mode_generation = mode_generation,
+		.ready_point = ready_point,
+		.reuse_point = reuse_point,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_QUEUE_BUFFER, &buffer) < 0)
+		return -errno;
+
+	return 0;
+}
+
+static int
+queue_capture_when_available(int fd, uint32_t stream_id, uint32_t buffer_id,
+			     uint32_t flags, uint64_t mode_generation,
+			     uint64_t user_data, uint64_t ready_point,
+			     uint64_t reuse_point)
+{
+	const struct timespec retry_delay = {
+		.tv_nsec = 1000000,
+	};
+	struct timespec deadline;
+	struct timespec now;
+	int ret;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &deadline) < 0)
+		return -errno;
+	deadline.tv_sec += 2;
+
+	for (;;) {
+		ret = queue_capture_buffer(fd, stream_id, buffer_id, flags,
+					   mode_generation, user_data,
+					   ready_point, reuse_point);
+		if (ret != -EBUSY)
+			return ret;
+		if (nanosleep(&retry_delay, NULL) < 0)
+			return -errno;
+		if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+			return -errno;
+		if (now.tv_sec > deadline.tv_sec ||
+		    (now.tv_sec == deadline.tv_sec &&
+		     now.tv_nsec >= deadline.tv_nsec))
+			return -ETIMEDOUT;
+	}
+}
+
+static int read_capture_event_timeout(int fd,
+				      struct drm_event_castkms_capture_frame *event,
+				      int timeout_ms)
+{
+	struct pollfd poll_fd = {
+		.fd = fd,
+		.events = POLLIN,
+	};
+	ssize_t length;
+	int ret;
+
+	ret = poll(&poll_fd, 1, timeout_ms);
+	if (ret < 0) {
+		perror("poll capture event");
+		return -1;
+	}
+	if (!ret || !(poll_fd.revents & POLLIN)) {
+		fprintf(stderr, "timed out waiting for capture event\n");
+		return -1;
+	}
+
+	length = read(fd, event, sizeof(*event));
+	if (length < 0) {
+		perror("read capture event");
+		return -1;
+	}
+	if (length != sizeof(*event)) {
+		fprintf(stderr, "unexpected capture event length: %zd\n", length);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int read_capture_event(int fd,
+			      struct drm_event_castkms_capture_frame *event)
+{
+	return read_capture_event_timeout(fd, event, 2000);
+}
+
+static int
+validate_capture_event(const struct drm_event_castkms_capture_frame *event,
+		       uint32_t stream_id, uint32_t buffer_id,
+		       uint64_t user_data, uint64_t mode_generation,
+		       uint32_t width, uint32_t height, uint64_t after_sequence,
+		       bool may_have_dropped_frames)
+{
+	if (event->base.type != DRM_CASTKMS_CAPTURE_EVENT_FRAME ||
+	    event->base.length != sizeof(*event) ||
+	    event->user_data != user_data || event->stream_id != stream_id ||
+	    event->buffer_id != buffer_id || event->status ||
+	    event->flags != DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE ||
+	    event->sequence <= after_sequence ||
+	    ((!may_have_dropped_frames && event->dropped_frames) ||
+	     (may_have_dropped_frames &&
+	      event->dropped_frames > event->sequence - after_sequence - 1)) ||
+	    event->timestamp_ns <= 0 ||
+	    event->mode_generation != mode_generation ||
+	    event->damage_x || event->damage_y || event->damage_width != width ||
+	    event->damage_height != height || event->reserved) {
+		fprintf(stderr, "unexpected capture completion event\n");
+		return -1;
+	}
+
+	return 0;
+}
 
 static int get_crtc_size(int fd, uint32_t crtc_id,
 			 uint32_t *width, uint32_t *height)
@@ -281,6 +412,244 @@ static void destroy_test_framebuffer(int fd, struct test_framebuffer *buffer)
 	*buffer = (struct test_framebuffer) {};
 }
 
+static int export_framebuffer_dmabuf(int fd, uint32_t handle)
+{
+	struct drm_prime_handle prime = {
+		.handle = handle,
+		.flags = DRM_CLOEXEC | DRM_RDWR,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime) < 0) {
+		perror("DRM_IOCTL_PRIME_HANDLE_TO_FD");
+		return -1;
+	}
+
+	return prime.fd;
+}
+
+static int export_write_fence(int dmabuf_fd)
+{
+	struct dma_buf_export_sync_file export = {
+		.flags = DMA_BUF_SYNC_WRITE,
+		.fd = -1,
+	};
+
+	if (ioctl(dmabuf_fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &export) < 0) {
+		perror("DMA_BUF_IOCTL_EXPORT_SYNC_FILE");
+		return -1;
+	}
+
+	return export.fd;
+}
+
+static int read_sync_file_info(int fence_fd, struct sync_file_info *info,
+			       struct sync_fence_info **fences)
+{
+	*info = (struct sync_file_info) {};
+	*fences = NULL;
+	if (ioctl(fence_fd, SYNC_IOC_FILE_INFO, info) < 0) {
+		perror("SYNC_IOC_FILE_INFO count");
+		return -1;
+	}
+	if (!info->num_fences) {
+		fprintf(stderr, "capture sync file contains no fences\n");
+		return -1;
+	}
+
+	*fences = calloc(info->num_fences, sizeof(**fences));
+	if (!*fences) {
+		perror("calloc sync-file fences");
+		return -1;
+	}
+	info->sync_fence_info = (uint64_t)(uintptr_t)*fences;
+	if (ioctl(fence_fd, SYNC_IOC_FILE_INFO, info) < 0) {
+		perror("SYNC_IOC_FILE_INFO fences");
+		free(*fences);
+		*fences = NULL;
+		return -1;
+	}
+
+	return 0;
+}
+
+static bool capture_fence_name_is_valid(const struct sync_fence_info *fence)
+{
+	return (!strcmp(fence->driver_name, "castkms") &&
+		!strcmp(fence->obj_name, "capture")) ||
+	       (!strcmp(fence->driver_name, "detached-driver") &&
+		!strcmp(fence->obj_name, "signaled-timeline"));
+}
+
+static int validate_queued_capture_fence(int fence_fd, bool *pending)
+{
+	struct sync_fence_info *fences;
+	struct sync_file_info info;
+	int ret = -1;
+
+	if (read_sync_file_info(fence_fd, &info, &fences))
+		return -1;
+	*pending = false;
+	if (info.num_fences != 1 || info.status < 0 ||
+	    !capture_fence_name_is_valid(&fences[0]) ||
+	    fences[0].status != info.status) {
+		fprintf(stderr, "unexpected queued capture fence\n");
+	} else if (!info.status &&
+		 (!strcmp(fences[0].driver_name, "castkms") &&
+		  !strcmp(fences[0].obj_name, "capture"))) {
+		*pending = true;
+		ret = 0;
+	} else if (info.status == 1 && fences[0].timestamp_ns) {
+		ret = 0;
+	} else {
+		fprintf(stderr, "queued capture fence has invalid state\n");
+	}
+
+	free(fences);
+	return ret;
+}
+
+static int import_read_fence(int dmabuf_fd, int fence_fd)
+{
+	struct dma_buf_import_sync_file import = {
+		.flags = DMA_BUF_SYNC_READ,
+		.fd = fence_fd,
+	};
+
+	if (ioctl(dmabuf_fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &import) < 0) {
+		perror("DMA_BUF_IOCTL_IMPORT_SYNC_FILE");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int inspect_capture_fence(int fence_fd, bool *pending)
+{
+	struct sync_fence_info *fences;
+	struct sync_file_info info;
+	bool active_capture = false;
+	bool valid = true;
+
+	if (read_sync_file_info(fence_fd, &info, &fences))
+		return -1;
+	for (uint32_t i = 0; i < info.num_fences; i++) {
+		if (!strcmp(fences[i].driver_name, "castkms") &&
+		    !strcmp(fences[i].obj_name, "capture") &&
+		    !fences[i].status)
+			active_capture = true;
+		if (fences[i].status < 0 ||
+		    !capture_fence_name_is_valid(&fences[i]) ||
+		    (fences[i].status == 1 && !fences[i].timestamp_ns))
+			valid = false;
+	}
+
+	free(fences);
+	if (info.status < 0 || !info.num_fences || !valid ||
+	    (!info.status && !active_capture)) {
+		fprintf(stderr,
+			"dependent capture fence has invalid state: status=%d fences=%u active=%d\n",
+			info.status, info.num_fences, active_capture);
+		return -1;
+	}
+	*pending = !info.status;
+
+	return 0;
+}
+
+static int wait_for_capture_fence_timeout(int fence_fd, int timeout_ms)
+{
+	struct sync_fence_info *fences;
+	struct sync_file_info info;
+	struct pollfd poll_fd = {
+		.fd = fence_fd,
+		.events = POLLIN,
+	};
+	int ret;
+
+	ret = poll(&poll_fd, 1, timeout_ms);
+	if (ret < 0) {
+		perror("poll capture fence");
+		return -1;
+	}
+	if (!ret || !(poll_fd.revents & POLLIN)) {
+		fprintf(stderr, "timed out waiting for capture fence\n");
+		return -1;
+	}
+
+	if (read_sync_file_info(fence_fd, &info, &fences))
+		return -1;
+	ret = info.status == 1 ? 0 : -1;
+	for (uint32_t i = 0; i < info.num_fences; i++)
+		if (fences[i].status != 1 || !fences[i].timestamp_ns ||
+		    !capture_fence_name_is_valid(&fences[i]))
+			ret = -1;
+	free(fences);
+
+	if (ret)
+		fprintf(stderr, "capture producer fence did not complete\n");
+	return ret;
+}
+
+static int wait_for_capture_fence(int fence_fd)
+{
+	return wait_for_capture_fence_timeout(fence_fd, 2000);
+}
+
+static int wait_for_capture_fence_error(int fence_fd, int expected_status)
+{
+	struct sync_fence_info *fences;
+	struct sync_file_info info;
+	struct pollfd poll_fd = {
+		.fd = fence_fd,
+		.events = POLLIN,
+	};
+	bool found = false;
+	int ret;
+
+	ret = poll(&poll_fd, 1, 2000);
+	if (ret <= 0 || !(poll_fd.revents & POLLIN)) {
+		fprintf(stderr, "timed out waiting for cancelled capture fence\n");
+		return -1;
+	}
+	if (read_sync_file_info(fence_fd, &info, &fences))
+		return -1;
+
+	ret = info.status == expected_status ? 0 : -1;
+	for (uint32_t i = 0; i < info.num_fences; i++) {
+		if (fences[i].status == expected_status)
+			found = true;
+		else if (fences[i].status != 1)
+			ret = -1;
+		if (!capture_fence_name_is_valid(&fences[i]) ||
+		    !fences[i].timestamp_ns)
+			ret = -1;
+	}
+	free(fences);
+
+	if (ret || !found) {
+		fprintf(stderr,
+			"capture fence status=%d, expected cancellation status=%d\n",
+			info.status, expected_status);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int sync_dmabuf_cpu_access(int dmabuf_fd, uint64_t flags)
+{
+	struct dma_buf_sync sync = {
+		.flags = flags,
+	};
+
+	if (ioctl(dmabuf_fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+		perror("DMA_BUF_IOCTL_SYNC");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int parse_crtc_id(const char *text, uint32_t *crtc_id)
 {
 	char *end;
@@ -323,9 +692,121 @@ static int validate_query(const struct drm_castkms_capture_query_caps *query,
 	return 0;
 }
 
+static int run_deliver_one(const char *device, uint32_t crtc_id)
+{
+	const uint64_t user_data = 0x434153544b4d5305ULL;
+	struct drm_event_castkms_capture_frame event = {};
+	struct drm_castkms_capture_start stream;
+	struct test_framebuffer buffer = {};
+	uint32_t buffer_id = 0;
+	uint32_t height;
+	uint32_t width;
+	bool fence_pending;
+	int dmabuf_fd = -1;
+	int fd;
+	int fence_fd = -1;
+	int ioctl_ret;
+	int ret = EXIT_FAILURE;
+
+	fd = open_capture_device(device, false);
+	if (fd < 0)
+		return EXIT_FAILURE;
+
+	ioctl_ret = start_capture(fd, crtc_id, &stream);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("start overlap capture stream");
+		goto out_close;
+	}
+	if (!stream.stream_id || !stream.mode_generation) {
+		fprintf(stderr,
+			"overlap capture start returned invalid stream metadata\n");
+		goto out_close;
+	}
+	if (get_crtc_size(fd, crtc_id, &width, &height) ||
+	    create_test_framebuffer(fd, width, height, &buffer))
+		goto out_close;
+	dmabuf_fd = export_framebuffer_dmabuf(fd, buffer.handle);
+	if (dmabuf_fd < 0)
+		goto out_close;
+
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	memset(buffer.map, 0x77, buffer.size);
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+
+	ioctl_ret = register_capture_buffer(fd, stream.stream_id, buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		stream.mode_generation, &buffer_id);
+	if (ioctl_ret || !buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("register overlap capture buffer");
+		goto out_close;
+	}
+
+	ioctl_ret = queue_capture_buffer(fd, stream.stream_id, buffer_id,
+					 DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+					 stream.mode_generation, user_data,
+					 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue overlap capture buffer");
+		goto out_close;
+	}
+	printf("capture_overlap_queued=1\n");
+	fflush(stdout);
+
+	fence_fd = export_write_fence(dmabuf_fd);
+	if (fence_fd < 0)
+		goto out_close;
+	if (validate_queued_capture_fence(fence_fd, &fence_pending))
+		goto out_close;
+	if (read_capture_event_timeout(fd, &event, 8000))
+		goto out_close;
+	if (wait_for_capture_fence_timeout(fence_fd, 8000))
+		goto out_close;
+	if (validate_capture_event(&event, stream.stream_id, buffer_id,
+				   user_data, stream.mode_generation, width,
+				   height, 0, true))
+		goto out_close;
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
+		goto out_close;
+	if (*(const uint32_t *)buffer.map == UINT32_C(0x77777777)) {
+		fprintf(stderr,
+			"overlap capture did not update its destination\n");
+		goto out_close;
+	}
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ))
+		goto out_close;
+
+	ioctl_ret = stop_capture(fd, stream.stream_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("stop overlap capture stream");
+		goto out_close;
+	}
+	printf("capture_writeback_overlap=pass\n");
+	ret = EXIT_SUCCESS;
+
+out_close:
+	if (fence_fd >= 0)
+		close(fence_fd);
+	if (dmabuf_fd >= 0)
+		close(dmabuf_fd);
+	destroy_test_framebuffer(fd, &buffer);
+	close(fd);
+	return ret;
+}
 
 int main(int argc, char **argv)
 {
+	const uint64_t capture_user_data = 0x434153544b4d5304ULL;
+	struct drm_event_castkms_capture_frame capture_event = {};
 	struct drm_castkms_capture_format format = {};
 	struct drm_castkms_capture_query_caps query = {};
 	struct drm_castkms_capture_start first_stream;
@@ -333,19 +814,37 @@ int main(int argc, char **argv)
 	struct drm_castkms_capture_start verifier_stream;
 	struct test_framebuffer competitor_buffer = {};
 	struct test_framebuffer first_buffer = {};
+	struct test_framebuffer second_buffer = {};
 	struct test_framebuffer wrong_size_buffer = {};
+	uint32_t extra_buffer_ids[6] = {};
 	uint32_t buffer_id;
 	uint32_t crtc_id;
 	uint32_t height;
+	uint32_t second_buffer_id;
 	uint32_t width;
+	uint64_t first_sequence;
+	bool capture_fence_pending;
+	bool dependent_fence_pending;
+	bool implicit_wait_observed = false;
+	bool pixel_changed;
+	int capture_fence_fd = -1;
 	int competitor_fd = -1;
+	int dmabuf_fd = -1;
 	int fd;
 	int ioctl_ret;
 	int ret = EXIT_FAILURE;
+	int second_dmabuf_fd = -1;
+	int second_fence_fd = -1;
 	int verifier_fd = -1;
 
+	if (argc == 4 && !strcmp(argv[1], "--deliver-one")) {
+		if (parse_crtc_id(argv[3], &crtc_id))
+			return EXIT_FAILURE;
+		return run_deliver_one(argv[2], crtc_id);
+	}
 	if (argc != 3) {
-		fprintf(stderr, "usage: %s DRM-DEVICE CRTC-ID\n", argv[0]);
+		fprintf(stderr, "usage: %s [--deliver-one] DRM-DEVICE CRTC-ID\n",
+			argv[0]);
 		return EXIT_FAILURE;
 	}
 	if (parse_crtc_id(argv[2], &crtc_id))
@@ -409,8 +908,15 @@ int main(int argc, char **argv)
 	}
 	if (get_crtc_size(fd, crtc_id, &width, &height) ||
 	    create_test_framebuffer(fd, width, height, &first_buffer) ||
+	    create_test_framebuffer(fd, width, height, &second_buffer) ||
 	    create_test_framebuffer(fd, width + 1, height,
 				    &wrong_size_buffer))
+		goto out_close;
+	dmabuf_fd = export_framebuffer_dmabuf(fd, first_buffer.handle);
+	if (dmabuf_fd < 0)
+		goto out_close;
+	second_dmabuf_fd = export_framebuffer_dmabuf(fd, second_buffer.handle);
+	if (second_dmabuf_fd < 0)
 		goto out_close;
 
 	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
@@ -461,6 +967,53 @@ int main(int argc, char **argv)
 		perror("register implicit capture buffer");
 		goto out_close;
 	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    second_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		first_stream.mode_generation, &second_buffer_id);
+	if (ioctl_ret || !second_buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("register second implicit capture buffer");
+		goto out_close;
+	}
+	for (size_t i = 0; i < sizeof(extra_buffer_ids) /
+					      sizeof(extra_buffer_ids[0]); i++) {
+		ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+			first_buffer.fb_id,
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+			first_stream.mode_generation, &extra_buffer_ids[i]);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("register buffer up to advertised limit");
+			goto out_close;
+		}
+	}
+	{
+		uint32_t rejected_id = 0;
+
+		ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+			first_buffer.fb_id,
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+			first_stream.mode_generation, &rejected_id);
+		if (ioctl_ret != -ENOSPC) {
+			fprintf(stderr,
+				"ninth capture buffer returned %d, expected %d\n",
+				ioctl_ret, -ENOSPC);
+			goto out_close;
+		}
+	}
+	for (size_t i = 0; i < sizeof(extra_buffer_ids) /
+					      sizeof(extra_buffer_ids[0]); i++) {
+		ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+						      extra_buffer_ids[i]);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("unregister buffer-limit probe");
+			goto out_close;
+		}
+		extra_buffer_ids[i] = 0;
+	}
+	printf("capture_buffer_limit=pass\n");
 	ioctl_ret = unregister_capture_buffer(competitor_fd,
 					      first_stream.stream_id,
 					      buffer_id);
@@ -470,10 +1023,184 @@ int main(int argc, char **argv)
 			ioctl_ret, -ENOENT);
 		goto out_close;
 	}
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+				     first_stream.mode_generation + 1,
+				     capture_user_data, 0, 0);
+	if (ioctl_ret != -ESTALE) {
+		fprintf(stderr,
+			"stale capture queue returned %d, expected %d\n",
+			ioctl_ret, -ESTALE);
+		goto out_close;
+	}
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data, 1, 0);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"implicit capture point returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	memset(first_buffer.map, 0x77, first_buffer.size);
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	memset(second_buffer.map, 0x77, second_buffer.size);
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue implicit capture buffer");
+		goto out_close;
+	}
+	capture_fence_fd = export_write_fence(dmabuf_fd);
+	if (capture_fence_fd < 0)
+		goto out_close;
+	if (validate_queued_capture_fence(capture_fence_fd,
+					  &capture_fence_pending))
+		goto out_close;
+	if (import_read_fence(second_dmabuf_fd, capture_fence_fd))
+		goto out_close;
+	ioctl_ret = queue_capture_when_available(fd, first_stream.stream_id,
+						 second_buffer_id,
+					 DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+					 first_stream.mode_generation,
+					 capture_user_data + 1, 0, 0);
+	if (ioctl_ret) {
+		fprintf(stderr,
+			"queue dependent capture buffer returned %d\n",
+			ioctl_ret);
+		goto out_close;
+	}
+	ioctl_ret = queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+					 DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+					 first_stream.mode_generation,
+					 capture_user_data + 2, 0, 0);
+	if (ioctl_ret != -EBUSY) {
+		fprintf(stderr,
+			"queue with queued/in-flight work returned %d, expected %d\n",
+			ioctl_ret, -EBUSY);
+		goto out_close;
+	}
+	printf("capture_buffer_busy=pass\n");
+	if (validate_queued_capture_fence(capture_fence_fd,
+					  &capture_fence_pending))
+		goto out_close;
+	implicit_wait_observed = capture_fence_pending;
+	second_fence_fd = export_write_fence(second_dmabuf_fd);
+	if (second_fence_fd < 0 ||
+	    inspect_capture_fence(second_fence_fd, &dependent_fence_pending))
+		goto out_close;
+	if (wait_for_capture_fence(capture_fence_fd))
+		goto out_close;
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("unregister after implicit producer fence");
+		goto out_close;
+	}
+	if (read_capture_event(fd, &capture_event))
+		goto out_close;
+	close(capture_fence_fd);
+	capture_fence_fd = -1;
+	if (validate_capture_event(&capture_event, first_stream.stream_id,
+				   buffer_id, capture_user_data,
+				   first_stream.mode_generation, width, height,
+				   0, false))
+		goto out_close;
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
+		goto out_close;
+	pixel_changed =
+		*(const uint32_t *)first_buffer.map != UINT32_C(0x77777777);
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ))
+		goto out_close;
+	if (!pixel_changed) {
+		fprintf(stderr, "capture did not update its destination\n");
+		goto out_close;
+	}
+	first_sequence = capture_event.sequence;
+	if (wait_for_capture_fence(second_fence_fd))
+		goto out_close;
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      second_buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("unregister after dependent producer fence");
+		goto out_close;
+	}
+	if (read_capture_event(fd, &capture_event))
+		goto out_close;
+	if (validate_capture_event(&capture_event, first_stream.stream_id,
+				   second_buffer_id, capture_user_data + 1,
+				   first_stream.mode_generation, width, height,
+				   first_sequence, true))
+		goto out_close;
+	close(second_fence_fd);
+	second_fence_fd = -1;
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
+		goto out_close;
+	pixel_changed =
+		*(const uint32_t *)second_buffer.map != UINT32_C(0x77777777);
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ))
+		goto out_close;
+	if (!pixel_changed) {
+		fprintf(stderr, "dependent capture did not update its destination\n");
+		goto out_close;
+	}
+	printf("capture_reuse_dependency=pass\n");
+	printf("capture_reuse_wait=%s\n",
+	       implicit_wait_observed ? "observed" : "not-observed");
+	printf("capture_implicit_fence=pass\n");
+	printf("capture_frame_delivery=pass\n");
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("unregister implicit capture buffer");
+		goto out_close;
+	}
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      second_buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("unregister dependent capture buffer");
+		goto out_close;
+	}
+	printf("capture_buffer_implicit=pass\n");
 
 	ret = EXIT_SUCCESS;
 
 out_close:
+	if (second_fence_fd >= 0)
+		close(second_fence_fd);
+	if (capture_fence_fd >= 0)
+		close(capture_fence_fd);
+	if (second_dmabuf_fd >= 0)
+		close(second_dmabuf_fd);
+	if (dmabuf_fd >= 0)
+		close(dmabuf_fd);
 	if (verifier_fd >= 0)
 		close(verifier_fd);
 	if (competitor_fd >= 0) {
@@ -481,6 +1208,7 @@ out_close:
 		close(competitor_fd);
 	}
 	destroy_test_framebuffer(fd, &wrong_size_buffer);
+	destroy_test_framebuffer(fd, &second_buffer);
 	destroy_test_framebuffer(fd, &first_buffer);
 	close(fd);
 	return ret;

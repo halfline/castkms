@@ -107,6 +107,65 @@ static void castkms_composer_test_failed_first_writeback(struct kunit *test)
 	KUNIT_EXPECT_FALSE(test, castkms_composer_demand_is_active(&demand));
 }
 
+static void castkms_composer_test_captures_are_counted(struct kunit *test)
+{
+	struct castkms_composer_demand demand = {};
+	bool put_vblank;
+	bool keep_vblank;
+	int ret;
+
+	ret = castkms_composer_demand_get(&demand,
+					  CASTKMS_COMPOSER_CLIENT_CRC,
+					  0, &keep_vblank);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_ASSERT_TRUE(test, keep_vblank);
+
+	ret = castkms_composer_demand_get(&demand,
+					  CASTKMS_COMPOSER_CLIENT_CAPTURE,
+					  0, &keep_vblank);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_EXPECT_FALSE(test, keep_vblank);
+
+	ret = castkms_composer_demand_get(&demand,
+					  CASTKMS_COMPOSER_CLIENT_CAPTURE,
+					  0, &keep_vblank);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_EXPECT_FALSE(test, keep_vblank);
+	KUNIT_EXPECT_EQ(test, demand.capture_count, 2);
+	ret = castkms_composer_demand_get(&demand,
+					  CASTKMS_COMPOSER_CLIENT_CAPTURE,
+					  -EINVAL, &keep_vblank);
+	KUNIT_EXPECT_EQ(test, ret, -EINVAL);
+	KUNIT_EXPECT_EQ(test, demand.capture_count, 2);
+
+	put_vblank = castkms_composer_demand_put(&demand,
+						 CASTKMS_COMPOSER_CLIENT_CAPTURE);
+	KUNIT_EXPECT_FALSE(test, put_vblank);
+	KUNIT_EXPECT_EQ(test, demand.capture_count, 1);
+	put_vblank = castkms_composer_demand_put(&demand,
+						 CASTKMS_COMPOSER_CLIENT_CRC);
+	KUNIT_EXPECT_FALSE(test, put_vblank);
+	put_vblank = castkms_composer_demand_put(&demand,
+						 CASTKMS_COMPOSER_CLIENT_CAPTURE);
+	KUNIT_EXPECT_TRUE(test, put_vblank);
+	KUNIT_EXPECT_FALSE(test, castkms_composer_demand_is_active(&demand));
+}
+
+static void castkms_composer_test_failed_first_capture(struct kunit *test)
+{
+	struct castkms_composer_demand demand = {};
+	bool keep_vblank;
+	int ret;
+
+	ret = castkms_composer_demand_get(&demand,
+					  CASTKMS_COMPOSER_CLIENT_CAPTURE,
+					  -EINVAL, &keep_vblank);
+	KUNIT_EXPECT_EQ(test, ret, -EINVAL);
+	KUNIT_EXPECT_FALSE(test, keep_vblank);
+	KUNIT_EXPECT_EQ(test, demand.capture_count, 0);
+	KUNIT_EXPECT_FALSE(test, castkms_composer_demand_is_active(&demand));
+}
+
 static void castkms_composer_test_sorts_planes_by_zpos(struct kunit *test)
 {
 	struct castkms_plane_state primary = {};
@@ -133,6 +192,8 @@ static struct kunit_case castkms_composer_test_cases[] = {
 	KUNIT_CASE(castkms_composer_test_crc_is_idempotent),
 	KUNIT_CASE(castkms_composer_test_writebacks_are_counted),
 	KUNIT_CASE(castkms_composer_test_failed_first_writeback),
+	KUNIT_CASE(castkms_composer_test_captures_are_counted),
+	KUNIT_CASE(castkms_composer_test_failed_first_capture),
 	KUNIT_CASE(castkms_composer_test_sorts_planes_by_zpos),
 	{}
 };

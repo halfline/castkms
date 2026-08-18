@@ -94,22 +94,26 @@ typedef void (*pixel_write_t)(u8 *out_pixel, const struct pixel_argb_u16 *in_pix
 enum castkms_composer_client {
 	CASTKMS_COMPOSER_CLIENT_CRC,
 	CASTKMS_COMPOSER_CLIENT_WRITEBACK,
+	CASTKMS_COMPOSER_CLIENT_CAPTURE,
 };
 
 /**
  * struct castkms_composer_demand - Clients requiring frame composition
  * @crc_enabled: Whether CRC capture requires composition
  * @writeback_count: Number of committed writeback jobs awaiting composition
+ * @capture_count: Number of queued or in-flight capture buffers
  */
 struct castkms_composer_demand {
 	bool crc_enabled;
 	unsigned int writeback_count;
+	unsigned int capture_count;
 };
 
 static inline bool
 castkms_composer_demand_is_active(const struct castkms_composer_demand *demand)
 {
-	return demand->crc_enabled || demand->writeback_count;
+	return demand->crc_enabled || demand->writeback_count ||
+	       demand->capture_count;
 }
 
 /**
@@ -219,10 +223,13 @@ struct castkms_color_lut {
  * @active_planes: List containing all the active planes (counted by
  *		   @num_active_planes). They should be stored in z-order.
  * @active_writeback: Current active writeback destination buffer
+ * @active_capture: Capture destination selected at vblank
  * @gamma_lut: Look up table for gamma used in this CRTC
  * @crc_pending: Protected by @castkms_output.composer_lock, true when the frame CRC is not computed
  *		 yet. Used by vblank to detect if the composer is too slow.
  * @wb_pending: Protected by @castkms_output.composer_lock, true when a writeback frame is requested.
+ * @capture_pending: Protected by @castkms_output.composer_lock, true when a
+ *                   capture frame is requested.
  * @frame_start: Protected by @castkms_output.composer_lock, saves the frame number before the start
  *		 of the composition process.
  * @frame_end: Protected by @castkms_output.composer_lock, saves the last requested frame number.
@@ -235,10 +242,12 @@ struct castkms_crtc_state {
 	int num_active_planes;
 	struct castkms_plane_state **active_planes;
 	struct castkms_output_buffer *active_writeback;
+	struct castkms_capture_buffer *active_capture;
 	struct castkms_color_lut gamma_lut;
 
 	bool crc_pending;
 	bool wb_pending;
+	bool capture_pending;
 	u64 frame_start;
 	u64 frame_end;
 };

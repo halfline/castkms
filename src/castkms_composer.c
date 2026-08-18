@@ -464,6 +464,7 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 /**
  * blend - blend the pixels from all planes and compute crc
  * @destination: Optional destination for the composed frame
+ * @second_destination: Optional second destination for the same frame
  * @crtc_state: The crtc state
  * @crc32: The crc output of the final frame
  * @output_buffer: A buffer of a row that will receive the result of the blend(s)
@@ -472,9 +473,11 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
  *
  * This function blends the pixels (Using the `pre_mul_alpha_blend`)
  * from all planes, calculates the crc32 of the output from the former step,
- * and, if necessary, convert and store the output in @destination.
+ * and, if necessary, convert and store the output in @destination and
+ * @second_destination.
  */
 static void blend(const struct castkms_output_buffer *destination,
+		  const struct castkms_output_buffer *second_destination,
 		  struct castkms_crtc_state *crtc_state,
 		  u32 *crc32, struct line_buffer *stage_buffer,
 		  struct line_buffer *output_buffer, size_t row_size)
@@ -514,6 +517,9 @@ static void blend(const struct castkms_output_buffer *destination,
 
 		if (destination)
 			castkms_output_buffer_write_row(destination, output_buffer, y);
+		if (second_destination)
+			castkms_output_buffer_write_row(second_destination,
+							output_buffer, y);
 	}
 }
 
@@ -601,6 +607,7 @@ static int plane_framebuffers_begin_cpu_access(struct castkms_crtc_state *crtc_s
 }
 
 static int compose_active_planes(const struct castkms_output_buffer *destination,
+				 const struct castkms_output_buffer *second_destination,
 				 struct castkms_crtc_state *crtc_state,
 				 u32 *crc32)
 {
@@ -624,6 +631,10 @@ static int compose_active_planes(const struct castkms_output_buffer *destination
 
 	if (WARN_ON(destination &&
 		    !castkms_output_buffer_is_valid(destination)))
+		return -EINVAL;
+
+	if (WARN_ON(second_destination &&
+		    !castkms_output_buffer_is_valid(second_destination)))
 		return -EINVAL;
 
 	line_width = crtc_state->base.mode.hdisplay;
@@ -653,9 +664,18 @@ static int compose_active_planes(const struct castkms_output_buffer *destination
 			goto end_plane_access;
 	}
 
-	blend(destination, crtc_state, crc32, &stage_buffer,
+	if (second_destination) {
+		ret = castkms_output_buffer_begin_cpu_access(second_destination);
+		if (ret)
+			goto end_first_destination;
+	}
+
+	blend(destination, second_destination, crtc_state, crc32, &stage_buffer,
 	      &output_buffer, line_width * pixel_size);
 
+	if (second_destination)
+		castkms_output_buffer_end_cpu_access(second_destination);
+end_first_destination:
 	if (destination)
 		castkms_output_buffer_end_cpu_access(destination);
 end_plane_access:
@@ -670,13 +690,14 @@ free_stage_buffer:
 }
 
 /**
- * castkms_composer_worker - ordered work_struct to compute CRC
+ * castkms_composer_worker - ordered work_struct to compose a frame
  *
  * @work: work_struct
  *
- * Work handler for composing and computing CRCs. work_struct scheduled in
- * an ordered workqueue that's periodically scheduled by the vblank timer and
- * flushed at castkms_atomic_commit_tail().
+ * Work handler for composing, writing capture and writeback destinations, and
+ * computing CRCs. work_struct scheduled in an ordered workqueue that's
+ * periodically scheduled by the vblank timer and flushed at
+ * castkms_atomic_commit_tail().
  */
 void castkms_composer_worker(struct work_struct *work)
 {
@@ -685,18 +706,22 @@ void castkms_composer_worker(struct work_struct *work)
 							  composer_work);
 	struct drm_crtc *crtc = crtc_state->base.crtc;
 	struct castkms_output_buffer *active_wb;
+	struct castkms_capture_buffer *active_capture;
+	const struct castkms_output_buffer *capture_dest = NULL;
 	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
-	bool crc_pending, wb_pending;
+	bool crc_pending, wb_pending, capture_pending;
 	u64 frame_start, frame_end;
 	u32 crc32 = 0;
-	int ret;
+	int ret = 0;
 
 	spin_lock_irq(&out->composer_lock);
 	frame_start = crtc_state->frame_start;
 	frame_end = crtc_state->frame_end;
 	crc_pending = crtc_state->crc_pending;
 	wb_pending = crtc_state->wb_pending;
+	capture_pending = crtc_state->capture_pending;
 	active_wb = crtc_state->active_writeback;
+	active_capture = crtc_state->active_capture;
 	crtc_state->frame_start = 0;
 	crtc_state->frame_end = 0;
 	crtc_state->crc_pending = false;
@@ -720,18 +745,33 @@ void castkms_composer_worker(struct work_struct *work)
 	spin_unlock_irq(&out->composer_lock);
 
 	/*
-	 * We raced with the vblank hrtimer and previous work already computed
-	 * the crc, nothing to do.
+	 * We raced with the vblank hrtimer and previous work already consumed
+	 * this request, nothing to do.
 	 */
-	if (!crc_pending && !wb_pending)
+	if (!crc_pending && !wb_pending && !capture_pending)
 		return;
+
+	if (capture_pending) {
+		if (WARN_ON(!active_capture))
+			ret = -EINVAL;
+		else
+			capture_dest = castkms_capture_buffer_output(active_capture);
+	}
 
 	if (WARN_ON(wb_pending && !active_wb))
 		ret = -EINVAL;
-	else if (wb_pending)
-		ret = compose_active_planes(active_wb, crtc_state, &crc32);
-	else
-		ret = compose_active_planes(NULL, crtc_state, &crc32);
+	else if (!ret)
+		ret = compose_active_planes(wb_pending ? active_wb : NULL,
+					    capture_dest, crtc_state, &crc32);
+
+	if (capture_pending) {
+		spin_lock_irq(&out->composer_lock);
+		crtc_state->capture_pending = false;
+		crtc_state->active_capture = NULL;
+		spin_unlock_irq(&out->composer_lock);
+		if (active_capture)
+			castkms_capture_complete_frame(out, active_capture, ret);
+	}
 
 	if (wb_pending) {
 		spin_lock_irq(&out->composer_lock);
@@ -814,6 +854,11 @@ castkms_composer_demand_get(struct castkms_composer_demand *demand,
 			return -EOVERFLOW;
 		demand->writeback_count++;
 		break;
+	case CASTKMS_COMPOSER_CLIENT_CAPTURE:
+		if (WARN_ON(demand->capture_count == UINT_MAX))
+			return -EOVERFLOW;
+		demand->capture_count++;
+		break;
 	default:
 		WARN_ON(1);
 		return -EINVAL;
@@ -840,6 +885,11 @@ castkms_composer_demand_put(struct castkms_composer_demand *demand,
 		if (WARN_ON(!demand->writeback_count))
 			return false;
 		demand->writeback_count--;
+		break;
+	case CASTKMS_COMPOSER_CLIENT_CAPTURE:
+		if (WARN_ON(!demand->capture_count))
+			return false;
+		demand->capture_count--;
 		break;
 	default:
 		WARN_ON(1);
