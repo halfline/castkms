@@ -21,6 +21,8 @@ static_assert(sizeof(struct drm_castkms_capture_format) == 16,
 	      "capture format ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
 	      "capture query ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_start) == 24,
+	      "capture start ABI size changed");
 
 static int check_driver_name(int fd)
 {
@@ -93,6 +95,19 @@ static int open_capture_device(const char *path, bool report_non_master)
 	return fd;
 }
 
+static int start_capture(int fd, uint32_t crtc_id,
+			 struct drm_castkms_capture_start *start)
+{
+	*start = (struct drm_castkms_capture_start) {
+		.crtc_id = crtc_id,
+		.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE,
+	};
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_START, start) < 0)
+		return -errno;
+
+	return 0;
+}
+
 static int parse_crtc_id(const char *text, uint32_t *crtc_id)
 {
 	char *end;
@@ -140,9 +155,15 @@ int main(int argc, char **argv)
 {
 	struct drm_castkms_capture_format format = {};
 	struct drm_castkms_capture_query_caps query = {};
+	struct drm_castkms_capture_start first_stream;
+	struct drm_castkms_capture_start second_stream;
+	struct drm_castkms_capture_start verifier_stream;
 	uint32_t crtc_id;
+	int competitor_fd = -1;
 	int fd;
+	int ioctl_ret;
 	int ret = EXIT_FAILURE;
+	int verifier_fd = -1;
 
 	if (argc != 3) {
 		fprintf(stderr, "usage: %s DRM-DEVICE CRTC-ID\n", argv[0]);
@@ -197,9 +218,22 @@ int main(int argc, char **argv)
 	       "supported" : "unsupported");
 	printf("capture_query=pass\n");
 
+	ioctl_ret = start_capture(fd, crtc_id, &first_stream);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("start first capture stream");
+		goto out_close;
+	}
+	if (!first_stream.stream_id || !first_stream.mode_generation) {
+		fprintf(stderr, "capture start returned invalid stream metadata\n");
+		goto out_close;
+	}
+
 	ret = EXIT_SUCCESS;
 
 out_close:
+	if (verifier_fd >= 0)
+		close(verifier_fd);
 	close(fd);
 	return ret;
 }

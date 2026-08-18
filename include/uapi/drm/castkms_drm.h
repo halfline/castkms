@@ -79,11 +79,43 @@ struct drm_castkms_capture_query_caps {
 	__u32 reserved;
 };
 
+/**
+ * DRM_CASTKMS_CAPTURE_START_EXCLUSIVE:
+ *
+ * Request exclusive capture ownership of the selected CRTC.
+ */
+#define DRM_CASTKMS_CAPTURE_START_EXCLUSIVE	(1U << 0)
+
+/**
+ * struct drm_castkms_capture_start - start an exclusive capture stream
+ * @crtc_id: DRM object ID of the CRTC to observe
+ * @flags: DRM_CASTKMS_CAPTURE_START_EXCLUSIVE, optionally combined with
+ *         DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR
+ * @stream_id: file-local stream identifier returned by the driver
+ * @reserved: must be zero
+ * @mode_generation: current CRTC mode generation returned by the driver
+ *
+ * Starting capture does not activate or otherwise change the selected CRTC.
+ * Another DRM file cannot start a stream for that CRTC until the owner stops
+ * its stream or closes the file.
+ */
+struct drm_castkms_capture_start {
+	__u32 crtc_id;
+	__u32 flags;
+	__u32 stream_id;
+	__u32 reserved;
+	__u64 mode_generation;
+};
+
 #define DRM_CASTKMS_CAPTURE_QUERY_CAPS	0x00
+#define DRM_CASTKMS_CAPTURE_START	0x01
 
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
 		 struct drm_castkms_capture_query_caps)
+#define DRM_IOCTL_CASTKMS_CAPTURE_START \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_START, \
+		 struct drm_castkms_capture_start)
 
 #if defined(__cplusplus)
 }
