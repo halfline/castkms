@@ -47,7 +47,7 @@ struct castkms_capture_stream {
 	u32 id;
 	u32 num_buffers;
 	bool active;
-	bool output_edid_owned;
+	bool attached;
 };
 
 enum castkms_capture_buffer_state {
@@ -340,26 +340,20 @@ static void castkms_capture_stream_detach(struct castkms_capture_stream *stream)
 {
 	struct castkms_capture_output *capture = &stream->output->capture;
 
+	if (!stream->attached)
+		return;
+
 	mutex_lock(&capture->lock);
 	if (WARN_ON(capture->stream != stream)) {
 		mutex_unlock(&capture->lock);
 		return;
 	}
 	capture->stream = NULL;
+	stream->attached = false;
 	mutex_unlock(&capture->lock);
 }
 
-static void
-castkms_capture_stream_clear_output_edid(struct castkms_capture_stream *stream)
-{
-	if (!stream->output_edid_owned)
-		return;
-
-	stream->output_edid_owned = false;
-	castkms_connector_update_edid(&stream->output->crtc, NULL);
-}
-
-static void castkms_capture_stream_destroy(struct castkms_capture_stream *stream)
+void castkms_capture_stream_destroy(struct castkms_capture_stream *stream)
 {
 	struct castkms_capture_buffer *buffer;
 	unsigned long id;
@@ -370,7 +364,6 @@ static void castkms_capture_stream_destroy(struct castkms_capture_stream *stream
 	xa_destroy(&stream->buffers);
 
 	castkms_capture_stream_detach(stream);
-	castkms_capture_stream_clear_output_edid(stream);
 	kfree(stream);
 }
 
@@ -894,6 +887,42 @@ int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
+struct castkms_capture_stream *
+castkms_capture_stream_create(struct castkms_output *output,
+			      u64 *mode_generation)
+{
+	struct castkms_capture_stream *stream;
+
+	stream = kzalloc_obj(*stream);
+	if (!stream)
+		return ERR_PTR(-ENOMEM);
+
+	stream->output = output;
+	xa_init_flags(&stream->buffers, XA_FLAGS_ALLOC);
+	castkms_capture_stream_snapshot_mode(stream);
+
+	if (mode_generation)
+		*mode_generation = stream->mode_generation;
+
+	return stream;
+}
+
+int castkms_capture_stream_attach(struct castkms_capture_stream *stream)
+{
+	struct castkms_capture_output *capture = &stream->output->capture;
+
+	mutex_lock(&capture->lock);
+	if (capture->stream) {
+		mutex_unlock(&capture->lock);
+		return -EBUSY;
+	}
+	capture->stream = stream;
+	stream->attached = true;
+	mutex_unlock(&capture->lock);
+
+	return 0;
+}
+
 int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 				struct drm_file *file_priv)
 {
@@ -916,39 +945,33 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 		return -ENOENT;
 	output = drm_crtc_to_castkms_output(crtc);
 
-	stream = kzalloc_obj(*stream);
-	if (!stream)
-		return -ENOMEM;
-	stream->output = output;
-	xa_init_flags(&stream->buffers, XA_FLAGS_ALLOC);
+	stream = castkms_capture_stream_create(output, &args->mode_generation);
+	if (IS_ERR(stream))
+		return PTR_ERR(stream);
 
 	mutex_lock(&capture_file->lock);
-	mutex_lock(&output->capture.lock);
-	if (output->capture.stream) {
-		ret = -EBUSY;
-		goto out_unlock_output;
-	}
-
 	ret = xa_alloc(&capture_file->streams, &stream_id, stream,
 		       XA_LIMIT(1, INT_MAX), GFP_KERNEL);
-	if (ret)
-		goto out_unlock_output;
-
-	stream->id = stream_id;
-	castkms_capture_stream_snapshot_mode(stream);
-	output->capture.stream = stream;
-	args->stream_id = stream_id;
-	args->mode_generation = stream->mode_generation;
-
-out_unlock_output:
-	mutex_unlock(&output->capture.lock);
-	mutex_unlock(&capture_file->lock);
 	if (ret) {
-		xa_destroy(&stream->buffers);
-		kfree(stream);
+		mutex_unlock(&capture_file->lock);
+		castkms_capture_stream_destroy(stream);
+		return ret;
+	}
+	stream->id = stream_id;
+	mutex_unlock(&capture_file->lock);
+
+	ret = castkms_capture_stream_attach(stream);
+	if (ret) {
+		mutex_lock(&capture_file->lock);
+		xa_erase(&capture_file->streams, stream->id);
+		mutex_unlock(&capture_file->lock);
+		castkms_capture_stream_destroy(stream);
+		return ret;
 	}
 
-	return ret;
+	args->stream_id = stream_id;
+
+	return 0;
 }
 
 int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
@@ -1002,8 +1025,6 @@ int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
 	}
 
 	ret = castkms_connector_update_edid(&stream->output->crtc, drm_edid);
-	if (!ret)
-		stream->output_edid_owned = drm_edid != NULL;
 
 out_unlock:
 	mutex_unlock(&capture_file->lock);
@@ -1013,19 +1034,85 @@ out_unlock:
 	return ret;
 }
 
+struct castkms_capture_buffer *
+castkms_capture_buffer_create(struct castkms_capture_stream *stream,
+			      struct drm_framebuffer *fb,
+			      struct drm_syncobj *ready_syncobj,
+			      struct drm_syncobj *reuse_syncobj,
+			      u32 sync_mode, u64 mode_generation,
+			      u32 *buffer_id)
+{
+	struct castkms_capture_buffer *buffer;
+	int ret;
+
+	ret = castkms_capture_validate_mode(stream, mode_generation);
+	if (ret)
+		return ERR_PTR(ret);
+	if (stream->num_buffers >= CASTKMS_CAPTURE_MAX_BUFFERS)
+		return ERR_PTR(-ENOSPC);
+	if (!castkms_capture_fb_is_compatible(stream, fb))
+		return ERR_PTR(-EINVAL);
+	if (!castkms_capture_fb_is_local(fb))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	buffer = kzalloc_obj(*buffer);
+	if (!buffer)
+		return ERR_PTR(-ENOMEM);
+
+	init_completion(&buffer->delivery_done);
+	complete_all(&buffer->delivery_done);
+
+	if (ready_syncobj) {
+		buffer->ready_syncobj = ready_syncobj;
+		drm_syncobj_get(ready_syncobj);
+	}
+	if (reuse_syncobj) {
+		buffer->reuse_syncobj = reuse_syncobj;
+		drm_syncobj_get(reuse_syncobj);
+	}
+
+	ret = castkms_output_buffer_init(&buffer->output, fb);
+	if (ret)
+		goto err_destroy;
+
+	ret = castkms_capture_validate_mode(stream, mode_generation);
+	if (ret)
+		goto err_destroy;
+
+	ret = xa_alloc(&stream->buffers, buffer_id, buffer,
+		       XA_LIMIT(1, CASTKMS_CAPTURE_MAX_BUFFERS), GFP_KERNEL);
+	if (ret)
+		goto err_destroy;
+
+	buffer->stream = stream;
+	buffer->id = *buffer_id;
+	buffer->mode_generation = stream->mode_generation;
+	buffer->sync_mode = sync_mode;
+	stream->num_buffers++;
+
+	return buffer;
+
+err_destroy:
+	castkms_capture_buffer_destroy(buffer);
+	return ERR_PTR(ret);
+}
+
 int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 					  struct drm_file *file_priv)
 {
 	struct drm_castkms_capture_register_buffer *args = data;
 	struct castkms_capture_file *capture_file = file_priv->driver_priv;
-	struct castkms_capture_buffer *buffer = NULL;
+	struct castkms_capture_buffer *buffer;
 	struct castkms_capture_stream *stream;
+	struct drm_syncobj *ready_syncobj = NULL;
+	struct drm_syncobj *reuse_syncobj = NULL;
 	struct drm_framebuffer *fb;
 	u32 buffer_id;
 	int ret;
 
 	args->buffer_id = 0;
-	if (args->flags != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC)
+	if (args->flags != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC &&
+	    args->flags != DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC)
 		return -EINVAL;
 	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC &&
 	    (args->ready_syncobj_handle || args->reuse_syncobj_handle))
@@ -1046,86 +1133,78 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 		goto out_unlock;
 	}
 
-	ret = castkms_capture_validate_mode(stream, args->mode_generation);
-	if (ret)
-		goto out_unlock;
-	if (stream->num_buffers >= CASTKMS_CAPTURE_MAX_BUFFERS) {
-		ret = -ENOSPC;
-		goto out_unlock;
-	}
-
 	fb = drm_framebuffer_lookup(dev, file_priv, args->fb_id);
 	if (!fb) {
 		ret = -ENOENT;
 		goto out_unlock;
 	}
-	if (!castkms_capture_fb_is_compatible(stream, fb)) {
-		ret = -EINVAL;
-		goto out_put_framebuffer;
-	}
-	if (!castkms_capture_fb_is_local(fb)) {
-		ret = -EOPNOTSUPP;
-		goto out_put_framebuffer;
-	}
-
-	buffer = kzalloc_obj(*buffer);
-	if (!buffer) {
-		ret = -ENOMEM;
-		goto out_put_framebuffer;
-	}
-	init_completion(&buffer->delivery_done);
-	complete_all(&buffer->delivery_done);
 
 	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC) {
-		buffer->ready_syncobj =
-			drm_syncobj_find(file_priv, args->ready_syncobj_handle);
-		if (!buffer->ready_syncobj) {
+		ready_syncobj = drm_syncobj_find(file_priv,
+						 args->ready_syncobj_handle);
+		if (!ready_syncobj) {
 			ret = -ENOENT;
-			goto out_destroy_buffer;
+			goto out_put_fb;
 		}
-		buffer->reuse_syncobj =
-			drm_syncobj_find(file_priv, args->reuse_syncobj_handle);
-		if (!buffer->reuse_syncobj) {
+		reuse_syncobj = drm_syncobj_find(file_priv,
+						 args->reuse_syncobj_handle);
+		if (!reuse_syncobj) {
 			ret = -ENOENT;
-			goto out_destroy_buffer;
+			goto out_put_syncobj;
 		}
 		if (!castkms_capture_syncobjs_are_available(capture_file,
-							    buffer->ready_syncobj,
-							    buffer->reuse_syncobj)) {
+							    ready_syncobj,
+							    reuse_syncobj)) {
 			ret = -EINVAL;
-			goto out_destroy_buffer;
+			goto out_put_syncobj;
 		}
 	}
 
-	ret = castkms_output_buffer_init(&buffer->output, fb);
-	if (ret)
-		goto out_destroy_buffer;
+	buffer = castkms_capture_buffer_create(stream, fb, ready_syncobj,
+					       reuse_syncobj, args->flags,
+					       args->mode_generation,
+					       &buffer_id);
+	if (IS_ERR(buffer)) {
+		ret = PTR_ERR(buffer);
+		goto out_put_syncobj;
+	}
 
-	ret = castkms_capture_validate_mode(stream, args->mode_generation);
-	if (ret)
-		goto out_destroy_buffer;
-
-	ret = xa_alloc(&stream->buffers, &buffer_id, buffer,
-		       XA_LIMIT(1, CASTKMS_CAPTURE_MAX_BUFFERS), GFP_KERNEL);
-	if (ret)
-		goto out_destroy_buffer;
-
-	buffer->stream = stream;
-	buffer->id = buffer_id;
-	buffer->mode_generation = stream->mode_generation;
-	buffer->sync_mode = args->flags;
-	stream->num_buffers++;
 	args->buffer_id = buffer_id;
 	ret = 0;
-	goto out_put_framebuffer;
 
-out_destroy_buffer:
-	castkms_capture_buffer_destroy(buffer);
-out_put_framebuffer:
+out_put_syncobj:
+	if (reuse_syncobj)
+		drm_syncobj_put(reuse_syncobj);
+	if (ready_syncobj)
+		drm_syncobj_put(ready_syncobj);
+out_put_fb:
 	drm_framebuffer_put(fb);
 out_unlock:
 	mutex_unlock(&capture_file->lock);
 	return ret;
+}
+
+int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
+				  struct castkms_capture_buffer *buffer)
+{
+	struct castkms_capture_output *capture = &stream->output->capture;
+	unsigned long flags;
+	bool busy;
+
+	spin_lock_irqsave(&stream->output->lock, flags);
+	spin_lock(&capture->state_lock);
+	busy = buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE;
+	spin_unlock(&capture->state_lock);
+	spin_unlock_irqrestore(&stream->output->lock, flags);
+
+	if (busy)
+		return -EBUSY;
+
+	xa_erase(&stream->buffers, buffer->id);
+	stream->num_buffers--;
+	castkms_capture_buffer_destroy(buffer);
+
+	return 0;
 }
 
 int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
@@ -1134,10 +1213,8 @@ int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
 	struct drm_castkms_capture_unregister_buffer *args = data;
 	struct castkms_capture_file *capture_file = file_priv->driver_priv;
 	struct castkms_capture_buffer *buffer;
-	struct castkms_capture_output *capture;
 	struct castkms_capture_stream *stream;
-	unsigned long flags;
-	bool busy;
+	int ret;
 
 	if (args->flags || args->reserved)
 		return -EINVAL;
@@ -1155,35 +1232,21 @@ int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
 		return -ENOENT;
 	}
 
-	capture = &stream->output->capture;
-	spin_lock_irqsave(&stream->output->lock, flags);
-	spin_lock(&capture->state_lock);
-	busy = buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE;
-	spin_unlock(&capture->state_lock);
-	spin_unlock_irqrestore(&stream->output->lock, flags);
-	if (busy) {
-		mutex_unlock(&capture_file->lock);
-		return -EBUSY;
-	}
-
-	xa_erase(&stream->buffers, buffer->id);
-	stream->num_buffers--;
-	castkms_capture_buffer_destroy(buffer);
+	ret = castkms_capture_buffer_remove(stream, buffer);
 	mutex_unlock(&capture_file->lock);
 
-	return 0;
+	return ret;
 }
 
-int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
-				       struct drm_file *file_priv)
+static int
+castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
+			      struct castkms_capture_pending_event *pending,
+			      u64 user_data, u64 ready_point, u64 reuse_point)
 {
-	struct drm_castkms_capture_queue_buffer *args = data;
-	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_stream *stream = buffer->stream;
+	struct castkms_capture_output *capture = &stream->output->capture;
+	struct drm_device *dev = stream->output->crtc.dev;
 	struct castkms_capture_completion failed_completion = {};
-	struct castkms_capture_pending_event *pending;
-	struct castkms_capture_buffer *buffer;
-	struct castkms_capture_output *capture;
-	struct castkms_capture_stream *stream;
 	struct dma_fence_chain *ready_chain = NULL;
 	struct dma_fence *completion_fence = NULL;
 	struct dma_fence *dependency = NULL;
@@ -1192,73 +1255,13 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	bool remove_callback = false;
 	int ret;
 
-	if (args->reserved ||
-	    (args->flags != DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
-	     args->flags != DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC))
-		return -EINVAL;
-	if (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
-	    (args->ready_point || args->reuse_point))
-		return -EINVAL;
-
-	mutex_lock(&capture_file->lock);
-	stream = xa_load(&capture_file->streams, args->stream_id);
-	if (!stream) {
-		ret = -ENOENT;
-		goto out_unlock;
-	}
-	if (drm_crtc_find(dev, file_priv, stream->output->crtc.base.id) !=
-	    &stream->output->crtc) {
-		ret = -ENOENT;
-		goto out_unlock;
-	}
-
-	ret = castkms_capture_validate_mode(stream, args->mode_generation);
-	if (ret)
-		goto out_unlock;
-
-	buffer = xa_load(&stream->buffers, args->buffer_id);
-	if (!buffer) {
-		ret = -ENOENT;
-		goto out_unlock;
-	}
-	if ((args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
-	     buffer->sync_mode != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC) ||
-	    (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC &&
-	     buffer->sync_mode != DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC)) {
-		ret = -EINVAL;
-		goto out_unlock;
-	}
-
-	capture = &stream->output->capture;
-	spin_lock_irqsave(&capture->state_lock, flags);
-	if (buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE ||
-	    capture->queued_buffer)
-		ret = -EBUSY;
-	else
-		ret = 0;
-	spin_unlock_irqrestore(&capture->state_lock, flags);
-	if (ret)
-		goto out_unlock;
-
-	pending = kzalloc_obj(*pending);
-	if (!pending) {
-		ret = -ENOMEM;
-		goto out_unlock;
-	}
-	pending->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_FRAME;
-	pending->event.base.length = sizeof(pending->event);
-	ret = drm_event_reserve_init(dev, file_priv, &pending->pending,
-				     &pending->event.base);
-	if (ret)
-		goto out_free_event;
-
-	if (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC)
+	if (buffer->sync_mode == DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC)
 		ret = castkms_capture_prepare_implicit_sync(buffer, &dependency,
 							    &completion_fence);
 	else
 		ret = castkms_capture_prepare_explicit_sync(buffer,
-							    args->ready_point,
-							    args->reuse_point,
+							    ready_point,
+							    reuse_point,
 							    &dependency,
 							    &completion_fence,
 							    &ready_chain);
@@ -1284,12 +1287,12 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 
 	if (ready_chain) {
 		drm_syncobj_add_point(buffer->ready_syncobj, ready_chain,
-				      ready_fence, args->ready_point);
+				      ready_fence, ready_point);
 		ready_chain = NULL;
 		dma_fence_put(ready_fence);
 		ready_fence = NULL;
-		buffer->last_ready_point = args->ready_point;
-		buffer->last_reuse_point = args->reuse_point;
+		buffer->last_ready_point = ready_point;
+		buffer->last_reuse_point = reuse_point;
 	}
 
 	/*
@@ -1302,7 +1305,7 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	buffer->pending_event = pending;
 	buffer->reuse_fence = dependency;
 	buffer->completion_fence = completion_fence;
-	buffer->user_data = args->user_data;
+	buffer->user_data = user_data;
 	buffer->dropped_frames = 0;
 	reinit_completion(&buffer->delivery_done);
 	buffer->reuse_callback_armed = !!dependency;
@@ -1367,7 +1370,7 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	spin_unlock(&capture->state_lock);
 	spin_unlock_irqrestore(&stream->output->lock, flags);
 	if (!ret)
-		goto out_unlock;
+		return 0;
 
 	if (remove_callback)
 		dma_fence_remove_callback(failed_completion.dependency,
@@ -1378,7 +1381,7 @@ out_put_composer:
 	if (failed_completion.event) {
 		castkms_capture_cancel_completion(stream->output,
 						  &failed_completion);
-		goto out_unlock;
+		return ret;
 	}
 out_signal_fence:
 	dma_fence_chain_free(ready_chain);
@@ -1387,9 +1390,87 @@ out_signal_fence:
 	dma_fence_put(dependency);
 out_cancel_event:
 	drm_event_cancel_free(dev, &pending->pending);
-	goto out_unlock;
-out_free_event:
-	kfree(pending);
+	return ret;
+}
+
+int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
+				       struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_queue_buffer *args = data;
+	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_pending_event *pending;
+	struct castkms_capture_buffer *buffer;
+	struct castkms_capture_output *capture;
+	struct castkms_capture_stream *stream;
+	unsigned long flags;
+	int ret;
+
+	if (args->reserved ||
+	    (args->flags != DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
+	     args->flags != DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC))
+		return -EINVAL;
+	if (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
+	    (args->ready_point || args->reuse_point))
+		return -EINVAL;
+
+	mutex_lock(&capture_file->lock);
+	stream = xa_load(&capture_file->streams, args->stream_id);
+	if (!stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	if (drm_crtc_find(dev, file_priv, stream->output->crtc.base.id) !=
+	    &stream->output->crtc) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	ret = castkms_capture_validate_mode(stream, args->mode_generation);
+	if (ret)
+		goto out_unlock;
+
+	buffer = xa_load(&stream->buffers, args->buffer_id);
+	if (!buffer) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	if ((args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
+	     buffer->sync_mode != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC) ||
+	    (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC &&
+	     buffer->sync_mode != DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	capture = &stream->output->capture;
+	spin_lock_irqsave(&capture->state_lock, flags);
+	if (buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE ||
+	    capture->queued_buffer)
+		ret = -EBUSY;
+	else
+		ret = 0;
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+	if (ret)
+		goto out_unlock;
+
+	pending = kzalloc_obj(*pending);
+	if (!pending) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+	pending->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_FRAME;
+	pending->event.base.length = sizeof(pending->event);
+	ret = drm_event_reserve_init(dev, file_priv, &pending->pending,
+				     &pending->event.base);
+	if (ret) {
+		kfree(pending);
+		goto out_unlock;
+	}
+
+	ret = castkms_capture_buffer_submit(buffer, pending, args->user_data,
+					    args->ready_point,
+					    args->reuse_point);
+
 out_unlock:
 	mutex_unlock(&capture_file->lock);
 	return ret;

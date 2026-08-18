@@ -10,8 +10,10 @@
 struct drm_crtc_state;
 struct drm_device;
 struct drm_edid;
+struct drm_framebuffer;
 struct drm_pending_event;
 struct drm_file;
+struct drm_syncobj;
 struct dma_fence;
 struct castkms_capture_buffer;
 struct castkms_capture_stream;
@@ -99,6 +101,22 @@ castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
+
+struct castkms_capture_stream *
+castkms_capture_stream_create(struct castkms_output *output,
+			      u64 *mode_generation);
+int castkms_capture_stream_attach(struct castkms_capture_stream *stream);
+void castkms_capture_stream_destroy(struct castkms_capture_stream *stream);
+
+struct castkms_capture_buffer *
+castkms_capture_buffer_create(struct castkms_capture_stream *stream,
+			      struct drm_framebuffer *fb,
+			      struct drm_syncobj *ready_syncobj,
+			      struct drm_syncobj *reuse_syncobj,
+			      u32 sync_mode, u64 mode_generation,
+			      u32 *buffer_id);
+int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
+				  struct castkms_capture_buffer *buffer);
 
 int castkms_capture_edid_parse(const void *raw, u32 size,
 			       const struct drm_edid **drm_edid);
