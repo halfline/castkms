@@ -185,8 +185,14 @@ start()
 		-pidfile "$PID_FILE" \
 		-D "$QEMU_LOG"
 
-	printf 'Started VM %s (pid %s, SSH port %s)\n' \
-		"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT"
+	if test -n "${CASTKMS_VM_VNC_DISPLAY:-}"; then
+		printf 'Started VM %s (pid %s, SSH port %s, VNC 127.0.0.1:%s)\n' \
+			"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT" \
+			"$((5900 + CASTKMS_VM_VNC_DISPLAY))"
+	else
+		printf 'Started VM %s (pid %s, SSH port %s)\n' \
+			"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT"
+	fi
 }
 
 wait_for_ssh()
