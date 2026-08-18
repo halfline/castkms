@@ -8,6 +8,7 @@ CPPFLAGS += -I../include/uapi
 .PHONY: all clean
 
 all: castkms-capture-test
+	$(MAKE) -C pw-castkms
 
 castkms-capture-test: castkms-capture-test.c \
 		../include/uapi/drm/castkms_drm.h
@@ -15,3 +16,4 @@ castkms-capture-test: castkms-capture-test.c \
 
 clean:
 	$(RM) castkms-capture-test
+	$(MAKE) -C pw-castkms clean
