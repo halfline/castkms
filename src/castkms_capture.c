@@ -15,6 +15,7 @@
 #include <linux/xarray.h>
 
 #include <drm/castkms_drm.h>
+#include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
@@ -106,6 +107,8 @@ static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32);
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
 static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24);
+static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24);
+static_assert(sizeof(struct drm_castkms_capture_detach_monitor) == 16);
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80);
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76);
 static const char *
@@ -687,6 +690,7 @@ void castkms_capture_file_close(struct drm_device *dev,
 	}
 	xa_destroy(&capture_file->streams);
 	mutex_unlock(&capture_file->lock);
+	castkms_connectors_detach_file(dev, file_priv);
 	mutex_destroy(&capture_file->lock);
 
 	kfree(capture_file);
@@ -1024,12 +1028,69 @@ int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
 		goto out_unlock;
 	}
 
+	ret = castkms_connector_require_attached(&stream->output->crtc,
+						 file_priv);
+	if (ret)
+		goto out_unlock;
+
 	ret = castkms_connector_update_edid(&stream->output->crtc, drm_edid);
 
 out_unlock:
 	mutex_unlock(&capture_file->lock);
 	if (drm_edid)
 		drm_edid_free(drm_edid);
+
+	return ret;
+}
+
+int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_attach_monitor *args = data;
+	struct drm_connector *connector;
+	const struct drm_edid *drm_edid = NULL;
+	int ret;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	ret = castkms_capture_edid_from_user(args->edid_size, args->edid_ptr,
+					     &drm_edid);
+	if (ret)
+		return ret;
+
+	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
+	if (!connector) {
+		ret = -ENOENT;
+		goto out_edid;
+	}
+
+	ret = castkms_connector_attach_monitor(connector, file_priv, drm_edid);
+	drm_connector_put(connector);
+
+out_edid:
+	if (drm_edid)
+		drm_edid_free(drm_edid);
+
+	return ret;
+}
+
+int castkms_capture_detach_monitor_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_detach_monitor *args = data;
+	struct drm_connector *connector;
+	int ret;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
+	if (!connector)
+		return -ENOENT;
+
+	ret = castkms_connector_detach_monitor(connector, file_priv);
+	drm_connector_put(connector);
 
 	return ret;
 }

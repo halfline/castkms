@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define DRM_CASTKMS_CAPTURE_UAPI_MAJOR	0
-#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	6
+#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	8
 
 /**
  * DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE:
@@ -242,11 +242,13 @@ struct drm_castkms_capture_queue_buffer {
  * @reserved: must be zero
  * @edid_ptr: userspace pointer to @edid_size bytes, or zero when clearing
  *
- * The stream owner may push a complete EDID at any time. The driver copies
- * and validates the blob, updates the CRTC's display connector, and emits a
- * standard KMS hotplug so compositors reread identity and modes. Call again
- * when the sink identity changes. A zero-length blob, stream stop, or file
- * close clears the published EDID and hotplugs again.
+ * The stream owner may push a complete EDID while this file owns an attached
+ * monitor on the captured CRTC. The driver copies and validates the blob,
+ * updates the connector, and emits a standard KMS hotplug so compositors
+ * reread identity and modes. Call again when the sink identity changes. A
+ * zero-length blob clears the published EDID without detaching. Stream stop
+ * leaves the attachment and EDID in place. DETACH_MONITOR or file close
+ * unplugs the monitor and clears the EDID.
  *
  * This ioctl is fire-and-forget. Capture completion events do not report
  * EDID changes; the client is the source of truth and already knows what it
@@ -254,7 +256,8 @@ struct drm_castkms_capture_queue_buffer {
  *
  * When setting, @edid_size must be a non-zero multiple of 128 and at most
  * 512. Invalid EDIDs return -EINVAL. A stream that is not owned by this file
- * returns -ENOENT.
+ * returns -ENOENT. A connector that is not attached returns -ENOTCONN.
+ * A connector attached by another file returns -EACCES.
  */
 struct drm_castkms_capture_set_output_edid {
 	__u32 stream_id;
@@ -262,6 +265,49 @@ struct drm_castkms_capture_set_output_edid {
 	__u32 edid_size;
 	__u32 reserved;
 	__u64 edid_ptr;
+};
+
+/**
+ * struct drm_castkms_capture_attach_monitor - plug a sink into a connector
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @edid_size: EDID blob size in bytes; zero attaches without an EDID
+ * @reserved: must be zero
+ * @edid_ptr: userspace pointer to @edid_size bytes, or zero when no EDID
+ *
+ * The default device publishes a fixed set of disconnected virtual ports at
+ * load. This ioctl is the plug-in: the connector becomes connected, the
+ * optional EDID is published, and a standard KMS hotplug is emitted. The
+ * calling file owns the attachment until DETACH_MONITOR or close.
+ *
+ * When setting an EDID, @edid_size must be a non-zero multiple of 128 and
+ * at most 512. Invalid EDIDs return -EINVAL. A writeback or unknown
+ * connector returns -ENOENT. A connector already attached by any file
+ * returns -EBUSY.
+ */
+struct drm_castkms_capture_attach_monitor {
+	__u32 connector_id;
+	__u32 flags;
+	__u32 edid_size;
+	__u32 reserved;
+	__u64 edid_ptr;
+};
+
+/**
+ * struct drm_castkms_capture_detach_monitor - unplug a sink from a connector
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @reserved: must be zero
+ *
+ * Clears the published EDID, marks the connector disconnected, and emits a
+ * standard KMS hotplug. Only the attaching file may detach. A connector
+ * that is not attached returns -ENOTCONN. A connector attached by another
+ * file returns -EACCES.
+ */
+struct drm_castkms_capture_detach_monitor {
+	__u32 connector_id;
+	__u32 flags;
+	__u64 reserved;
 };
 
 /**
@@ -331,6 +377,8 @@ struct drm_event_castkms_capture_frame {
 #define DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER	0x04
 #define DRM_CASTKMS_CAPTURE_QUEUE_BUFFER	0x05
 #define DRM_CASTKMS_CAPTURE_SET_OUTPUT_EDID	0x06
+#define DRM_CASTKMS_CAPTURE_ATTACH_MONITOR	0x07
+#define DRM_CASTKMS_CAPTURE_DETACH_MONITOR	0x08
 
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
@@ -353,6 +401,12 @@ struct drm_event_castkms_capture_frame {
 #define DRM_IOCTL_CASTKMS_CAPTURE_SET_OUTPUT_EDID \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_SET_OUTPUT_EDID, \
 		struct drm_castkms_capture_set_output_edid)
+#define DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_ATTACH_MONITOR, \
+		struct drm_castkms_capture_attach_monitor)
+#define DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_DETACH_MONITOR, \
+		struct drm_castkms_capture_detach_monitor)
 
 #if defined(__cplusplus)
 }

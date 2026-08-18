@@ -200,7 +200,8 @@ struct castkms_config *castkms_config_create(const char *dev_name);
  *
  * Returns:
  * The default castkms_config or an error. Call castkms_config_destroy() to free the
- * returned configuration.
+ * returned configuration. Display connectors start disconnected; userspace
+ * attaches a monitor through the capture protocol.
  */
 struct castkms_config *castkms_config_default_create(bool enable_cursor,
 					       bool enable_writeback,

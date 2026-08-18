@@ -7,6 +7,7 @@
 
 struct drm_crtc;
 struct drm_edid;
+struct drm_file;
 
 #define drm_connector_to_castkms_connector(target) \
 	container_of(target, struct castkms_connector, base)
@@ -15,9 +16,13 @@ struct drm_edid;
  * struct castkms_connector - CASTKMS custom type wrapping around the DRM connector
  *
  * @base: Base DRM connector
+ * @attach_file: File that owns the current monitor attachment, or NULL
+ * @monitor_attached: Whether ATTACH_MONITOR has plugged a sink into this port
  */
 struct castkms_connector {
 	struct drm_connector base;
+	struct drm_file *attach_file;
+	bool monitor_attached;
 };
 
 /**
@@ -44,5 +49,14 @@ void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev);
  */
 int castkms_connector_update_edid(struct drm_crtc *crtc,
 				  const struct drm_edid *drm_edid);
+int castkms_connector_attach_monitor(struct drm_connector *connector,
+				     struct drm_file *file,
+				     const struct drm_edid *drm_edid);
+int castkms_connector_detach_monitor(struct drm_connector *connector,
+				     struct drm_file *file);
+int castkms_connector_require_attached(struct drm_crtc *crtc,
+				       struct drm_file *file);
+void castkms_connectors_detach_file(struct drm_device *dev,
+				    struct drm_file *file);
 
 #endif /* _CASTKMS_CONNECTOR_H_ */

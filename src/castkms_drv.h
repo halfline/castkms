@@ -4,6 +4,8 @@
 #define _CASTKMS_DRV_H_
 
 #include <linux/hrtimer.h>
+#include <linux/mutex.h>
+#include <linux/workqueue.h>
 
 #include <drm/drm.h>
 #include <drm/drm_colorop.h>
@@ -292,11 +294,13 @@ struct castkms_config_plane;
  * @config: Configuration used in this CASTKMS device. Runtime callbacks must
  *          hold a drm_dev_enter() reference while accessing it because its
  *          configfs owner may release it after unplug.
+ * @attach_lock: Serializes monitor attach/detach ownership on connectors.
  */
 struct castkms_device {
 	struct drm_device drm;
 	struct faux_device *faux_dev;
 	struct castkms_config *config;
+	struct mutex attach_lock;
 };
 
 /*

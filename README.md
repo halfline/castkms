@@ -24,7 +24,7 @@ make KDIR=/path/to/kernel/build W=1
 
 ## Experimental capture protocol
 
-The experimental version 0.6 capture interface provides a per-CRTC capability
+The experimental version 0.7 capture interface provides a per-CRTC capability
 query, exclusive stream ownership, persistent destination-buffer registration,
 and bounded frame delivery. It accepts up to eight linear `XRGB8888`
 framebuffers per stream, keeps at most one capture in flight, and can queue the
@@ -43,12 +43,16 @@ objects created by castkms and may be exported as DMA-BUFs for consumers. Each
 explicit buffer uses a dedicated ready/reuse syncobj pair retained at
 registration.
 
-The stream owner may push a complete EDID for the captured output. The driver
-validates the blob, publishes it on the CRTC's display connector, and emits a
-standard KMS hotplug so compositors reread the name and modes. Call the same
-ioctl again when the sink identity changes. A zero-length blob, stream stop,
-or file close clears the published EDID. Capture events do not report EDID
-changes; the client already knows what it wrote.
+The default device publishes a fixed number of disconnected virtual connectors
+at load (`max_outputs`, default 1). Loading the module does not create a
+monitor. Userspace plugs a sink in with `ATTACH_MONITOR` (optional EDID) and
+unplugs it with `DETACH_MONITOR` or by closing the DRM file. The stream owner
+may then push a complete EDID for an attached output. The driver validates the
+blob, publishes it on the connector, and emits a standard KMS hotplug so
+compositors reread the name and modes. Call the same ioctl again when the sink
+identity changes. A zero-length blob clears the published EDID without
+unplugging. Stream stop leaves the attachment in place. Capture events do not
+report EDID changes; the client already knows what it wrote.
 
 Starting a stream observes a CRTC without activating or modesetting it.
 After a mode change, stop that generation-bound stream and start a new one
@@ -77,8 +81,9 @@ that cannot load unsigned modules:
 ./scripts/vm/castkms-vm test
 ```
 
-A separate desktop instance installs GNOME/Mutter and checks that the virtual
-connector is visible to the compositor:
+A separate desktop instance installs GNOME/Mutter, attaches a virtual
+monitor through the capture protocol, and checks that the connector is
+visible to the compositor:
 
 ```sh
 ./scripts/vm/castkms-vm desktop-provision

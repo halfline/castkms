@@ -11,6 +11,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/device/faux.h>
 #include <linux/dma-mapping.h>
 
@@ -18,6 +19,7 @@
 #include <drm/drm_gem.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_connector.h>
 #include <drm/drm_colorop.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fbdev_shmem.h>
@@ -86,6 +88,10 @@ static const struct drm_ioctl_desc castkms_ioctls[] = {
 			  castkms_capture_queue_buffer_ioctl, DRM_ROOT_ONLY),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_SET_OUTPUT_EDID,
 			  castkms_capture_set_output_edid_ioctl, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_ATTACH_MONITOR,
+			  castkms_capture_attach_monitor_ioctl, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_DETACH_MONITOR,
+			  castkms_capture_detach_monitor_ioctl, DRM_ROOT_ONLY),
 };
 
 static void castkms_atomic_commit_tail(struct drm_atomic_state *old_state)
@@ -222,6 +228,7 @@ int castkms_create(struct castkms_config *config)
 	castkms_device->faux_dev = fdev;
 	castkms_device->config = config;
 	config->dev = castkms_device;
+	mutex_init(&castkms_device->attach_lock);
 
 	ret = dma_coerce_mask_and_coherent(castkms_device->drm.dev,
 					   DMA_BIT_MASK(64));

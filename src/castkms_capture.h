@@ -80,6 +80,10 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 				       struct drm_file *file_priv);
 int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
 					  struct drm_file *file_priv);
+int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file_priv);
+int castkms_capture_detach_monitor_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file_priv);
 
 int castkms_capture_file_open(struct drm_device *dev,
 			      struct drm_file *file_priv);

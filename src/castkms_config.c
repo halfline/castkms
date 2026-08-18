@@ -680,7 +680,7 @@ struct castkms_config_connector *castkms_config_create_connector(struct castkms_
 		return ERR_PTR(-ENOMEM);
 
 	connector_cfg->config = config;
-	connector_cfg->status = connector_status_connected;
+	connector_cfg->status = connector_status_disconnected;
 	xa_init_flags(&connector_cfg->possible_encoders, XA_FLAGS_ALLOC);
 
 	list_add_tail(&connector_cfg->link, &config->connectors);
