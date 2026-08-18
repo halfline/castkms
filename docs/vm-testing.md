@@ -38,9 +38,9 @@ into that kernel. Re-running it is safe and idempotent.
 7. verifies syncobj and timeline-syncobj DRM capabilities, drops DRM master,
    performs the capture format query's count and data calls, requires linear
    `XRGB8888`, and verifies exclusive stream ownership; publishes a valid
-   output EDID onto the display connector, rejects invalid blobs and foreign
-   stream owners, and clears that EDID on an explicit clear, stream stop, and
-   file close; registers mapped
+   output EDID onto the display connector, rejects invalid blobs, foreign
+   stream owners, and EDID updates before attach; keeps that EDID across
+   stream stop; and clears it on detach and file close; registers mapped
    buffers in implicit and explicit synchronization modes; rejects stale
    generations, wrong dimensions, invalid timeline points, shared syncobj
    ownership, and foreign ownership; and verifies buffer cleanup on unregister,
@@ -124,17 +124,25 @@ same `CASTKMS_VM_*` variables used by the headless instance.
 `desktop-provision` runs the ordinary kernel/toolchain install, then adds
 GNOME Shell, Mutter, GDM, Mesa GBM/software renderers, enables the graphical
 target, and configures passwordless GDM autologin for the `castkms` user.
+It then syncs the tree, builds the module and capture tool, and starts a
+guest systemd unit that holds `ATTACH_MONITOR` so Settings sees
+`VirtualScreen` without a manual attach. A later guest reboot restarts that
+unit when `castkms.ko` is still on disk.
+
+`desktop-start` and `desktop-attach` perform the same sync/build/attach
+step on an already-provisioned desktop guest.
 
 `desktop-test` then:
 
-1. builds and loads `castkms` with a default virtual connector and no extra
-   planes or writeback;
+1. builds and loads `castkms` with a default disconnected virtual connector
+   and no extra planes or writeback;
 2. requires the card's udev properties not to carry `mutter-device-ignore`
    (Mutter's stock rules match only `platform-vkms` and `/devices/faux/vkms/`);
 3. restarts GDM so the session enumerates the new KMS device;
 4. waits for `org.gnome.Shell` and `org.gnome.Mutter.DisplayConfig`;
-5. requires `GetCurrentState` to list the Virtual connector reported by
-   `modetest`.
+5. requires `GetCurrentState` not to list the Virtual connector until
+   `ATTACH_MONITOR`, then attaches a monitor and requires the connector to
+   appear.
 
 Results are copied to `~/.cache/castkms-vm/results/desktop/`. Use
 `./scripts/vm/castkms-vm desktop-shell` and a VNC client on port `5909` to
@@ -142,6 +150,8 @@ inspect GNOME Settings by hand.
 
 ```sh
 ./scripts/vm/castkms-vm desktop-status
+./scripts/vm/castkms-vm desktop-start
+./scripts/vm/castkms-vm desktop-attach
 ./scripts/vm/castkms-vm desktop-shell
 ./scripts/vm/castkms-vm desktop-stop
 ```

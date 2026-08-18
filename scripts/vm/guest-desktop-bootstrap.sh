@@ -38,6 +38,28 @@ sudo systemctl enable gdm.service
 sudo systemctl disable --now gnome-initial-setup-first-login.service \
 	2>/dev/null || true
 
+# The unit is refreshed again after sync; enable it now so a later reboot
+# re-attaches once the module and capture tool exist on disk.
+repo_dir=/home/"$ssh_user"/castkms
+if test -f "$repo_dir/scripts/vm/castkms-attach.service" &&
+	test -x "$repo_dir/scripts/vm/guest-attach-monitor.sh"; then
+	sudo install -m 0755 "$repo_dir/scripts/vm/guest-attach-monitor.sh" \
+		/usr/local/libexec/castkms-attach-monitor
+	if test -x "$repo_dir/tools/castkms-capture-test"; then
+		sudo install -m 0755 "$repo_dir/tools/castkms-capture-test" \
+			/usr/local/libexec/castkms-capture-test
+	fi
+	if test -f "$repo_dir/castkms.ko"; then
+		sudo mkdir -p /usr/local/lib/castkms
+		sudo install -m 0644 "$repo_dir/castkms.ko" \
+			/usr/local/lib/castkms/castkms.ko
+	fi
+	sudo install -m 0644 "$repo_dir/scripts/vm/castkms-attach.service" \
+		/etc/systemd/system/castkms-attach.service
+	sudo systemctl daemon-reload
+	sudo systemctl enable castkms-attach.service
+fi
+
 printf 'desktop_user=%s\n' "$ssh_user"
 printf 'graphical_target=%s\n' "$(systemctl get-default)"
 printf 'gdm_enabled=%s\n' "$(systemctl is-enabled gdm.service)"

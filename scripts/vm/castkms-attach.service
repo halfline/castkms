@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+[Unit]
+Description=Attach a castkms virtual monitor
+After=systemd-udevd.service
+ConditionPathExists=/usr/local/lib/castkms/castkms.ko
+ConditionPathExists=/usr/local/libexec/castkms-capture-test
+
+[Service]
+Type=simple
+# System units cannot insmod or exec files labeled user_home_t.
+SELinuxContext=system_u:system_r:unconfined_service_t:s0
+Environment=PATH=/usr/sbin:/usr/bin
+Environment=CASTKMS_KO=/usr/local/lib/castkms/castkms.ko
+Environment=CASTKMS_CAPTURE_TEST=/usr/local/libexec/castkms-capture-test
+ExecStart=/usr/local/libexec/castkms-attach-monitor /home/castkms/castkms
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical.target

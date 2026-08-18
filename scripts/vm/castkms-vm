@@ -86,9 +86,11 @@ Commands:
   wait        Wait until the guest accepts SSH connections
   provision   Start the VM, install the pinned kernel/toolchain, and reboot it
   desktop-provision   Provision a separate desktop instance with GNOME/Mutter
+  desktop-start       Start the desktop instance and attach a virtual monitor
+  desktop-attach      Sync, build, and attach a virtual monitor
   sync        Mirror the current source tree into the guest
   test        Sync, build, load, and smoke-test castkms in the guest
-  desktop-test        Sync, load castkms, and check Mutter can see the connector
+  desktop-test        Sync, load castkms, attach a monitor, and check Mutter
   shell               Open an interactive shell in the guest
   desktop-shell       Open a shell on the desktop instance
   status              Show VM and guest-kernel status
@@ -312,6 +314,25 @@ provision_desktop()
 	ssh_guest sudo systemctl reboot || true
 	wait_for_ssh_disconnect
 	wait_for_ssh
+	ensure_desktop_attach
+	printf 'Desktop guest is ready (VNC 127.0.0.1:%s)\n' \
+		"$((5900 + ${CASTKMS_VM_VNC_DISPLAY:-9}))"
+}
+
+ensure_desktop_attach()
+{
+	vm_running || die 'desktop VM is not running; run desktop-provision first'
+	wait_for_ssh
+	sync_source
+	ssh_guest bash "$GUEST_REPO/scripts/vm/guest-desktop-runtime.sh" \
+		"$GUEST_REPO"
+}
+
+start_desktop()
+{
+	apply_desktop_defaults
+	start
+	ensure_desktop_attach
 	printf 'Desktop guest is ready (VNC 127.0.0.1:%s)\n' \
 		"$((5900 + ${CASTKMS_VM_VNC_DISPLAY:-9}))"
 }
@@ -451,6 +472,11 @@ case "$command" in
 	wait) wait_for_ssh ;;
 	provision) provision ;;
 	desktop-provision) provision_desktop ;;
+	desktop-start) start_desktop ;;
+	desktop-attach)
+		apply_desktop_defaults
+		ensure_desktop_attach
+		;;
 	sync) sync_source ;;
 	test) run_tests ;;
 	desktop-test) run_desktop_tests ;;
