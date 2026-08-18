@@ -218,6 +218,62 @@ static int capture_stop(int fd, uint32_t stream_id)
 	return 0;
 }
 
+static int read_edid_file(const char *path, uint8_t **out, uint32_t *out_size)
+{
+	FILE *fp;
+	uint8_t *data;
+	long size;
+
+	fp = fopen(path, "rb");
+	if (!fp) {
+		perror(path);
+		return -1;
+	}
+	if (fseek(fp, 0, SEEK_END) || (size = ftell(fp)) < 0) {
+		perror(path);
+		fclose(fp);
+		return -1;
+	}
+	rewind(fp);
+	if (!size || size > 512 || size % PW_EDID_BLOCK) {
+		fprintf(stderr,
+			"%s: EDID must be a 128-byte multiple up to 512 bytes\n",
+			path);
+		fclose(fp);
+		return -1;
+	}
+	data = malloc((size_t)size);
+	if (!data) {
+		fclose(fp);
+		return -1;
+	}
+	if (fread(data, 1, (size_t)size, fp) != (size_t)size) {
+		fprintf(stderr, "%s: short EDID read\n", path);
+		free(data);
+		fclose(fp);
+		return -1;
+	}
+	fclose(fp);
+	*out = data;
+	*out_size = (uint32_t)size;
+	return 0;
+}
+
+static int capture_set_output_edid(int fd, uint32_t stream_id,
+				   const void *edid, uint32_t size)
+{
+	struct drm_castkms_capture_set_output_edid args = {
+		.stream_id = stream_id,
+		.edid_size = size,
+		.edid_ptr = (uint64_t)(uintptr_t)edid,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_SET_OUTPUT_EDID, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
 static int capture_register(int fd, uint32_t stream_id, uint32_t fb_id,
 			     uint64_t mode_generation, uint32_t *buffer_id)
 {
@@ -644,7 +700,9 @@ static void on_signal(void *data, int signal_number)
 
 static void usage(const char *prog)
 {
-	fprintf(stderr, "Usage: %s [-d /dev/dri/cardN] [-c crtc-id]\n", prog);
+	fprintf(stderr,
+		"Usage: %s [-d /dev/dri/cardN] [-c crtc-id] [-e edid.bin]\n",
+		prog);
 }
 
 int main(int argc, char *argv[])
@@ -659,11 +717,14 @@ int main(int argc, char *argv[])
 	char crtc_str[16];
 	uint32_t target_crtc = 0;
 	bool crtc_specified = false;
+	const char *edid_path = NULL;
+	uint8_t *edid_alloc = NULL;
+	uint32_t edid_size = 0;
 	int ioctl_ret;
 	int opt;
 	int ret = EXIT_FAILURE;
 
-	while ((opt = getopt(argc, argv, "d:c:h")) != -1) {
+	while ((opt = getopt(argc, argv, "d:c:e:h")) != -1) {
 		switch (opt) {
 		case 'd':
 			snprintf(b->card_path, sizeof(b->card_path),
@@ -672,6 +733,9 @@ int main(int argc, char *argv[])
 		case 'c':
 			target_crtc = strtoul(optarg, NULL, 0);
 			crtc_specified = true;
+			break;
+		case 'e':
+			edid_path = optarg;
 			break;
 		case 'h':
 		default:
@@ -736,6 +800,19 @@ int main(int argc, char *argv[])
 	b->capture_active = true;
 	fprintf(stderr, "capture stream %u, mode generation %llu\n",
 		b->stream_id, (unsigned long long)b->mode_generation);
+
+	if (edid_path) {
+		if (read_edid_file(edid_path, &edid_alloc, &edid_size))
+			goto out_capture;
+		ioctl_ret = capture_set_output_edid(b->drm_fd, b->stream_id,
+						    edid_alloc, edid_size);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("SET_OUTPUT_EDID");
+			goto out_capture;
+		}
+		fprintf(stderr, "published %u-byte output EDID\n", edid_size);
+	}
 
 	pw_init(&argc, &argv);
 
@@ -854,6 +931,7 @@ out_capture:
 	if (b->capture_active)
 		capture_stop(b->drm_fd, b->stream_id);
 out:
+	free(edid_alloc);
 	if (b->drm_fd >= 0)
 		close(b->drm_fd);
 	return ret;
