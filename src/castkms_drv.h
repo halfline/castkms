@@ -216,6 +216,28 @@ struct castkms_color_lut {
 };
 
 /**
+ * struct castkms_cursor_snapshot - Cursor state captured at atomic check
+ * @visible: Whether the cursor plane is visible in this commit
+ * @x: CRTC_X screen position
+ * @y: CRTC_Y screen position
+ * @hotspot_x: HOTSPOT_X within the cursor image
+ * @hotspot_y: HOTSPOT_Y within the cursor image
+ * @width: Cursor framebuffer width
+ * @height: Cursor framebuffer height
+ * @serial: Generation counter; increments when the cursor image, hotspot,
+ *          or visibility changes (but not on position-only moves)
+ * @fb: Refcounted cursor framebuffer (NULL when invisible)
+ */
+struct castkms_cursor_snapshot {
+	bool visible;
+	s32 x, y;
+	s32 hotspot_x, hotspot_y;
+	u32 width, height;
+	u32 serial;
+	struct drm_framebuffer *fb;
+};
+
+/**
  * struct castkms_crtc_state - Driver specific CRTC state
  *
  * @base: base CRTC state
@@ -256,6 +278,7 @@ struct castkms_crtc_state {
 	bool capture_pending;
 	struct drm_rect damage_clip;
 	bool full_damage;
+	struct castkms_cursor_snapshot cursor;
 	u64 frame_start;
 	u64 frame_end;
 };

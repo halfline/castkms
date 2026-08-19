@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 
+#include <linux/atomic.h>
 #include <linux/dma-fence.h>
 #include <linux/sort.h>
 
@@ -112,6 +113,8 @@ static void castkms_atomic_crtc_destroy_state(struct drm_crtc *crtc,
 	__drm_atomic_helper_crtc_destroy_state(state);
 
 	WARN_ON(work_pending(&castkms_state->composer_work));
+	if (castkms_state->cursor.fb)
+		drm_framebuffer_put(castkms_state->cursor.fb);
 	kfree(castkms_state->active_planes);
 	kfree(castkms_state);
 }
@@ -143,6 +146,56 @@ static const struct drm_crtc_funcs castkms_crtc_funcs = {
 	.set_crc_source		= castkms_set_crc_source,
 	.verify_crc_source	= castkms_verify_crc_source,
 };
+
+static atomic_t cursor_serial_counter = ATOMIC_INIT(0);
+
+static void castkms_snapshot_cursor(struct castkms_crtc_state *castkms_state,
+				    struct drm_atomic_state *state,
+				    struct drm_crtc *crtc)
+{
+	struct drm_crtc_state *crtc_state = &castkms_state->base;
+	struct castkms_cursor_snapshot *cursor = &castkms_state->cursor;
+	struct drm_plane *plane;
+
+	memset(cursor, 0, sizeof(*cursor));
+
+	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
+		struct drm_plane_state *new_ps, *old_ps;
+		bool image_changed;
+
+		if (plane->type != DRM_PLANE_TYPE_CURSOR)
+			continue;
+
+		new_ps = drm_atomic_get_new_plane_state(state, plane);
+		if (!new_ps || !new_ps->visible)
+			break;
+
+		cursor->visible = true;
+		cursor->x = new_ps->crtc_x;
+		cursor->y = new_ps->crtc_y;
+		cursor->hotspot_x = new_ps->hotspot_x;
+		cursor->hotspot_y = new_ps->hotspot_y;
+		cursor->width = new_ps->fb ? new_ps->fb->width : 0;
+		cursor->height = new_ps->fb ? new_ps->fb->height : 0;
+
+		if (new_ps->fb) {
+			cursor->fb = new_ps->fb;
+			drm_framebuffer_get(cursor->fb);
+		}
+
+		old_ps = drm_atomic_get_old_plane_state(state, plane);
+		image_changed = !old_ps || !old_ps->visible ||
+				old_ps->fb != new_ps->fb ||
+				!drm_rect_equals(&old_ps->src, &new_ps->src) ||
+				old_ps->hotspot_x != new_ps->hotspot_x ||
+				old_ps->hotspot_y != new_ps->hotspot_y;
+		cursor->serial = image_changed ?
+			(u32)atomic_inc_return(&cursor_serial_counter) :
+			(old_ps ? to_castkms_crtc_state(
+				drm_atomic_get_old_crtc_state(state, crtc))->cursor.serial : 0);
+		break;
+	}
+}
 
 static void castkms_compute_frame_damage(struct castkms_crtc_state *castkms_state,
 					 struct drm_atomic_state *state,
@@ -288,6 +341,7 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 				  castkms_state->num_active_planes);
 
 	castkms_compute_frame_damage(castkms_state, state, crtc);
+	castkms_snapshot_cursor(castkms_state, state, crtc);
 
 	return 0;
 
