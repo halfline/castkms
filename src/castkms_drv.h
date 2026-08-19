@@ -15,6 +15,7 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_writeback.h>
 
+#include "castkms_audio.h"
 #include "castkms_capture.h"
 
 #define DEFAULT_DEVICE_NAME "castkms"
@@ -338,6 +339,7 @@ struct castkms_device {
 	struct castkms_config *config;
 	struct mutex attach_lock;
 	struct drm_property *capture_active_prop;
+	struct castkms_audio *audio;
 };
 
 /*
