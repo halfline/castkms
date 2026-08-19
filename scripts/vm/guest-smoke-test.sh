@@ -86,6 +86,16 @@ run_writeback()
 	fi
 }
 
+get_capture_active()
+{
+	sudo modetest -M castkms -c 2>/dev/null | awk -v cid="$1" '
+		$1 == cid { found_connector = 1; next }
+		found_connector && /^[0-9]/ { exit }
+		found_connector && /capture_active:/ { in_prop = 1; next }
+		in_prop && $1 == "value:" { print $2; exit }
+	'
+}
+
 cleanup()
 {
 	if test -d "$configfs_dev"; then
@@ -361,6 +371,9 @@ fi
 virtual_connector=$(awk '
 	$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $4; exit }
 ' "$result_dir/modetest.txt")
+virtual_connector_id=$(awk '
+	$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $1; exit }
+' "$result_dir/modetest.txt")
 writeback_connector=$(awk '
 	$1 ~ /^[0-9]+$/ && $4 ~ /^Writeback-/ { print $4; exit }
 ' "$result_dir/modetest.txt")
@@ -373,6 +386,7 @@ plane_id=$(awk '
 	in_planes && $1 ~ /^[0-9]+$/ { print $1; exit }
 ' "$result_dir/modetest.txt")
 test -n "$virtual_connector"
+test -n "$virtual_connector_id"
 test -n "$writeback_connector"
 test -n "$crtc_id"
 test -n "$plane_id"
@@ -382,6 +396,10 @@ castkms_minor=$(sudo find /sys/kernel/debug/dri -maxdepth 1 -type l \
 test -n "$castkms_minor"
 castkms_drm=/dev/dri/card$castkms_minor
 test -c "$castkms_drm"
+
+capture_active_before=$(get_capture_active "$virtual_connector_id")
+test "$capture_active_before" = "0"
+printf '%s\n' 'capture_active_initial=0' | tee -a "$result_dir/summary.txt"
 
 # Headless guests already have a virtio fbcon, so attaching a sink does not
 # light the castkms CRTC by itself. Watch for the protocol attach and modeset.
@@ -796,11 +814,15 @@ fi
 virtual_connector=$(awk '
 	$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $4; exit }
 ' "$result_dir/pw-modetest.txt")
+virtual_connector_id=$(awk '
+	$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $1; exit }
+' "$result_dir/pw-modetest.txt")
 crtc_id=$(awk '
 	$0 == "CRTCs:" { in_crtcs = 1; next }
 	in_crtcs && $1 ~ /^[0-9]+$/ { print $1; exit }
 ' "$result_dir/pw-modetest.txt")
 test -n "$virtual_connector"
+test -n "$virtual_connector_id"
 test -n "$crtc_id"
 
 pw_runtime=$(mktemp -d)
@@ -884,6 +906,10 @@ if test "$pw_running" -ne 1; then
 	exit 1
 fi
 
+capture_active_during=$(get_capture_active "$virtual_connector_id")
+test "$capture_active_during" = "1"
+printf '%s\n' 'capture_active_during=1' | tee -a "$result_dir/summary.txt"
+
 pw_node="castkms.card${castkms_minor}.crtc-${crtc_id}"
 sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
 	XDG_RUNTIME_DIR="$pw_runtime" \
@@ -906,6 +932,12 @@ pw_mode_gate_open=0
 kill "$pw_source_pid" 2>/dev/null || true
 wait "$pw_source_pid" 2>/dev/null || true
 pw_source_pid=
+
+capture_active_after=$(get_capture_active "$virtual_connector_id")
+test "$capture_active_after" = "0"
+printf '%s\n' 'capture_active_after=0' | tee -a "$result_dir/summary.txt"
+printf '%s\n' 'capture_active_property=pass' | tee -a "$result_dir/summary.txt"
+
 kill "$pw_modeset_pid" 2>/dev/null || true
 wait "$pw_modeset_pid" 2>/dev/null || true
 pw_modeset_pid=
