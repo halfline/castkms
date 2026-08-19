@@ -60,6 +60,13 @@ struct capture_buffer {
 	void *cursor_bitmap;
 	uint32_t cursor_bitmap_size;
 	uint32_t cursor_bitmap_alloc;
+
+	uint32_t ready_syncobj;
+	uint32_t reuse_syncobj;
+	int ready_syncobj_fd;
+	int reuse_syncobj_fd;
+	uint64_t next_ready_point;
+	uint64_t last_release_point;
 };
 
 struct bridge {
@@ -88,6 +95,7 @@ struct bridge {
 	struct capture_buffer buffers[MAX_BUFFERS];
 	int n_buffers;
 
+	bool explicit_sync;
 	uint64_t user_data_seq;
 	uint64_t frames_produced;
 };
@@ -403,12 +411,17 @@ static int capture_attach_monitor(int fd, uint32_t connector_id,
 }
 
 static int capture_register(int fd, uint32_t stream_id, uint32_t fb_id,
+			     uint32_t ready_syncobj, uint32_t reuse_syncobj,
 			     uint64_t mode_generation, uint32_t *buffer_id)
 {
 	struct drm_castkms_capture_register_buffer reg = {
 		.stream_id = stream_id,
 		.fb_id = fb_id,
-		.flags = DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		.ready_syncobj_handle = ready_syncobj,
+		.reuse_syncobj_handle = reuse_syncobj,
+		.flags = ready_syncobj ?
+			DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC :
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
 		.mode_generation = mode_generation,
 	};
 
@@ -433,17 +446,70 @@ static int capture_unregister(int fd, uint32_t stream_id, uint32_t buffer_id)
 }
 
 static int capture_queue(int fd, uint32_t stream_id, uint32_t buffer_id,
-			  uint64_t mode_generation, uint64_t user_data)
+			  uint64_t mode_generation, uint64_t user_data,
+			  uint64_t ready_point, uint64_t reuse_point)
 {
 	struct drm_castkms_capture_queue_buffer queue = {
 		.stream_id = stream_id,
 		.buffer_id = buffer_id,
-		.flags = DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+		.flags = ready_point ?
+			DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC :
+			DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
 		.mode_generation = mode_generation,
 		.user_data = user_data,
+		.ready_point = ready_point,
+		.reuse_point = reuse_point,
 	};
 
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_QUEUE_BUFFER, &queue) < 0)
+		return -errno;
+
+	return 0;
+}
+
+/* ---- Syncobj helpers ---- */
+
+static int create_syncobj(int fd, uint32_t *handle)
+{
+	struct drm_syncobj_create create = {};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &create) < 0)
+		return -errno;
+
+	*handle = create.handle;
+	return 0;
+}
+
+static void destroy_syncobj(int fd, uint32_t *handle)
+{
+	struct drm_syncobj_destroy destroy = { .handle = *handle };
+
+	if (*handle)
+		ioctl(fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy);
+	*handle = 0;
+}
+
+static int export_syncobj_fd(int fd, uint32_t handle)
+{
+	struct drm_syncobj_handle args = {
+		.handle = handle,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &args) < 0)
+		return -1;
+
+	return args.fd;
+}
+
+static int signal_syncobj_point(int fd, uint32_t handle, uint64_t point)
+{
+	struct drm_syncobj_timeline_array args = {
+		.handles = (uint64_t)(uintptr_t)&handle,
+		.points = (uint64_t)(uintptr_t)&point,
+		.count_handles = 1,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL, &args) < 0)
 		return -errno;
 
 	return 0;
@@ -469,7 +535,8 @@ static struct capture_buffer *find_buffer_by_id(struct bridge *b,
 	return NULL;
 }
 
-static int alloc_capture_buffer(struct bridge *b, struct capture_buffer *buf)
+static int alloc_capture_buffer(struct bridge *b, struct capture_buffer *buf,
+				bool explicit_sync)
 {
 	struct drm_mode_create_dumb dumb = {
 		.width = b->width,
@@ -487,7 +554,11 @@ static int alloc_capture_buffer(struct bridge *b, struct capture_buffer *buf)
 	struct drm_mode_destroy_dumb destroy;
 	int ret;
 
-	*buf = (struct capture_buffer){ .dmabuf_fd = -1 };
+	*buf = (struct capture_buffer){
+		.dmabuf_fd = -1,
+		.ready_syncobj_fd = -1,
+		.reuse_syncobj_fd = -1,
+	};
 
 	if (ioctl(b->drm_fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb) < 0) {
 		perror("DRM_IOCTL_MODE_CREATE_DUMB");
@@ -513,18 +584,43 @@ static int alloc_capture_buffer(struct bridge *b, struct capture_buffer *buf)
 	}
 	buf->dmabuf_fd = prime.fd;
 
+	if (explicit_sync) {
+		if (create_syncobj(b->drm_fd, &buf->ready_syncobj) ||
+		    create_syncobj(b->drm_fd, &buf->reuse_syncobj))
+			goto err_syncobj;
+
+		buf->ready_syncobj_fd = export_syncobj_fd(b->drm_fd,
+							  buf->ready_syncobj);
+		buf->reuse_syncobj_fd = export_syncobj_fd(b->drm_fd,
+							  buf->reuse_syncobj);
+		if (buf->ready_syncobj_fd < 0 || buf->reuse_syncobj_fd < 0)
+			goto err_syncobj;
+
+		buf->next_ready_point = 1;
+		buf->last_release_point = 0;
+	}
+
 	ret = capture_register(b->drm_fd, b->stream_id, buf->fb_id,
+			       buf->ready_syncobj, buf->reuse_syncobj,
 			       b->mode_generation, &buf->buffer_id);
 	if (ret) {
 		errno = -ret;
 		perror("REGISTER_BUFFER");
-		goto err_prime;
+		goto err_syncobj;
 	}
 
 	buf->state = BUF_PW_OWNED;
 	return 0;
 
-err_prime:
+err_syncobj:
+	if (buf->reuse_syncobj_fd >= 0)
+		close(buf->reuse_syncobj_fd);
+	buf->reuse_syncobj_fd = -1;
+	if (buf->ready_syncobj_fd >= 0)
+		close(buf->ready_syncobj_fd);
+	buf->ready_syncobj_fd = -1;
+	destroy_syncobj(b->drm_fd, &buf->reuse_syncobj);
+	destroy_syncobj(b->drm_fd, &buf->ready_syncobj);
 	close(buf->dmabuf_fd);
 	buf->dmabuf_fd = -1;
 err_fb:
@@ -547,6 +643,13 @@ static void free_capture_buffer(struct bridge *b, struct capture_buffer *buf)
 	if (buf->buffer_id && b->capture_active)
 		capture_unregister(b->drm_fd, b->stream_id, buf->buffer_id);
 
+	if (buf->reuse_syncobj_fd >= 0)
+		close(buf->reuse_syncobj_fd);
+	if (buf->ready_syncobj_fd >= 0)
+		close(buf->ready_syncobj_fd);
+	destroy_syncobj(b->drm_fd, &buf->reuse_syncobj);
+	destroy_syncobj(b->drm_fd, &buf->ready_syncobj);
+
 	if (buf->dmabuf_fd >= 0)
 		close(buf->dmabuf_fd);
 
@@ -560,7 +663,11 @@ static void free_capture_buffer(struct bridge *b, struct capture_buffer *buf)
 		ioctl(b->drm_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
 	}
 
-	*buf = (struct capture_buffer){ .dmabuf_fd = -1 };
+	*buf = (struct capture_buffer){
+		.dmabuf_fd = -1,
+		.ready_syncobj_fd = -1,
+		.reuse_syncobj_fd = -1,
+	};
 }
 
 static void submit_free_buffers(struct bridge *b)
@@ -570,13 +677,21 @@ static void submit_free_buffers(struct bridge *b)
 
 	for (int i = 0; i < b->n_buffers; i++) {
 		struct capture_buffer *buf = &b->buffers[i];
+		uint64_t ready_point = 0;
+		uint64_t reuse_point = 0;
 		int ret;
 
 		if (buf->state != BUF_FREE)
 			continue;
 
+		if (buf->ready_syncobj) {
+			ready_point = buf->next_ready_point;
+			reuse_point = buf->last_release_point;
+		}
+
 		ret = capture_queue(b->drm_fd, b->stream_id, buf->buffer_id,
-				    b->mode_generation, ++b->user_data_seq);
+				    b->mode_generation, ++b->user_data_seq,
+				    ready_point, reuse_point);
 		if (ret == -EBUSY)
 			break;
 		if (ret) {
@@ -717,13 +832,29 @@ static void on_param_changed(void *data, uint32_t id,
 	struct bridge *b = data;
 	uint8_t params_buf[1024];
 	struct spa_pod_builder builder;
-	const struct spa_pod *params[4];
+	const struct spa_pod *params[7];
 	int n_params = 0;
 
 	if (!param || id != SPA_PARAM_Format)
 		return;
 
 	spa_pod_builder_init(&builder, params_buf, sizeof(params_buf));
+
+	if (b->explicit_sync) {
+		params[n_params++] = spa_pod_builder_add_object(&builder,
+			SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+			SPA_PARAM_BUFFERS_buffers,
+				SPA_POD_CHOICE_RANGE_Int(MAX_BUFFERS, 2,
+							 MAX_BUFFERS),
+			SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(3),
+			SPA_PARAM_BUFFERS_size,
+				SPA_POD_Int(b->width * b->height * 4),
+			SPA_PARAM_BUFFERS_stride,
+				SPA_POD_Int(b->width * 4),
+			SPA_PARAM_BUFFERS_dataType,
+				SPA_POD_CHOICE_FLAGS_Int(
+					1 << SPA_DATA_DmaBuf));
+	}
 
 	params[n_params++] = spa_pod_builder_add_object(&builder,
 		SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
@@ -759,6 +890,15 @@ static void on_param_changed(void *data, uint32_t id,
 				    sizeof(struct spa_meta_bitmap) +
 				    256 * 256 * 4));
 
+	if (b->explicit_sync) {
+		params[n_params++] = spa_pod_builder_add_object(&builder,
+			SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+			SPA_PARAM_META_type,
+				SPA_POD_Id(SPA_META_SyncTimeline),
+			SPA_PARAM_META_size,
+				SPA_POD_Int(sizeof(struct spa_meta_sync_timeline)));
+	}
+
 	pw_stream_update_params(b->stream, params, n_params);
 }
 
@@ -775,14 +915,16 @@ static void on_add_buffer(void *data, struct pw_buffer *pw_buf)
 	}
 
 	buf = &b->buffers[b->n_buffers];
-	if (alloc_capture_buffer(b, buf) < 0) {
+	spa_buf = pw_buf->buffer;
+
+	if (alloc_capture_buffer(b, buf,
+				 b->explicit_sync && spa_buf->n_datas >= 3) < 0) {
 		fprintf(stderr, "buffer allocation failed\n");
 		return;
 	}
 
 	buf->pw_buf = pw_buf;
 
-	spa_buf = pw_buf->buffer;
 	d = &spa_buf->datas[0];
 	d->type = SPA_DATA_DmaBuf;
 	d->fd = buf->dmabuf_fd;
@@ -791,6 +933,20 @@ static void on_add_buffer(void *data, struct pw_buffer *pw_buf)
 	d->chunk->offset = 0;
 	d->chunk->size = buf->size;
 	d->chunk->stride = buf->pitch;
+
+	if (buf->ready_syncobj && spa_buf->n_datas >= 3) {
+		d = &spa_buf->datas[1];
+		d->type = SPA_DATA_SyncObj;
+		d->fd = buf->ready_syncobj_fd;
+		d->maxsize = 0;
+		d->data = NULL;
+
+		d = &spa_buf->datas[2];
+		d->type = SPA_DATA_SyncObj;
+		d->fd = buf->reuse_syncobj_fd;
+		d->maxsize = 0;
+		d->data = NULL;
+	}
 
 	b->n_buffers++;
 }
@@ -909,6 +1065,22 @@ static void on_process(void *data)
 			}
 		}
 
+		if (buf->ready_syncobj) {
+			struct spa_meta_sync_timeline *st;
+
+			st = spa_buffer_find_meta_data(spa_buf,
+						       SPA_META_SyncTimeline,
+						       sizeof(*st));
+			if (st) {
+				st->flags =
+					SPA_META_SYNC_TIMELINE_UNSCHEDULED_RELEASE;
+				st->padding = 0;
+				st->acquire_point = buf->next_ready_point;
+				st->release_point = buf->next_ready_point;
+				buf->next_ready_point++;
+			}
+		}
+
 		spa_buf->datas[0].chunk->offset = 0;
 		spa_buf->datas[0].chunk->size = buf->size;
 		spa_buf->datas[0].chunk->stride = buf->pitch;
@@ -921,8 +1093,29 @@ static void on_process(void *data)
 	while ((pw_buf = pw_stream_dequeue_buffer(b->stream))) {
 		struct capture_buffer *buf = find_buffer_by_pw(b, pw_buf);
 
-		if (buf)
-			buf->state = BUF_FREE;
+		if (!buf)
+			continue;
+
+		if (buf->ready_syncobj && buf->next_ready_point > 1) {
+			struct spa_meta_sync_timeline *st;
+
+			st = spa_buffer_find_meta_data(pw_buf->buffer,
+						       SPA_META_SyncTimeline,
+						       sizeof(*st));
+			if (st) {
+				if (st->flags &
+				    SPA_META_SYNC_TIMELINE_UNSCHEDULED_RELEASE) {
+					if (signal_syncobj_point(
+						    b->drm_fd,
+						    buf->reuse_syncobj,
+						    st->release_point))
+						perror("SYNCOBJ_TIMELINE_SIGNAL");
+				}
+				buf->last_release_point = st->release_point;
+			}
+		}
+
+		buf->state = BUF_FREE;
 	}
 
 	submit_free_buffers(b);
@@ -1088,6 +1281,16 @@ int main(int argc, char *argv[])
 	fprintf(stderr, "CRTC %u (%s): %ux%u@%u\n",
 		b->crtc_id, b->connector_name,
 		b->width, b->height, b->refresh);
+
+	{
+		uint64_t cap = 0;
+
+		if (!drmGetCap(b->drm_fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) &&
+		    cap) {
+			b->explicit_sync = true;
+			fprintf(stderr, "explicit sync enabled\n");
+		}
+	}
 
 	ioctl_ret = capture_start(b->drm_fd, b->crtc_id,
 				  &b->stream_id, &b->mode_generation);

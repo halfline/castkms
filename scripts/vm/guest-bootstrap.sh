@@ -6,7 +6,7 @@ set -euo pipefail
 target_release=${1:?missing target kernel release}
 rpm_base_url=${2:?missing kernel RPM base URL}
 rpm_dir=/var/tmp/castkms-kernel-$target_release
-toolchain_stamp=/var/lib/castkms-vm/toolchain-v2
+toolchain_stamp=/var/lib/castkms-vm/toolchain-v3
 kernel_ready=1
 
 if test ! -e "$toolchain_stamp"; then
@@ -24,6 +24,7 @@ if test ! -e "$toolchain_stamp"; then
 		make \
 		openssl-devel \
 		perl-interpreter \
+		pipewire \
 		pipewire-devel \
 		pkgconf \
 		rsync
