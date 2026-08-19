@@ -13,6 +13,7 @@
 #include <drm/drm_property.h>
 #include <drm/drm_sysfs.h>
 
+#include "castkms_audio.h"
 #include "castkms_config.h"
 #include "castkms_connector.h"
 
@@ -227,6 +228,8 @@ castkms_connector_set_status(struct drm_connector *connector,
 int castkms_connector_update_edid(struct drm_crtc *crtc,
 				  const struct drm_edid *drm_edid)
 {
+	struct drm_device *dev = crtc->dev;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
 	struct drm_connector *connector;
 	int ret;
 
@@ -235,6 +238,8 @@ int castkms_connector_update_edid(struct drm_crtc *crtc,
 		return -ENOENT;
 
 	ret = castkms_connector_publish_edid(connector, drm_edid);
+	if (!ret)
+		castkms_audio_notify_eld(castkmsdev, connector);
 	drm_connector_put(connector);
 
 	return ret;
@@ -276,9 +281,12 @@ int castkms_connector_attach_monitor(struct drm_connector *connector,
 					     connector_status_disconnected);
 		castkms_connector_sync_config_status(connector,
 						     connector_status_disconnected);
+		return ret;
 	}
 
-	return ret;
+	castkms_audio_notify_eld(castkmsdev, connector);
+
+	return 0;
 }
 
 int castkms_connector_detach_monitor(struct drm_connector *connector,
@@ -306,6 +314,8 @@ int castkms_connector_detach_monitor(struct drm_connector *connector,
 	castkms_connector->monitor_attached = false;
 	castkms_connector->attach_file = NULL;
 	mutex_unlock(&castkmsdev->attach_lock);
+
+	castkms_audio_notify_disconnect(castkmsdev, connector);
 
 	castkms_connector_set_status(connector,
 				     connector_status_disconnected);
