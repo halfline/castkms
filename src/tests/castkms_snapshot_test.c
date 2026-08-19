@@ -5,6 +5,7 @@
 #include <drm/drm_fixed.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_mode.h>
+#include <drm/drm_rect.h>
 
 #include "../castkms_composer.h"
 #include "../castkms_formats.h"
@@ -227,6 +228,91 @@ static void castkms_snapshot_test_rejects_null_map(struct kunit *test)
 								   tp.sp.map));
 }
 
+static void castkms_snapshot_test_damage_partial(struct kunit *test)
+{
+	u8 src_pixels[] = {
+		0xff, 0x00, 0x00, 0xff,
+		0x00, 0xff, 0x00, 0xff,
+		0x00, 0x00, 0xff, 0xff,
+		0xff, 0xff, 0x00, 0xff,
+	};
+	u8 dst_pixels[16];
+	struct snapshot_test_plane tp;
+	struct snapshot_test_output to;
+	struct castkms_plane_state *plane_ptrs[1];
+	struct castkms_frame_snapshot snapshot = {};
+	int ret;
+
+	init_test_plane(&tp, DRM_FORMAT_XRGB8888, src_pixels, 2, 2);
+	init_test_output(&to, DRM_FORMAT_XRGB8888, dst_pixels, 2, 2);
+
+	plane_ptrs[0] = &tp.sp.state;
+	snapshot.num_planes = 1;
+	snapshot.plane_ptrs = plane_ptrs;
+	snapshot.hdisplay = 2;
+	snapshot.vdisplay = 2;
+	snapshot.damage_clip = (struct drm_rect){ .x1 = 1, .y1 = 0, .x2 = 2, .y2 = 1 };
+	snapshot.full_damage = false;
+
+	memset(dst_pixels, 0, sizeof(dst_pixels));
+	ret = castkms_compose_snapshot(&snapshot, &to.output);
+
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_EXPECT_FALSE(test, snapshot.full_damage);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.x1, 1);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.y1, 0);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.x2, 2);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.y2, 1);
+}
+
+static void castkms_snapshot_test_damage_full(struct kunit *test)
+{
+	struct castkms_frame_snapshot snapshot = {};
+
+	snapshot.hdisplay = 1920;
+	snapshot.vdisplay = 1080;
+	snapshot.damage_clip = (struct drm_rect){ .x1 = 0, .y1 = 0, .x2 = 1920, .y2 = 1080 };
+	snapshot.full_damage = true;
+
+	KUNIT_EXPECT_TRUE(test, snapshot.full_damage);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.x1, 0);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.y1, 0);
+	KUNIT_EXPECT_EQ(test, drm_rect_width(&snapshot.damage_clip), 1920);
+	KUNIT_EXPECT_EQ(test, drm_rect_height(&snapshot.damage_clip), 1080);
+}
+
+static void castkms_snapshot_test_damage_zero_origin(struct kunit *test)
+{
+	struct castkms_frame_snapshot snapshot = {};
+
+	snapshot.hdisplay = 100;
+	snapshot.vdisplay = 100;
+	snapshot.damage_clip = (struct drm_rect){ .x1 = 0, .y1 = 0, .x2 = 10, .y2 = 10 };
+	snapshot.full_damage = false;
+
+	KUNIT_EXPECT_FALSE(test, snapshot.full_damage);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.x1, 0);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.y1, 0);
+	KUNIT_EXPECT_EQ(test, drm_rect_width(&snapshot.damage_clip), 10);
+	KUNIT_EXPECT_EQ(test, drm_rect_height(&snapshot.damage_clip), 10);
+}
+
+static void castkms_snapshot_test_damage_nonzero_origin(struct kunit *test)
+{
+	struct castkms_frame_snapshot snapshot = {};
+
+	snapshot.hdisplay = 640;
+	snapshot.vdisplay = 480;
+	snapshot.damage_clip = (struct drm_rect){ .x1 = 50, .y1 = 30, .x2 = 200, .y2 = 150 };
+	snapshot.full_damage = false;
+
+	KUNIT_EXPECT_FALSE(test, snapshot.full_damage);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.x1, 50);
+	KUNIT_EXPECT_EQ(test, snapshot.damage_clip.y1, 30);
+	KUNIT_EXPECT_EQ(test, drm_rect_width(&snapshot.damage_clip), 150);
+	KUNIT_EXPECT_EQ(test, drm_rect_height(&snapshot.damage_clip), 120);
+}
+
 static struct kunit_case castkms_snapshot_test_cases[] = {
 	KUNIT_CASE(castkms_snapshot_test_compose_single_plane),
 	KUNIT_CASE(castkms_snapshot_test_compose_background),
@@ -235,6 +321,10 @@ static struct kunit_case castkms_snapshot_test_cases[] = {
 	KUNIT_CASE(castkms_snapshot_test_plane_pixel_read),
 	KUNIT_CASE(castkms_snapshot_test_rejects_iomem_source),
 	KUNIT_CASE(castkms_snapshot_test_rejects_null_map),
+	KUNIT_CASE(castkms_snapshot_test_damage_partial),
+	KUNIT_CASE(castkms_snapshot_test_damage_full),
+	KUNIT_CASE(castkms_snapshot_test_damage_zero_origin),
+	KUNIT_CASE(castkms_snapshot_test_damage_nonzero_origin),
 	{}
 };
 
