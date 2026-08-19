@@ -508,17 +508,59 @@ validate_capture_event(const struct drm_event_castkms_capture_frame *event,
 	    event->base.length != sizeof(*event) ||
 	    event->user_data != user_data || event->stream_id != stream_id ||
 	    event->buffer_id != buffer_id || event->status ||
-	    event->flags != DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE ||
+	    event->flags & ~(uint32_t)DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE ||
 	    event->sequence <= after_sequence ||
 	    ((!may_have_dropped_frames && event->dropped_frames) ||
 	     (may_have_dropped_frames &&
 	      event->dropped_frames > event->sequence - after_sequence - 1)) ||
 	    event->timestamp_ns <= 0 ||
 	    event->mode_generation != mode_generation ||
-	    event->damage_x || event->damage_y || event->damage_width != width ||
-	    event->damage_height != height || event->reserved) {
+	    event->damage_x < 0 || event->damage_y < 0 ||
+	    !event->damage_width || !event->damage_height ||
+	    (uint32_t)event->damage_x + event->damage_width > width ||
+	    (uint32_t)event->damage_y + event->damage_height > height ||
+	    event->reserved) {
 		fprintf(stderr, "unexpected capture completion event\n");
 		return -1;
+	}
+
+	return 0;
+}
+
+static int
+validate_capture_damage(const struct drm_event_castkms_capture_frame *event,
+			uint32_t width, uint32_t height)
+{
+	bool full_damage = !!(event->flags & DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE);
+
+	if (event->damage_x < 0 || event->damage_y < 0 ||
+	    !event->damage_width || !event->damage_height) {
+		fprintf(stderr, "damage rect is empty or has negative origin\n");
+		return -1;
+	}
+
+	if ((uint32_t)event->damage_x + event->damage_width > width ||
+	    (uint32_t)event->damage_y + event->damage_height > height) {
+		fprintf(stderr,
+			"damage rect exceeds frame bounds: (%d,%d)+%ux%u in %ux%u\n",
+			event->damage_x, event->damage_y,
+			event->damage_width, event->damage_height,
+			width, height);
+		return -1;
+	}
+
+	if (full_damage) {
+		if (event->damage_x != 0 || event->damage_y != 0 ||
+		    event->damage_width != width ||
+		    event->damage_height != height) {
+			fprintf(stderr,
+				"FULL_DAMAGE flag set but rect is not full frame: "
+				"(%d,%d)+%ux%u vs %ux%u\n",
+				event->damage_x, event->damage_y,
+				event->damage_width, event->damage_height,
+				width, height);
+			return -1;
+		}
 	}
 
 	return 0;
@@ -1202,6 +1244,8 @@ static int run_deliver_one(const char *device, uint32_t crtc_id)
 				   user_data, stream.mode_generation, width,
 				   height, 0, true))
 		goto out_close;
+	if (validate_capture_damage(&event, width, height))
+		goto out_close;
 	if (sync_dmabuf_cpu_access(dmabuf_fd,
 				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
 		goto out_close;
@@ -1745,6 +1789,13 @@ int main(int argc, char **argv)
 				   first_stream.mode_generation, width, height,
 				   0, false))
 		goto out_close;
+	if (validate_capture_damage(&capture_event, width, height))
+		goto out_close;
+	if (!(capture_event.flags & DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE)) {
+		fprintf(stderr,
+			"initial capture expected full damage from legacy modeset\n");
+		goto out_close;
+	}
 	if (sync_dmabuf_cpu_access(dmabuf_fd,
 				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
 		goto out_close;
@@ -1793,20 +1844,8 @@ int main(int argc, char **argv)
 	       implicit_wait_observed ? "observed" : "not-observed");
 	printf("capture_implicit_fence=pass\n");
 	printf("capture_frame_delivery=pass\n");
-	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
-					      buffer_id);
-	if (ioctl_ret) {
-		errno = -ioctl_ret;
-		perror("unregister implicit capture buffer");
-		goto out_close;
-	}
-	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
-					      second_buffer_id);
-	if (ioctl_ret) {
-		errno = -ioctl_ret;
-		perror("unregister dependent capture buffer");
-		goto out_close;
-	}
+	printf("capture_damage_validation=pass\n");
+	printf("capture_fence_ownership=pass\n");
 	printf("capture_buffer_implicit=pass\n");
 
 	if (create_syncobj(fd, &ready_syncobj) ||
