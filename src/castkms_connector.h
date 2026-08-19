@@ -5,6 +5,7 @@
 
 #include "castkms_drv.h"
 
+struct castkms_cec_output;
 struct drm_crtc;
 struct drm_edid;
 struct drm_file;
@@ -17,12 +18,14 @@ struct drm_file;
  *
  * @base: Base DRM connector
  * @output_index: Stable non-writeback output identity, assigned once at creation
+ * @cec: CEC adapter and transport state, or NULL if CEC is unavailable
  * @attach_file: File that owns the current monitor attachment, or NULL
  * @monitor_attached: Whether ATTACH_MONITOR has plugged a sink into this port
  */
 struct castkms_connector {
 	struct drm_connector base;
 	unsigned int output_index;
+	struct castkms_cec_output *cec;
 	struct drm_file *attach_file;
 	bool monitor_attached;
 };

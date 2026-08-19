@@ -29,6 +29,7 @@
 #include <drm/drm_syncobj.h>
 
 #include "castkms_capture.h"
+#include "castkms_cec.h"
 #include "castkms_connector.h"
 #include "castkms_drv.h"
 #include "castkms_output_buffer.h"
@@ -726,6 +727,7 @@ void castkms_capture_file_close(struct drm_device *dev,
 	}
 	xa_destroy(&capture_file->streams);
 	mutex_unlock(&capture_file->lock);
+	castkms_cec_unbind_file(dev, file_priv);
 	castkms_connectors_detach_file(dev, file_priv);
 	mutex_destroy(&capture_file->lock);
 

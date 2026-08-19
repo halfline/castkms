@@ -36,6 +36,7 @@
 
 #include "castkms_audio.h"
 #include "castkms_capture.h"
+#include "castkms_cec.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_drv.h"
@@ -58,6 +59,10 @@ MODULE_PARM_DESC(enable_writeback, "Enable/Disable writeback connector support")
 static bool enable_audio = true;
 module_param_named(enable_audio, enable_audio, bool, 0444);
 MODULE_PARM_DESC(enable_audio, "Enable/Disable HDMI audio output support");
+
+static bool enable_cec;
+module_param_named(enable_cec, enable_cec, bool, 0444);
+MODULE_PARM_DESC(enable_cec, "Enable/Disable CEC adapter support");
 
 static bool enable_overlay;
 module_param_named(enable_overlay, enable_overlay, bool, 0444);
@@ -99,6 +104,22 @@ static const struct drm_ioctl_desc castkms_ioctls[] = {
 			  castkms_capture_detach_monitor_ioctl, DRM_ROOT_ONLY),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
 			  castkms_capture_read_cursor_bitmap_ioctl, DRM_ROOT_ONLY),
+#if IS_REACHABLE(CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER)
+	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_QUERY_CAPS,
+			  castkms_cec_query_caps, 0),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_BIND_TRANSPORT,
+			  castkms_cec_bind_transport, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_UNBIND_TRANSPORT,
+			  castkms_cec_unbind_transport, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_SET_TRANSPORT_STATE,
+			  castkms_cec_set_transport_state, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_TX_COMPLETE,
+			  castkms_cec_tx_complete, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_RECEIVE,
+			  castkms_cec_receive, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_GET_STATE,
+			  castkms_cec_get_state, DRM_ROOT_ONLY),
+#endif
 };
 
 static void castkms_atomic_commit_tail(struct drm_atomic_state *old_state)
@@ -265,6 +286,12 @@ int castkms_create(struct castkms_config *config)
 			goto out_devres;
 	}
 
+	if (enable_cec) {
+		ret = castkms_cec_init(castkms_device);
+		if (ret)
+			goto out_audio;
+	}
+
 	ret = drm_dev_register(&castkms_device->drm, 0);
 	if (ret)
 		goto out_audio;
@@ -369,3 +396,4 @@ MODULE_AUTHOR("Haneen Mohammed <hamohammed.sa@gmail.com>");
 MODULE_AUTHOR("Rodrigo Siqueira <rodrigosiqueiramelo@gmail.com>");
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL");
+MODULE_SOFTDEP("pre: cec drm_display_helper");

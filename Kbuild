@@ -22,4 +22,8 @@ castkms-y := \
 
 castkms-$(CONFIG_SND) += src/castkms_audio.o
 
+ifneq ($(wildcard $(srctree)/include/drm/display/drm_hdmi_cec_helper.h),)
+castkms-y += src/castkms_cec.o
+endif
+
 ccflags-y += -I$(src)/src -I$(src)/include/uapi
