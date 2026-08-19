@@ -7,6 +7,7 @@
 .tmp_versions/
 Module.symvers
 modules.order
+tools/castkms-audio-test
 tools/castkms-capture-test
 tools/castkms-edid-test
 tools/pw-castkms/pw-castkms
