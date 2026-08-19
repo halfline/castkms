@@ -26,6 +26,7 @@ pw_source_pid=
 pw_modeset_pid=
 pw_mode_gate_open=0
 pw_runtime=
+sink_capture_pid=
 
 append_crc_record()
 {
@@ -151,6 +152,10 @@ cleanup()
 	fi
 	if test "$pw_mode_gate_open" -eq 1; then
 		exec 6>&-
+	fi
+	if test -n "$sink_capture_pid"; then
+		kill "$sink_capture_pid" 2>/dev/null || true
+		wait "$sink_capture_pid" 2>/dev/null || true
 	fi
 	if test -n "$pw_source_pid"; then
 		kill "$pw_source_pid" 2>/dev/null || true
@@ -932,6 +937,124 @@ grep -Fx 'meta_present=1' "$result_dir/pw-castkms-test.txt" >/dev/null
 grep -Fx 'data_valid=1' "$result_dir/pw-castkms-test.txt" >/dev/null
 grep -Fx 'pw_castkms_test=pass' "$result_dir/pw-castkms-test.txt" >/dev/null
 printf '%s\n' 'pw_castkms_bridge=pass' | tee -a "$result_dir/summary.txt"
+
+# PipeWire audio sink discovery — WirePlumber should expose the CastKMS ALSA
+# card as an Audio/Sink while the audio-capable monitor is attached.
+pw_audio_sink=0
+for attempt in $(seq 1 20); do
+	if sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+		XDG_RUNTIME_DIR="$pw_runtime" \
+		wpctl status 2>/dev/null | grep -qi 'CastKMS'; then
+		pw_audio_sink=1
+		break
+	fi
+	sleep 0.5
+done
+if test "$pw_audio_sink" -eq 1; then
+	sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+		XDG_RUNTIME_DIR="$pw_runtime" \
+		wpctl status > "$result_dir/pw-audio-sink.txt" 2>&1
+	printf '%s\n' 'pw_audio_sink=pass' | tee -a "$result_dir/summary.txt"
+else
+	printf '%s\n' 'pw_audio_sink=skip (WirePlumber did not expose CastKMS sink)' | \
+		tee -a "$result_dir/summary.txt"
+fi
+
+# Sink monitor audio capture — verify that audio data played to the CastKMS
+# PipeWire sink can be captured from its monitor ports with correct content.
+if test "$pw_audio_sink" -eq 1; then
+	castkms_sink_id=$(sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+		XDG_RUNTIME_DIR="$pw_runtime" \
+		wpctl status 2>/dev/null | \
+		sed -n 's/[^0-9]*\([0-9][0-9]*\)\..*CastKMS.*/\1/p' | \
+		head -1)
+
+	if test -n "$castkms_sink_id"; then
+		python3 - "$result_dir/audio-test-tone.wav" << 'PYEOF'
+import wave, struct, sys
+with wave.open(sys.argv[1], 'w') as f:
+    f.setnchannels(2)
+    f.setsampwidth(2)
+    f.setframerate(48000)
+    f.writeframes(struct.pack('<h', 0x4000) * 96000)
+PYEOF
+
+		sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+			XDG_RUNTIME_DIR="$pw_runtime" \
+			timeout --signal=TERM --kill-after=2s 8s \
+			pw-cat --record --target "$castkms_sink_id" \
+			--properties "stream.capture.sink=true" \
+			"$result_dir/sink-monitor-capture.wav" \
+			> "$result_dir/sink-monitor-record.txt" 2>&1 &
+		sink_capture_pid=$!
+
+		sleep 1
+
+		sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+			XDG_RUNTIME_DIR="$pw_runtime" \
+			timeout --signal=TERM --kill-after=2s 5s \
+			pw-cat --playback --target "$castkms_sink_id" \
+			"$result_dir/audio-test-tone.wav" \
+			> "$result_dir/sink-monitor-play.txt" 2>&1 || true
+
+		sleep 0.5
+		kill "$sink_capture_pid" 2>/dev/null || true
+		wait "$sink_capture_pid" 2>/dev/null || true
+		sink_capture_pid=
+
+		python3 - "$result_dir/sink-monitor-capture.wav" \
+			<< 'PYEOF' | tee "$result_dir/sink-monitor-analysis.txt"
+import wave, struct, sys
+try:
+    with wave.open(sys.argv[1], 'r') as f:
+        data = f.readframes(f.getnframes())
+        nch = f.getnchannels()
+except Exception as e:
+    print('capture_read=fail (%s)' % e)
+    sys.exit(1)
+
+n = len(data) // 2
+if n < 100:
+    print('capture_samples=%d' % n)
+    print('sink_monitor_integrity=fail (too few samples)')
+    sys.exit(1)
+
+vals = struct.unpack('<%dh' % n, data)
+nonzero = sum(1 for v in vals if v != 0)
+matches = sum(1 for v in vals if abs(v - 0x4000) <= 0x400)
+
+print('capture_samples=%d' % n)
+print('capture_nonzero=%d' % nonzero)
+print('capture_pattern_matches=%d' % matches)
+if n > 0:
+    print('capture_match_pct=%.1f' % (100.0 * matches / n))
+
+if matches > n // 4:
+    print('sink_monitor_integrity=pass')
+else:
+    print('sink_monitor_integrity=fail')
+    sys.exit(1)
+PYEOF
+
+		if grep -q 'sink_monitor_integrity=pass' \
+			"$result_dir/sink-monitor-analysis.txt"; then
+			printf '%s\n' 'sink_monitor_capture=pass' | \
+				tee -a "$result_dir/summary.txt"
+		else
+			cat "$result_dir/sink-monitor-record.txt" >&2
+			cat "$result_dir/sink-monitor-play.txt" >&2
+			cat "$result_dir/sink-monitor-analysis.txt" >&2
+			exit 1
+		fi
+	else
+		printf 'Could not find CastKMS sink node ID\n' >&2
+		exit 1
+	fi
+else
+	printf '%s\n' \
+		'sink_monitor_capture=skip (no audio sink)' | \
+		tee -a "$result_dir/summary.txt"
+fi
 
 exec 6>&-
 pw_mode_gate_open=0
