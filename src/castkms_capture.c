@@ -48,6 +48,7 @@ struct castkms_capture_stream {
 	u32 height;
 	u32 id;
 	u32 num_buffers;
+	u32 cursor_serial;
 	bool active;
 	bool attached;
 };
@@ -88,6 +89,15 @@ struct castkms_capture_buffer {
 	enum castkms_capture_buffer_state state;
 	struct drm_rect damage_clip;
 	bool full_damage;
+	u32 cursor_serial;
+	u32 cursor_flags;
+	s32 cursor_x, cursor_y;
+	u32 cursor_hotspot_x, cursor_hotspot_y;
+	u32 cursor_width, cursor_height;
+	void *cursor_bitmap;
+	u32 cursor_bitmap_size;
+	u32 cursor_bitmap_stride;
+	u32 cursor_bitmap_serial;
 };
 
 struct castkms_capture_fence {
@@ -112,8 +122,8 @@ static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
 static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24);
 static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24);
 static_assert(sizeof(struct drm_castkms_capture_detach_monitor) == 16);
-static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80);
-static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76);
+static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112);
+static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108);
 static const char *
 castkms_capture_fence_get_driver_name(struct dma_fence *fence)
 {
@@ -203,6 +213,14 @@ castkms_capture_finish_locked(struct castkms_capture_buffer *buffer,
 		event->damage_width = drm_rect_width(&buffer->damage_clip);
 		event->damage_height = drm_rect_height(&buffer->damage_clip);
 	}
+	event->cursor_serial = buffer->cursor_serial;
+	event->cursor_flags = buffer->cursor_flags;
+	event->cursor_x = buffer->cursor_x;
+	event->cursor_y = buffer->cursor_y;
+	event->cursor_hotspot_x = buffer->cursor_hotspot_x;
+	event->cursor_hotspot_y = buffer->cursor_hotspot_y;
+	event->cursor_width = buffer->cursor_width;
+	event->cursor_height = buffer->cursor_height;
 
 	completion->event = &pending->pending;
 	completion->fence = buffer->completion_fence;
@@ -291,6 +309,7 @@ castkms_capture_buffer_destroy(struct castkms_capture_buffer *buffer)
 	WARN_ON(buffer->reuse_callback_armed);
 	WARN_ON(buffer->completion_fence);
 	dma_fence_put(buffer->reuse_fence);
+	kfree(buffer->cursor_bitmap);
 	castkms_output_buffer_fini(&buffer->output);
 	if (buffer->ready_syncobj)
 		drm_syncobj_put(buffer->ready_syncobj);
@@ -848,6 +867,94 @@ void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
 	buffer->full_damage = full_damage;
 }
 
+static int castkms_capture_buffer_copy_cursor_bitmap(
+	struct castkms_capture_buffer *buffer,
+	const struct castkms_cursor_snapshot *cursor)
+{
+	struct iosys_map map[DRM_FORMAT_MAX_PLANES] = {};
+	u32 stride = cursor->fb->pitches[0];
+	u32 size = stride * cursor->height;
+	void *bitmap;
+	int ret;
+
+	ret = drm_gem_fb_vmap(cursor->fb, map, NULL);
+	if (ret)
+		return ret;
+
+	bitmap = krealloc(buffer->cursor_bitmap, size, GFP_KERNEL);
+	if (!bitmap) {
+		drm_gem_fb_vunmap(cursor->fb, map);
+		return -ENOMEM;
+	}
+
+	iosys_map_memcpy_from(bitmap, &map[0], 0, size);
+	drm_gem_fb_vunmap(cursor->fb, map);
+
+	buffer->cursor_bitmap = bitmap;
+	buffer->cursor_bitmap_size = size;
+	buffer->cursor_bitmap_stride = stride;
+	buffer->cursor_bitmap_serial = cursor->serial;
+
+	return 0;
+}
+
+static void
+castkms_capture_buffer_clear_cursor_bitmap(struct castkms_capture_buffer *buffer)
+{
+	kfree(buffer->cursor_bitmap);
+	buffer->cursor_bitmap = NULL;
+	buffer->cursor_bitmap_size = 0;
+	buffer->cursor_bitmap_stride = 0;
+	buffer->cursor_bitmap_serial = 0;
+}
+
+int castkms_capture_buffer_set_cursor(struct castkms_capture_buffer *buffer,
+				      const struct castkms_cursor_snapshot *cursor)
+{
+	struct castkms_capture_stream *stream = buffer->stream;
+	int ret;
+
+	if (!cursor || !cursor->visible) {
+		stream->cursor_serial = cursor ? cursor->serial : 0;
+		stream->cursor_serial_valid = !!cursor;
+		castkms_capture_buffer_clear_cursor_bitmap(buffer);
+		buffer->cursor_serial = 0;
+		buffer->cursor_flags = 0;
+		buffer->cursor_x = 0;
+		buffer->cursor_y = 0;
+		buffer->cursor_hotspot_x = 0;
+		buffer->cursor_hotspot_y = 0;
+		buffer->cursor_width = 0;
+		buffer->cursor_height = 0;
+		return 0;
+	}
+
+	buffer->cursor_flags = DRM_CASTKMS_CURSOR_VISIBLE;
+	if (!stream->cursor_serial_valid ||
+	    cursor->serial != stream->cursor_serial) {
+		if (!cursor->fb)
+			return -EINVAL;
+		ret = castkms_capture_buffer_copy_cursor_bitmap(buffer, cursor);
+		if (ret) {
+			castkms_capture_buffer_clear_cursor_bitmap(buffer);
+			buffer->cursor_serial = 0;
+			buffer->cursor_flags = 0;
+			return ret;
+		}
+		stream->cursor_serial = cursor->serial;
+		stream->cursor_serial_valid = true;
+		buffer->cursor_flags |= DRM_CASTKMS_CURSOR_IMAGE_CHANGED;
+	}
+	buffer->cursor_serial = cursor->serial;
+	buffer->cursor_x = cursor->x;
+	buffer->cursor_y = cursor->y;
+	buffer->cursor_hotspot_x = cursor->hotspot_x;
+	buffer->cursor_hotspot_y = cursor->hotspot_y;
+	buffer->cursor_width = cursor->width;
+	buffer->cursor_height = cursor->height;
+
+	return 0;
+}
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status)

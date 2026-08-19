@@ -48,9 +48,9 @@ static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24,
 	      "capture attach-monitor ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_detach_monitor) == 16,
 	      "capture detach-monitor ABI size changed");
-static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80,
+static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
 	      "capture event ABI size changed");
-static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76,
+static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108,
 	      "capture event ABI layout changed");
 
 struct test_framebuffer {

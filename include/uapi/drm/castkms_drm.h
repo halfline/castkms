@@ -334,6 +334,23 @@ struct drm_castkms_capture_detach_monitor {
 #define DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED	(1U << 1)
 
 /**
+ * DRM_CASTKMS_CURSOR_VISIBLE:
+ *
+ * The cursor plane was visible when the frame was captured.
+ */
+#define DRM_CASTKMS_CURSOR_VISIBLE		(1U << 0)
+
+/**
+ * DRM_CASTKMS_CURSOR_IMAGE_CHANGED:
+ *
+ * The cursor image, hotspot, or visibility changed since the previous
+ * successful capture on this stream. The client should re-fetch the bitmap
+ * from the buffer named by the event and cache it for subsequent stream
+ * events.
+ */
+#define DRM_CASTKMS_CURSOR_IMAGE_CHANGED	(1U << 1)
+
+/**
  * struct drm_event_castkms_capture_frame - capture completion event
  * @base: DRM event header with type DRM_CASTKMS_CAPTURE_EVENT_FRAME
  * @user_data: opaque value supplied when the buffer was queued
@@ -350,6 +367,14 @@ struct drm_castkms_capture_detach_monitor {
  * @damage_y: top edge of the changed rectangle
  * @damage_width: width of the changed rectangle
  * @damage_height: height of the changed rectangle
+ * @cursor_serial: cursor generation counter; 0 means no cursor data
+ * @cursor_flags: bitmask of DRM_CASTKMS_CURSOR_* values
+ * @cursor_x: cursor screen X position (valid when CURSOR_VISIBLE)
+ * @cursor_y: cursor screen Y position (valid when CURSOR_VISIBLE)
+ * @cursor_hotspot_x: hotspot X offset within cursor image
+ * @cursor_hotspot_y: hotspot Y offset within cursor image
+ * @cursor_width: cursor image width in pixels
+ * @cursor_height: cursor image height in pixels
  * @reserved: must be zero
  */
 struct drm_event_castkms_capture_frame {
@@ -367,6 +392,14 @@ struct drm_event_castkms_capture_frame {
 	__s32 damage_y;
 	__u32 damage_width;
 	__u32 damage_height;
+	__u32 cursor_serial;
+	__u32 cursor_flags;
+	__s32 cursor_x;
+	__s32 cursor_y;
+	__u32 cursor_hotspot_x;
+	__u32 cursor_hotspot_y;
+	__u32 cursor_width;
+	__u32 cursor_height;
 	__u32 reserved;
 };
 

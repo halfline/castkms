@@ -20,6 +20,7 @@ struct dma_fence;
 struct castkms_capture_buffer;
 struct castkms_capture_stream;
 struct castkms_crtc_state;
+struct castkms_cursor_snapshot;
 struct castkms_output;
 struct castkms_output_buffer;
 
@@ -107,6 +108,8 @@ castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
 void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
 				       const struct drm_rect *clip,
 				       bool full_damage);
+void castkms_capture_buffer_set_cursor(struct castkms_capture_buffer *buffer,
+				       const struct castkms_cursor_snapshot *cursor);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
