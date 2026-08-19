@@ -6,11 +6,13 @@ set -euo pipefail
 target_release=${1:?missing target kernel release}
 rpm_base_url=${2:?missing kernel RPM base URL}
 rpm_dir=/var/tmp/castkms-kernel-$target_release
-toolchain_stamp=/var/lib/castkms-vm/toolchain-v3
+toolchain_stamp=/var/lib/castkms-vm/toolchain-v6
 kernel_ready=1
 
 if test ! -e "$toolchain_stamp"; then
 	sudo dnf -y -q --setopt=install_weak_deps=False install \
+		alsa-lib-devel \
+		alsa-utils \
 		bc \
 		bison \
 		curl \
@@ -26,6 +28,7 @@ if test ! -e "$toolchain_stamp"; then
 		perl-interpreter \
 		pipewire \
 		pipewire-devel \
+		pipewire-utils \
 		pkgconf \
 		rsync
 	sudo mkdir -p "$(dirname -- "$toolchain_stamp")"
