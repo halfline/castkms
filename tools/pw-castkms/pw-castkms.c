@@ -332,12 +332,7 @@ static int capture_stop(int fd, uint32_t stream_id)
 	return 0;
 }
 
-#define PW_EDID_BLOCK CASTKMS_EDID_BLOCK
-
-static int fill_named_edid(uint8_t edid[PW_EDID_BLOCK], const char *name)
-{
-	return castkms_fill_named_edid(edid, name);
-}
+#define PW_EDID_MAX_SIZE (CASTKMS_EDID_BLOCK * CASTKMS_EDID_MAX_BLOCKS)
 
 static int read_edid_file(const char *path, uint8_t **out, uint32_t *out_size)
 {
@@ -356,7 +351,7 @@ static int read_edid_file(const char *path, uint8_t **out, uint32_t *out_size)
 		return -1;
 	}
 	rewind(fp);
-	if (!size || size > 512 || size % PW_EDID_BLOCK) {
+	if (!size || size > 512 || size % CASTKMS_EDID_BLOCK) {
 		fprintf(stderr,
 			"%s: EDID must be a 128-byte multiple up to 512 bytes\n",
 			path);
@@ -1184,7 +1179,7 @@ int main(int argc, char *argv[])
 	bool crtc_specified = false;
 	const char *edid_path = NULL;
 	const char *edid_name = NULL;
-	uint8_t named_edid[PW_EDID_BLOCK];
+	uint8_t named_edid[PW_EDID_MAX_SIZE];
 	uint8_t *edid = NULL;
 	uint8_t *edid_alloc = NULL;
 	uint32_t edid_size = 0;
@@ -1238,23 +1233,34 @@ int main(int argc, char *argv[])
 	ioctl(b->drm_fd, DRM_IOCTL_DROP_MASTER, 0);
 
 	if (edid_name) {
-		if (fill_named_edid(named_edid, edid_name)) {
+		int edid_ret;
+
+		edid_ret = castkms_fill_edid(named_edid, sizeof(named_edid),
+					     edid_name,
+					     CASTKMS_EDID_FLAG_AUDIO);
+		if (edid_ret < 0) {
 			fprintf(stderr,
 				"monitor name must be at most 13 characters\n");
 			goto out;
 		}
 		edid = named_edid;
-		edid_size = sizeof(named_edid);
+		edid_size = (uint32_t)edid_ret;
 	} else if (edid_path) {
 		if (read_edid_file(edid_path, &edid_alloc, &edid_size))
 			goto out;
 		edid = edid_alloc;
-	} else if (fill_named_edid(named_edid, NULL)) {
-		fprintf(stderr, "failed to build default output EDID\n");
-		goto out;
 	} else {
+		int edid_ret;
+
+		edid_ret = castkms_fill_edid(named_edid, sizeof(named_edid),
+					     NULL, CASTKMS_EDID_FLAG_AUDIO);
+		if (edid_ret < 0) {
+			fprintf(stderr,
+				"failed to build default output EDID\n");
+			goto out;
+		}
 		edid = named_edid;
-		edid_size = sizeof(named_edid);
+		edid_size = (uint32_t)edid_ret;
 	}
 
 	if (find_display_connector(b->drm_fd,
