@@ -16,11 +16,13 @@ struct drm_file;
  * struct castkms_connector - CASTKMS custom type wrapping around the DRM connector
  *
  * @base: Base DRM connector
+ * @output_index: Stable non-writeback output identity, assigned once at creation
  * @attach_file: File that owns the current monitor attachment, or NULL
  * @monitor_attached: Whether ATTACH_MONITOR has plugged a sink into this port
  */
 struct castkms_connector {
 	struct drm_connector base;
+	unsigned int output_index;
 	struct drm_file *attach_file;
 	bool monitor_attached;
 };
@@ -28,11 +30,13 @@ struct castkms_connector {
 /**
  * castkms_connector_init() - Initialize a connector
  * @castkmsdev: CASTKMS device containing the connector
+ * @output_index: Stable non-writeback output index for this connector
  *
  * Returns:
  * The connector or an error on failure.
  */
-struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsdev);
+struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsdev,
+						 unsigned int output_index);
 
 /**
  * castkms_trigger_connector_hotplug() - Update the device's connectors status

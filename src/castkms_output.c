@@ -94,11 +94,14 @@ int castkms_output_init(struct castkms_device *castkmsdev)
 		}
 	}
 
+	unsigned int output_index = 0;
+
 	castkms_config_for_each_connector(castkmsdev->config, connector_cfg) {
 		struct castkms_config_encoder *possible_encoder;
 		unsigned long idx = 0;
 
-		connector_cfg->connector = castkms_connector_init(castkmsdev);
+		connector_cfg->connector = castkms_connector_init(castkmsdev,
+								  output_index++);
 		if (IS_ERR(connector_cfg->connector)) {
 			DRM_ERROR("Failed to init connector\n");
 			return PTR_ERR(connector_cfg->connector);
