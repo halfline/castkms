@@ -48,6 +48,10 @@ struct capture_buffer {
 	int64_t timestamp_ns;
 	uint32_t event_flags;
 	uint32_t dropped_frames;
+	int32_t damage_x;
+	int32_t damage_y;
+	uint32_t damage_width;
+	uint32_t damage_height;
 };
 
 struct bridge {
@@ -610,6 +614,10 @@ static void on_drm_readable(void *data, int fd, uint32_t mask)
 			buf->timestamp_ns = ev->timestamp_ns;
 			buf->event_flags = ev->flags;
 			buf->dropped_frames = ev->dropped_frames;
+			buf->damage_x = ev->damage_x;
+			buf->damage_y = ev->damage_y;
+			buf->damage_width = ev->damage_width;
+			buf->damage_height = ev->damage_height;
 		}
 
 		off += base->length;
@@ -651,7 +659,7 @@ static void on_param_changed(void *data, uint32_t id,
 	struct bridge *b = data;
 	uint8_t params_buf[1024];
 	struct spa_pod_builder builder;
-	const struct spa_pod *params[2];
+	const struct spa_pod *params[3];
 	int n_params = 0;
 
 	if (!param || id != SPA_PARAM_Format)
@@ -675,6 +683,15 @@ static void on_param_changed(void *data, uint32_t id,
 		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
 		SPA_PARAM_META_size,
 			SPA_POD_Int(sizeof(struct spa_meta_header)));
+
+	params[n_params++] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_VideoDamage),
+		SPA_PARAM_META_size,
+			SPA_POD_CHOICE_RANGE_Int(
+				sizeof(struct spa_meta_region),
+				sizeof(struct spa_meta_region),
+				sizeof(struct spa_meta_region) * 16));
 
 	pw_stream_update_params(b->stream, params, n_params);
 }
@@ -738,6 +755,7 @@ static void on_process(void *data)
 		struct capture_buffer *buf = &b->buffers[i];
 		struct spa_buffer *spa_buf;
 		struct spa_meta_header *h;
+		struct spa_meta *damage_meta;
 
 		if (buf->state != BUF_COMPLETED)
 			continue;
@@ -751,6 +769,26 @@ static void on_process(void *data)
 			h->dts_offset = 0;
 			h->seq = buf->sequence;
 			h->flags = 0;
+		}
+
+		damage_meta = spa_buffer_find_meta(spa_buf,
+						   SPA_META_VideoDamage);
+		if (damage_meta) {
+			struct spa_meta_region *r;
+			uint32_t n = 0;
+
+			spa_meta_for_each(r, damage_meta) {
+				if (n == 0 && buf->damage_width &&
+				    buf->damage_height) {
+					r->region.position.x = buf->damage_x;
+					r->region.position.y = buf->damage_y;
+					r->region.size.width = buf->damage_width;
+					r->region.size.height = buf->damage_height;
+				} else {
+					r->region = SPA_REGION(0, 0, 0, 0);
+				}
+				n++;
+			}
 		}
 
 		spa_buf->datas[0].chunk->offset = 0;
