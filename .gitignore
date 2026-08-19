@@ -10,3 +10,4 @@ modules.order
 tools/castkms-capture-test
 tools/pw-castkms/pw-castkms
 tools/pw-castkms/pw-castkms-test
+tools/pw-castkms/pw-castkms-view

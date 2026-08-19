@@ -14,6 +14,7 @@ if test ! -e "$desktop_stamp"; then
 		gnome-session-wayland-session \
 		gnome-settings-daemon \
 		gnome-shell \
+		gtk4-devel \
 		mesa-dri-drivers \
 		mesa-libgbm \
 		mesa-vulkan-drivers \
