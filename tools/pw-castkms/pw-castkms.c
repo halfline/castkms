@@ -52,6 +52,14 @@ struct capture_buffer {
 	int32_t damage_y;
 	uint32_t damage_width;
 	uint32_t damage_height;
+	uint32_t cursor_serial;
+	uint32_t cursor_flags;
+	int32_t cursor_x, cursor_y;
+	uint32_t cursor_hotspot_x, cursor_hotspot_y;
+	uint32_t cursor_width, cursor_height;
+	void *cursor_bitmap;
+	uint32_t cursor_bitmap_size;
+	uint32_t cursor_bitmap_alloc;
 };
 
 struct bridge {
@@ -292,7 +300,8 @@ static int capture_start(int fd, uint32_t crtc_id,
 {
 	struct drm_castkms_capture_start start = {
 		.crtc_id = crtc_id,
-		.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE,
+		.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE |
+			 DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR,
 	};
 
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_START, &start) < 0)
@@ -532,6 +541,9 @@ static void free_capture_buffer(struct bridge *b, struct capture_buffer *buf)
 {
 	struct drm_mode_destroy_dumb destroy;
 
+	free(buf->cursor_bitmap);
+	buf->cursor_bitmap = NULL;
+
 	if (buf->buffer_id && b->capture_active)
 		capture_unregister(b->drm_fd, b->stream_id, buf->buffer_id);
 
@@ -576,6 +588,44 @@ static void submit_free_buffers(struct bridge *b)
 	}
 }
 
+/* ---- Cursor bitmap fetch ---- */
+
+static void fetch_cursor_bitmap(struct bridge *b, struct capture_buffer *buf)
+{
+	struct drm_castkms_capture_read_cursor_bitmap args = {
+		.stream_id = b->stream_id,
+		.buffer_id = buf->buffer_id,
+	};
+
+	if (ioctl(b->drm_fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+		  &args) < 0)
+		return;
+
+	if (!args.bitmap_size)
+		return;
+
+	if (args.bitmap_size > buf->cursor_bitmap_alloc) {
+		free(buf->cursor_bitmap);
+		buf->cursor_bitmap = malloc(args.bitmap_size);
+		if (!buf->cursor_bitmap) {
+			buf->cursor_bitmap_alloc = 0;
+			buf->cursor_bitmap_size = 0;
+			return;
+		}
+		buf->cursor_bitmap_alloc = args.bitmap_size;
+	}
+
+	args.bitmap_ptr = (uint64_t)(uintptr_t)buf->cursor_bitmap;
+	args.bitmap_size = buf->cursor_bitmap_alloc;
+	if (ioctl(b->drm_fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+		  &args) < 0) {
+		buf->cursor_bitmap_size = 0;
+		return;
+	}
+
+	buf->cursor_bitmap_size = args.bitmap_size;
+}
+
 /* ---- DRM event handler ---- */
 
 static void on_drm_readable(void *data, int fd, uint32_t mask)
@@ -618,6 +668,14 @@ static void on_drm_readable(void *data, int fd, uint32_t mask)
 			buf->damage_y = ev->damage_y;
 			buf->damage_width = ev->damage_width;
 			buf->damage_height = ev->damage_height;
+			buf->cursor_serial = ev->cursor_serial;
+			buf->cursor_flags = ev->cursor_flags;
+			buf->cursor_x = ev->cursor_x;
+			buf->cursor_y = ev->cursor_y;
+			buf->cursor_hotspot_x = ev->cursor_hotspot_x;
+			buf->cursor_hotspot_y = ev->cursor_hotspot_y;
+			buf->cursor_width = ev->cursor_width;
+			buf->cursor_height = ev->cursor_height;
 		}
 
 		off += base->length;
@@ -659,7 +717,7 @@ static void on_param_changed(void *data, uint32_t id,
 	struct bridge *b = data;
 	uint8_t params_buf[1024];
 	struct spa_pod_builder builder;
-	const struct spa_pod *params[3];
+	const struct spa_pod *params[4];
 	int n_params = 0;
 
 	if (!param || id != SPA_PARAM_Format)
@@ -692,6 +750,14 @@ static void on_param_changed(void *data, uint32_t id,
 				sizeof(struct spa_meta_region),
 				sizeof(struct spa_meta_region),
 				sizeof(struct spa_meta_region) * 16));
+
+	params[n_params++] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Cursor),
+		SPA_PARAM_META_size,
+			SPA_POD_Int(sizeof(struct spa_meta_cursor) +
+				    sizeof(struct spa_meta_bitmap) +
+				    256 * 256 * 4));
 
 	pw_stream_update_params(b->stream, params, n_params);
 }
@@ -788,6 +854,58 @@ static void on_process(void *data)
 					r->region = SPA_REGION(0, 0, 0, 0);
 				}
 				n++;
+			}
+		}
+
+		{
+			struct spa_meta_cursor *mc;
+
+			mc = spa_buffer_find_meta_data(spa_buf,
+						       SPA_META_Cursor,
+						       sizeof(*mc));
+			if (mc) {
+				if (buf->cursor_flags &
+				    DRM_CASTKMS_CURSOR_VISIBLE) {
+					mc->id = buf->cursor_serial;
+					mc->flags = 0;
+					mc->position = SPA_POINT(
+						buf->cursor_x, buf->cursor_y);
+					mc->hotspot = SPA_POINT(
+						buf->cursor_hotspot_x,
+						buf->cursor_hotspot_y);
+
+					if (buf->cursor_flags &
+					    DRM_CASTKMS_CURSOR_IMAGE_CHANGED)
+						fetch_cursor_bitmap(b, buf);
+
+					if (buf->cursor_bitmap &&
+					    buf->cursor_bitmap_size) {
+						struct spa_meta_bitmap *bmp;
+
+						mc->bitmap_offset =
+							sizeof(*mc);
+						bmp = SPA_PTROFF(mc,
+							mc->bitmap_offset,
+							struct spa_meta_bitmap);
+						bmp->format =
+							SPA_VIDEO_FORMAT_BGRA;
+						bmp->size = SPA_RECTANGLE(
+							buf->cursor_width,
+							buf->cursor_height);
+						bmp->stride =
+							buf->cursor_width * 4;
+						bmp->offset = sizeof(*bmp);
+						memcpy(SPA_PTROFF(bmp,
+								  bmp->offset,
+								  void),
+						       buf->cursor_bitmap,
+						       buf->cursor_bitmap_size);
+					} else {
+						mc->bitmap_offset = 0;
+					}
+				} else {
+					mc->id = 0;
+				}
 			}
 		}
 
