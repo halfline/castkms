@@ -1080,7 +1080,193 @@ sudo rm -rf "$pw_runtime"
 pw_runtime=
 rm -f "$runtime_dir/pw-mode-gate"
 
-sudo rmmod castkms
+# ALSA audio test
+# Reuse the castkms instance from the PipeWire section, which loaded
+# with enable_audio=1.  PipeWire and WirePlumber are stopped but the
+# module is still loaded with the same DRM device.
+test -c "$castkms_drm"
+
+# The ALSA card should exist even before a monitor is attached.
+if ! grep -q CastKMS /proc/asound/cards; then
+	printf 'CastKMS card not found in /proc/asound/cards\n' >&2
+	exit 1
+fi
+printf '%s\n' 'audio_card_present=pass' | tee -a "$result_dir/summary.txt"
+
+if ! sudo modetest -M castkms -c -p \
+		> "$result_dir/audio-modetest.txt" 2>&1; then
+	cat "$result_dir/audio-modetest.txt" >&2
+	exit 1
+fi
+virtual_connector=$(awk '
+	$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $4; exit }
+' "$result_dir/audio-modetest.txt")
+crtc_id=$(awk '
+	$0 == "CRTCs:" { in_crtcs = 1; next }
+	in_crtcs && $1 ~ /^[0-9]+$/ { print $1; exit }
+' "$result_dir/audio-modetest.txt")
+test -n "$virtual_connector"
+test -n "$crtc_id"
+
+# Before attach, playback should fail (no audio-capable monitor).
+castkms_card_index=$(awk '/CastKMS/ { print $1; exit }' /proc/asound/cards)
+if test -z "$castkms_card_index"; then
+	printf 'could not determine CastKMS card index\n' >&2
+	exit 1
+fi
+
+# Attach a monitor with audio-capable EDID using castkms-capture-test --attach.
+mkfifo "$runtime_dir/audio-attach-gate"
+exec 5<> "$runtime_dir/audio-attach-gate"
+sudo stdbuf --output=L --error=L \
+	./tools/castkms-capture-test --attach "$castkms_drm" "$crtc_id" \
+	<&5 > "$result_dir/audio-attach-hold.txt" 2>&1 &
+attach_hold_pid=$!
+audio_attached=0
+for attempt in $(seq 1 50); do
+	if grep -Fx 'attached=1' "$result_dir/audio-attach-hold.txt" >/dev/null; then
+		audio_attached=1
+		break
+	fi
+	if ! kill -0 "$attach_hold_pid" 2>/dev/null; then
+		cat "$result_dir/audio-attach-hold.txt" >&2
+		exit 1
+	fi
+	sleep 0.1
+done
+if test "$audio_attached" -ne 1; then
+	cat "$result_dir/audio-attach-hold.txt" >&2
+	exit 1
+fi
+
+# Wait briefly for ELD propagation.
+sleep 0.5
+
+# Verify the ELD control contains non-zero data (monitor attached).
+sudo amixer -c "$castkms_card_index" cget iface=PCM,name='ELD' \
+	> "$result_dir/audio-eld.txt" 2>&1
+if grep 'values=' "$result_dir/audio-eld.txt" |
+	grep -oE '0x[0-9a-f]{2}' | grep -qv '^0x00$'; then
+	printf '%s\n' 'audio_eld_present=pass' | \
+		tee -a "$result_dir/summary.txt"
+else
+	printf 'ELD control has no data after monitor attach\n' >&2
+	cat "$result_dir/audio-eld.txt" >&2
+	exit 1
+fi
+
+# Light the CRTC so the PCM device is fully operational.
+page_flip_input_dir=$(mktemp -d)
+mkfifo "$page_flip_input_dir/input"
+exec 4<> "$page_flip_input_dir/input"
+rm "$page_flip_input_dir/input"
+rmdir "$page_flip_input_dir"
+sudo timeout --signal=INT --kill-after=2s 15s \
+	stdbuf --output=L --error=L modetest -M castkms \
+	-s "$virtual_connector@$crtc_id:1024x768" \
+	<&4 > "$result_dir/audio-modeset.txt" 2>&1 &
+audio_modeset_pid=$!
+
+modeset_ready=0
+for attempt in $(seq 1 30); do
+	if sudo modetest -a -M castkms -p 2>/dev/null |
+		awk -v crtc="$crtc_id" \
+			'$1 == crtc && $4 == "(1024x768)" { found = 1 }
+			 END { exit !found }'; then
+		modeset_ready=1
+		break
+	fi
+	sleep 0.2
+done
+if test "$modeset_ready" -ne 1; then
+	cat "$result_dir/audio-modeset.txt" >&2
+	exit 1
+fi
+
+# Short playback test: send silence for 1 second.
+aplay_status=0
+sudo timeout --signal=TERM --kill-after=2s 5s \
+	aplay -D "hw:${castkms_card_index},0" -f S16_LE -c 2 -r 48000 \
+	-d 1 /dev/zero > "$result_dir/audio-aplay.txt" 2>&1 || \
+	aplay_status=$?
+if test "$aplay_status" -ne 0; then
+	cat "$result_dir/audio-aplay.txt" >&2
+	exit 1
+fi
+printf '%s\n' 'audio_playback=pass' | tee -a "$result_dir/summary.txt"
+
+# Comprehensive audio timing validation.
+audio_test_status=0
+sudo timeout --signal=TERM --kill-after=2s 20s \
+	./tools/castkms-audio-test 5 > "$result_dir/audio-timing.txt" 2>&1 || \
+	audio_test_status=$?
+if test "$audio_test_status" -ne 0; then
+	cat "$result_dir/audio-timing.txt" >&2
+	exit 1
+fi
+
+audio_timing=$(grep '^audio_timing=' "$result_dir/audio-timing.txt" |
+	cut -d= -f2)
+if test "$audio_timing" != "pass"; then
+	printf 'audio_timing test reported: %s\n' "$audio_timing" >&2
+	cat "$result_dir/audio-timing.txt" >&2
+	exit 1
+fi
+
+grep -Fx 'system_ts_monotonic=1' "$result_dir/audio-timing.txt" >/dev/null
+printf '%s\n' 'system_ts_monotonic=1' | tee -a "$result_dir/summary.txt"
+grep -Fx 'audio_ts_present=1' "$result_dir/audio-timing.txt" >/dev/null
+printf '%s\n' 'audio_ts_present=1' | tee -a "$result_dir/summary.txt"
+grep '^clock_rate_error_pct=' "$result_dir/audio-timing.txt" |
+	tee -a "$result_dir/summary.txt"
+grep '^pause_resume=' "$result_dir/audio-timing.txt" |
+	tee -a "$result_dir/summary.txt" || true
+printf '%s\n' 'audio_timing=pass' | tee -a "$result_dir/summary.txt"
+
+# Clean up audio modeset holder.
+exec 4>&-
+kill "$audio_modeset_pid" 2>/dev/null || true
+wait "$audio_modeset_pid" 2>/dev/null || true
+audio_modeset_pid=
+
+# Detach the monitor and verify audio becomes unavailable.
+printf 'x' >&5
+exec 5>&-
+wait "$attach_hold_pid" 2>/dev/null || true
+attach_hold_pid=
+
+sleep 0.3
+
+# After detach, the ELD should contain only zeroes.
+sudo amixer -c "$castkms_card_index" cget iface=PCM,name='ELD' \
+	> "$result_dir/audio-eld-after.txt" 2>&1
+if ! grep 'values=' "$result_dir/audio-eld-after.txt" |
+	grep -oE '0x[0-9a-f]{2}' | grep -qv '^0x00$'; then
+	printf '%s\n' 'audio_detach_eld=pass' | \
+		tee -a "$result_dir/summary.txt"
+else
+	printf 'ELD still has data after detach\n' >&2
+	cat "$result_dir/audio-eld-after.txt" >&2
+	exit 1
+fi
+
+rm -f "$runtime_dir/audio-attach-gate"
+printf '%s\n' 'audio_lifecycle=pass' | tee -a "$result_dir/summary.txt"
+
+# Wait for ALSA device references to drain before unloading.
+sudo killall alsactl 2>/dev/null || true
+sleep 0.3
+for attempt in $(seq 1 20); do
+	if sudo rmmod castkms 2>/dev/null; then
+		break
+	fi
+	sudo fuser -k /dev/snd/* 2>/dev/null || true
+	sleep 0.5
+done
+if lsmod | grep -q '^castkms\b'; then
+	sudo fuser -v /dev/snd/* 2>&1 || true
+	sudo rmmod castkms
+fi
 cast_loaded=0
 
 printf '%s\n' 'result=pass' | tee -a "$result_dir/summary.txt"
