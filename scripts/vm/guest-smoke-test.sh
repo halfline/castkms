@@ -408,6 +408,10 @@ grep -Eq '^capture_reuse_wait=(observed|not-observed)$' \
 	"$result_dir/capture-test.txt"
 grep -Fx 'capture_frame_delivery=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_fence_ownership=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
+grep -Fx 'capture_damage_validation=pass' \
+	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_buffer_explicit=pass' \
 	"$result_dir/capture-test.txt" >/dev/null
 grep -Fx 'capture_explicit_timeline=pass' \
