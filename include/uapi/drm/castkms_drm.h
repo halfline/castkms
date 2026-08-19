@@ -483,6 +483,258 @@ struct drm_castkms_capture_read_cursor_bitmap {
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, \
 		 struct drm_castkms_capture_read_cursor_bitmap)
 
+/* --- CEC transport UAPI --- */
+
+#define DRM_CASTKMS_CEC_UAPI_MAJOR	0
+#define DRM_CASTKMS_CEC_UAPI_MINOR	1
+
+/* CEC capability flags */
+#define DRM_CASTKMS_CEC_CAP_ASYNC_TX		(1ULL << 0)
+#define DRM_CASTKMS_CEC_CAP_RX_INJECT		(1ULL << 1)
+#define DRM_CASTKMS_CEC_CAP_STATE_EVENTS	(1ULL << 2)
+#define DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE	(1ULL << 3)
+#define DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR	(1ULL << 4)
+
+/* Transport state flags for CEC_SET_TRANSPORT_STATE */
+#define DRM_CASTKMS_CEC_TRANSPORT_ONLINE	(1U << 0)
+
+/* State flags for bind response and get-state */
+#define DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE	(1U << 0)
+#define DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED	(1U << 1)
+#define DRM_CASTKMS_CEC_STATE_ADAPTER_ENABLED	(1U << 2)
+
+/**
+ * struct drm_castkms_cec_query_caps - query CEC capabilities for a connector
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @uapi_major: CEC UAPI major version returned by the driver
+ * @uapi_minor: CEC UAPI minor version returned by the driver
+ * @capabilities: bitmask of DRM_CASTKMS_CEC_CAP_* values
+ * @max_msg_size: maximum CEC message size (16)
+ * @output_index: stable castkms output identity
+ * @has_adapter: 1 if a CEC adapter is registered for this connector
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_query_caps {
+	__u32 connector_id;
+	__u32 flags;
+	__u32 uapi_major;
+	__u32 uapi_minor;
+	__u64 capabilities;
+	__u32 max_msg_size;
+	__u32 output_index;
+	__u32 has_adapter;
+	__u32 reserved;
+};
+
+/**
+ * struct drm_castkms_cec_bind_transport - bind as the CEC transport owner
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @transport_id: file-local transport ID returned by the driver
+ * @reserved: must be zero
+ * @transport_generation: transport generation returned by the driver
+ * @state_generation: current state generation returned by the driver
+ * @output_index: stable castkms output identity
+ * @state_flags: bitmask of DRM_CASTKMS_CEC_STATE_* values
+ * @phys_addr: current EDID-derived physical address
+ * @logical_addr_mask: current logical address mask
+ */
+struct drm_castkms_cec_bind_transport {
+	__u32 connector_id;
+	__u32 flags;
+	__u32 transport_id;
+	__u32 reserved;
+	__u64 transport_generation;
+	__u64 state_generation;
+	__u32 output_index;
+	__u32 state_flags;
+	__u16 phys_addr;
+	__u16 logical_addr_mask;
+};
+
+/**
+ * struct drm_castkms_cec_unbind_transport - release transport ownership
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @flags: must be zero
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_unbind_transport {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u32 flags;
+	__u32 reserved;
+};
+
+/**
+ * struct drm_castkms_cec_set_transport_state - set online/offline state
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @flags: DRM_CASTKMS_CEC_TRANSPORT_ONLINE or 0 for offline
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_set_transport_state {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u32 flags;
+	__u32 reserved;
+};
+
+/**
+ * struct drm_castkms_cec_tx_complete - complete an outbound CEC transaction
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @transport_generation: generation from the TX event
+ * @cookie: transaction cookie from the TX event
+ * @status: Linux CEC transmit status (CEC_TX_STATUS_*)
+ * @arb_lost_cnt: arbitration-lost counter
+ * @nack_cnt: NACK counter
+ * @low_drive_cnt: low-drive counter
+ * @error_cnt: generic error counter
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_tx_complete {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u64 transport_generation;
+	__u64 cookie;
+	__u8 status;
+	__u8 arb_lost_cnt;
+	__u8 nack_cnt;
+	__u8 low_drive_cnt;
+	__u8 error_cnt;
+	__u8 reserved[3];
+};
+
+/**
+ * struct drm_castkms_cec_receive - inject a received CEC message
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @transport_generation: generation from bind
+ * @length: message length (1-16)
+ * @flags: must be zero
+ * @msg: CEC message bytes
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_receive {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u64 transport_generation;
+	__u8 length;
+	__u8 flags;
+	__u8 msg[16];
+	__u8 reserved;
+};
+
+/**
+ * struct drm_castkms_cec_get_state - get authoritative transport state
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @flags: must be zero
+ * @reserved: must be zero
+ * @transport_generation: current transport generation
+ * @state_generation: current state generation
+ * @state_flags: bitmask of DRM_CASTKMS_CEC_STATE_* values
+ * @output_index: stable castkms output identity
+ * @phys_addr: current physical address
+ * @logical_addr_mask: current logical address mask
+ * @pending_cookie: outstanding transaction cookie, or 0
+ * @stats_tx_submitted: total transmit events delivered
+ * @stats_tx_completed: total successful completions
+ * @stats_tx_nack: total NACK completions
+ * @stats_tx_error: total error completions
+ * @stats_tx_timeout: total timeout completions
+ * @stats_rx: total received messages injected
+ * @stats_invalid: total rejected invalid requests
+ */
+struct drm_castkms_cec_get_state {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u32 flags;
+	__u32 reserved;
+	__u64 transport_generation;
+	__u64 state_generation;
+	__u32 state_flags;
+	__u32 output_index;
+	__u16 phys_addr;
+	__u16 logical_addr_mask;
+	__u64 pending_cookie;
+	__u64 stats_tx_submitted;
+	__u64 stats_tx_completed;
+	__u64 stats_tx_nack;
+	__u64 stats_tx_error;
+	__u64 stats_tx_timeout;
+	__u64 stats_rx;
+	__u64 stats_invalid;
+};
+
+/* CEC DRM event types */
+#define DRM_CASTKMS_CEC_EVENT_TX	0x80000001U
+#define DRM_CASTKMS_CEC_EVENT_STATE	0x80000002U
+
+/**
+ * struct drm_castkms_cec_event_tx - outbound CEC transmit event
+ * @base: DRM event header with type DRM_CASTKMS_CEC_EVENT_TX
+ * @transport_id: file-local owner identifier
+ * @transport_generation: detect stale bindings
+ * @state_generation: associate request with adapter state
+ * @cookie: match completion
+ * @connector_id: direct connector identity
+ * @output_index: stable A/V/C identity
+ * @attempts: requested CEC attempt count
+ * @signal_free_time: CEC-core timing request
+ * @length: message length
+ * @msg: up to 16 bytes of CEC message
+ * @reserved: future extension
+ */
+struct drm_castkms_cec_event_tx {
+	struct drm_event base;
+	__u32 transport_id;
+	__u32 pad0;
+	__u64 transport_generation;
+	__u64 state_generation;
+	__u64 cookie;
+	__u32 connector_id;
+	__u32 output_index;
+	__u8 attempts;
+	__u8 length;
+	__u8 msg[16];
+	__u16 reserved;
+	__u32 signal_free_time;
+};
+
+/* CEC ioctl command numbers (after capture range 0x00-0x09) */
+#define DRM_CASTKMS_CEC_QUERY_CAPS		0x0a
+#define DRM_CASTKMS_CEC_BIND_TRANSPORT		0x0b
+#define DRM_CASTKMS_CEC_UNBIND_TRANSPORT	0x0c
+#define DRM_CASTKMS_CEC_SET_TRANSPORT_STATE	0x0d
+#define DRM_CASTKMS_CEC_TX_COMPLETE		0x0e
+#define DRM_CASTKMS_CEC_RECEIVE			0x0f
+#define DRM_CASTKMS_CEC_GET_STATE		0x10
+
+#define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
+		 struct drm_castkms_cec_query_caps)
+#define DRM_IOCTL_CASTKMS_CEC_BIND_TRANSPORT \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_BIND_TRANSPORT, \
+		 struct drm_castkms_cec_bind_transport)
+#define DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_UNBIND_TRANSPORT, \
+		struct drm_castkms_cec_unbind_transport)
+#define DRM_IOCTL_CASTKMS_CEC_SET_TRANSPORT_STATE \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_SET_TRANSPORT_STATE, \
+		struct drm_castkms_cec_set_transport_state)
+#define DRM_IOCTL_CASTKMS_CEC_TX_COMPLETE \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_TX_COMPLETE, \
+		struct drm_castkms_cec_tx_complete)
+#define DRM_IOCTL_CASTKMS_CEC_RECEIVE \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_RECEIVE, \
+		struct drm_castkms_cec_receive)
+#define DRM_IOCTL_CASTKMS_CEC_GET_STATE \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_GET_STATE, \
+		 struct drm_castkms_cec_get_state)
+
 #if defined(__cplusplus)
 }
 #endif
