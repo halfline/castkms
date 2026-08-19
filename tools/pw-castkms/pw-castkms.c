@@ -75,6 +75,7 @@ struct bridge {
 
 	uint32_t crtc_id;
 	uint32_t connector_id;
+	int output_index;
 	char connector_name[64];
 	uint32_t width;
 	uint32_t height;
@@ -179,11 +180,14 @@ static int connector_can_drive_crtc(int drm_fd, drmModeConnector *conn,
 
 static int find_display_connector(int drm_fd, uint32_t crtc_id,
 				  uint32_t *out_connector_id,
+				  int *out_output_index,
 				  char *conn_name, size_t conn_name_len)
 {
 	drmModeRes *res = drmModeGetResources(drm_fd);
 	drmModeConnector *fallback = NULL;
 	uint32_t fallback_id = 0;
+	int fallback_index = -1;
+	int output_index = 0;
 
 	if (!res) {
 		perror("drmModeGetResources");
@@ -202,11 +206,13 @@ static int find_display_connector(int drm_fd, uint32_t crtc_id,
 		}
 		if (crtc_id && !connector_can_drive_crtc(drm_fd, conn, crtc_id)) {
 			drmModeFreeConnector(conn);
+			output_index++;
 			continue;
 		}
 
 		if (conn->connection == DRM_MODE_DISCONNECTED) {
 			*out_connector_id = conn->connector_id;
+			*out_output_index = output_index;
 			snprintf(conn_name, conn_name_len, "%s-%u",
 				 drmModeGetConnectorTypeName(conn->connector_type),
 				 conn->connector_type_id);
@@ -218,13 +224,17 @@ static int find_display_connector(int drm_fd, uint32_t crtc_id,
 		if (!fallback) {
 			fallback = conn;
 			fallback_id = conn->connector_id;
+			fallback_index = output_index;
+			output_index++;
 			continue;
 		}
 		drmModeFreeConnector(conn);
+		output_index++;
 	}
 
 	if (fallback) {
 		*out_connector_id = fallback_id;
+		*out_output_index = fallback_index;
 		snprintf(conn_name, conn_name_len, "%s-%u",
 			 drmModeGetConnectorTypeName(fallback->connector_type),
 			 fallback->connector_type_id);
@@ -1265,7 +1275,8 @@ int main(int argc, char *argv[])
 
 	if (find_display_connector(b->drm_fd,
 				   crtc_specified ? target_crtc : 0,
-				   &b->connector_id, b->connector_name,
+				   &b->connector_id, &b->output_index,
+				   b->connector_name,
 				   sizeof(b->connector_name)))
 		goto out;
 
@@ -1364,15 +1375,25 @@ int main(int argc, char *argv[])
 
 	snprintf(crtc_str, sizeof(crtc_str), "%u", b->crtc_id);
 
-	props = pw_properties_new(
-		PW_KEY_MEDIA_CLASS, "Video/Source",
-		PW_KEY_NODE_NAME, node_name,
-		PW_KEY_NODE_DESCRIPTION, b->connector_name,
-		"device.api", "drm",
-		"api.castkms.card", b->card_path,
-		"api.castkms.crtc-id", crtc_str,
-		"api.castkms.connector", b->connector_name,
-		NULL);
+	{
+		char output_index_str[16];
+
+		snprintf(output_index_str, sizeof(output_index_str),
+			 "%d", b->output_index);
+
+		props = pw_properties_new(
+			PW_KEY_MEDIA_CLASS, "Video/Source",
+			PW_KEY_MEDIA_ROLE, "Screen",
+			PW_KEY_NODE_NAME, node_name,
+			PW_KEY_NODE_DESCRIPTION, b->connector_name,
+			"device.api", "drm",
+			"api.castkms.card", b->card_path,
+			"api.castkms.crtc-id", crtc_str,
+			"api.castkms.connector", b->connector_name,
+			"api.castkms.output-index", output_index_str,
+			"api.castkms.capture", "true",
+			NULL);
+	}
 
 	b->stream = pw_stream_new(b->core, node_name, props);
 	if (!b->stream) {
