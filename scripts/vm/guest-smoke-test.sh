@@ -20,6 +20,12 @@ connect_modeset_pid=
 crc_fd=
 crc_pid=
 writeback_pid=
+pw_daemon_pid=
+pw_wireplumber_pid=
+pw_source_pid=
+pw_modeset_pid=
+pw_mode_gate_open=0
+pw_runtime=
 
 append_crc_record()
 {
@@ -133,10 +139,33 @@ cleanup()
 		kill "$unplug_helper_pid" 2>/dev/null || true
 		wait "$unplug_helper_pid" 2>/dev/null || true
 	fi
+	if test "$pw_mode_gate_open" -eq 1; then
+		exec 6>&-
+	fi
+	if test -n "$pw_source_pid"; then
+		kill "$pw_source_pid" 2>/dev/null || true
+		wait "$pw_source_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_modeset_pid"; then
+		kill "$pw_modeset_pid" 2>/dev/null || true
+		wait "$pw_modeset_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_wireplumber_pid"; then
+		kill "$pw_wireplumber_pid" 2>/dev/null || true
+		wait "$pw_wireplumber_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_daemon_pid"; then
+		kill "$pw_daemon_pid" 2>/dev/null || true
+		wait "$pw_daemon_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_runtime"; then
+		sudo rm -rf "$pw_runtime"
+	fi
 	if test -n "$runtime_dir"; then
 		rm -f "$runtime_dir/drm-unplug-check" \
 			"$runtime_dir/unplug-gate" "$runtime_dir/mode-gate" \
-			"$runtime_dir/attach-gate"
+			"$runtime_dir/attach-gate" \
+			"$runtime_dir/pw-mode-gate"
 		rmdir "$runtime_dir" 2>/dev/null || true
 	fi
 	if test "$cast_loaded" -eq 1; then
@@ -740,6 +769,155 @@ grep -Fx 'cursor_clear=pass' "$result_dir/cursor-test.txt" >/dev/null
 grep -Fx 'cursor_hidden_bitmap=pass' "$result_dir/cursor-test.txt" >/dev/null
 grep -Fx 'cursor_test=pass' "$result_dir/cursor-test.txt" >/dev/null
 printf '%s\n' 'capture_cursor_metadata=pass' | tee -a "$result_dir/summary.txt"
+
+sudo rmmod castkms
+cast_loaded=0
+
+# PipeWire bridge test
+sudo insmod ./castkms.ko \
+	create_default_dev=1 \
+	enable_cursor=0 \
+	enable_overlay=0 \
+	enable_writeback=0
+cast_loaded=1
+sudo udevadm settle
+
+castkms_minor=$(sudo find /sys/kernel/debug/dri -maxdepth 1 -type l \
+	-lname castkms -printf '%f\n')
+test -n "$castkms_minor"
+castkms_drm=/dev/dri/card$castkms_minor
+test -c "$castkms_drm"
+
+if ! sudo modetest -M castkms -c -p \
+		> "$result_dir/pw-modetest.txt" 2>&1; then
+	cat "$result_dir/pw-modetest.txt" >&2
+	exit 1
+fi
+virtual_connector=$(awk '
+	$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $4; exit }
+' "$result_dir/pw-modetest.txt")
+crtc_id=$(awk '
+	$0 == "CRTCs:" { in_crtcs = 1; next }
+	in_crtcs && $1 ~ /^[0-9]+$/ { print $1; exit }
+' "$result_dir/pw-modetest.txt")
+test -n "$virtual_connector"
+test -n "$crtc_id"
+
+pw_runtime=$(mktemp -d)
+sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+	XDG_RUNTIME_DIR="$pw_runtime" pipewire \
+	> "$result_dir/pw-daemon.txt" 2>&1 &
+pw_daemon_pid=$!
+
+pw_ready=0
+for attempt in $(seq 1 20); do
+	if sudo test -S "$pw_runtime/pipewire-0"; then
+		pw_ready=1
+		break
+	fi
+	if ! kill -0 "$pw_daemon_pid" 2>/dev/null; then
+		cat "$result_dir/pw-daemon.txt" >&2
+		exit 1
+	fi
+	sleep 0.2
+done
+if test "$pw_ready" -ne 1; then
+	cat "$result_dir/pw-daemon.txt" >&2
+	exit 1
+fi
+
+sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+	XDG_RUNTIME_DIR="$pw_runtime" wireplumber \
+	> "$result_dir/pw-wireplumber.txt" 2>&1 &
+pw_wireplumber_pid=$!
+sleep 0.5
+
+sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+	XDG_RUNTIME_DIR="$pw_runtime" \
+	./tools/pw-castkms/pw-castkms -d "$castkms_drm" -c "$crtc_id" \
+	> "$result_dir/pw-castkms.txt" 2>&1 &
+pw_source_pid=$!
+
+pw_attached=0
+for attempt in $(seq 1 50); do
+	if sudo modetest -M castkms -c 2>/dev/null |
+		awk -v name="$virtual_connector" \
+			'$4 == name && $3 == "connected" { found = 1 }
+			 END { exit !found }'; then
+		pw_attached=1
+		break
+	fi
+	if ! kill -0 "$pw_source_pid" 2>/dev/null; then
+		cat "$result_dir/pw-castkms.txt" >&2
+		exit 1
+	fi
+	sleep 0.2
+done
+if test "$pw_attached" -ne 1; then
+	cat "$result_dir/pw-castkms.txt" >&2
+	exit 1
+fi
+
+mkfifo "$runtime_dir/pw-mode-gate"
+exec 6<> "$runtime_dir/pw-mode-gate"
+pw_mode_gate_open=1
+sudo timeout --signal=INT --kill-after=2s 30s \
+	stdbuf --output=L --error=L modetest -M castkms \
+	-s "$virtual_connector@$crtc_id:1024x768" \
+	<&6 > "$result_dir/pw-modeset.txt" 2>&1 &
+pw_modeset_pid=$!
+
+pw_running=0
+for attempt in $(seq 1 60); do
+	if grep -Fq 'running' "$result_dir/pw-castkms.txt" 2>/dev/null; then
+		pw_running=1
+		break
+	fi
+	if ! kill -0 "$pw_source_pid" 2>/dev/null; then
+		cat "$result_dir/pw-castkms.txt" >&2
+		exit 1
+	fi
+	sleep 0.5
+done
+if test "$pw_running" -ne 1; then
+	cat "$result_dir/pw-castkms.txt" >&2
+	exit 1
+fi
+
+pw_node="castkms.card${castkms_minor}.crtc-${crtc_id}"
+sudo env PIPEWIRE_RUNTIME_DIR="$pw_runtime" \
+	XDG_RUNTIME_DIR="$pw_runtime" \
+	timeout --signal=TERM --kill-after=2s 20s \
+	./tools/pw-castkms/pw-castkms-test -n "$pw_node" -f 10 -t 15 \
+	| tee "$result_dir/pw-castkms-test.txt"
+
+grep -Fx 'pw_connected=1' "$result_dir/pw-castkms-test.txt" >/dev/null
+grep -Fx 'format_negotiated=1' "$result_dir/pw-castkms-test.txt" >/dev/null
+grep -Fx 'timed_out=0' "$result_dir/pw-castkms-test.txt" >/dev/null
+grep -Fx 'sequence_monotonic=1' "$result_dir/pw-castkms-test.txt" >/dev/null
+grep -Fx 'timestamp_monotonic=1' "$result_dir/pw-castkms-test.txt" >/dev/null
+grep -Fx 'meta_present=1' "$result_dir/pw-castkms-test.txt" >/dev/null
+grep -Fx 'data_valid=1' "$result_dir/pw-castkms-test.txt" >/dev/null
+grep -Fx 'pw_castkms_test=pass' "$result_dir/pw-castkms-test.txt" >/dev/null
+printf '%s\n' 'pw_castkms_bridge=pass' | tee -a "$result_dir/summary.txt"
+
+exec 6>&-
+pw_mode_gate_open=0
+kill "$pw_source_pid" 2>/dev/null || true
+wait "$pw_source_pid" 2>/dev/null || true
+pw_source_pid=
+kill "$pw_modeset_pid" 2>/dev/null || true
+wait "$pw_modeset_pid" 2>/dev/null || true
+pw_modeset_pid=
+kill "$pw_wireplumber_pid" 2>/dev/null || true
+wait "$pw_wireplumber_pid" 2>/dev/null || true
+pw_wireplumber_pid=
+kill "$pw_daemon_pid" 2>/dev/null || true
+wait "$pw_daemon_pid" 2>/dev/null || true
+pw_daemon_pid=
+sudo rm -rf "$pw_runtime"
+pw_runtime=
+rm -f "$runtime_dir/pw-mode-gate"
 
 sudo rmmod castkms
 cast_loaded=0
