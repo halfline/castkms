@@ -52,6 +52,8 @@ static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
 	      "capture event ABI size changed");
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108,
 	      "capture event ABI layout changed");
+static_assert(sizeof(struct drm_castkms_capture_read_cursor_bitmap) == 40,
+	      "capture read-cursor-bitmap ABI size changed");
 
 struct test_framebuffer {
 	uint32_t handle;
@@ -524,6 +526,13 @@ validate_capture_event(const struct drm_event_castkms_capture_frame *event,
 		return -1;
 	}
 
+	if (event->cursor_serial &&
+	    !(event->cursor_flags & DRM_CASTKMS_CURSOR_VISIBLE)) {
+		fprintf(stderr,
+			"cursor_serial is nonzero but VISIBLE flag is not set\n");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -602,6 +611,86 @@ static int wait_crtc_size(int fd, uint32_t crtc_id,
 
 	fprintf(stderr, "capture CRTC has no active mode after attach\n");
 	return -1;
+}
+
+static int set_connector_crtc(int fd, uint32_t connector_id,
+			      uint32_t crtc_id,
+			      uint32_t *out_width, uint32_t *out_height)
+{
+	struct drm_mode_get_connector conn = {
+		.connector_id = connector_id,
+	};
+	struct drm_mode_modeinfo *modes = NULL;
+	struct drm_mode_create_dumb dumb = {};
+	struct drm_mode_fb_cmd2 fb = {};
+	struct drm_mode_crtc set = {};
+	struct drm_mode_destroy_dumb destroy;
+	int ret = -1;
+
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0) {
+		perror("GETCONNECTOR count");
+		return -1;
+	}
+	if (!conn.count_modes) {
+		fprintf(stderr, "connector has no modes after attach\n");
+		return -1;
+	}
+
+	modes = calloc(conn.count_modes, sizeof(*modes));
+	if (!modes)
+		return -1;
+	conn = (struct drm_mode_get_connector){
+		.connector_id = connector_id,
+		.count_modes = conn.count_modes,
+		.modes_ptr = (uint64_t)(uintptr_t)modes,
+	};
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0) {
+		perror("GETCONNECTOR modes");
+		goto out_modes;
+	}
+
+	dumb.width = modes[0].hdisplay;
+	dumb.height = modes[0].vdisplay;
+	dumb.bpp = 32;
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb) < 0) {
+		perror("create modeset dumb buffer");
+		goto out_modes;
+	}
+
+	fb.width = modes[0].hdisplay;
+	fb.height = modes[0].vdisplay;
+	fb.pixel_format = DRM_FORMAT_XRGB8888;
+	fb.handles[0] = dumb.handle;
+	fb.pitches[0] = dumb.pitch;
+	if (ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &fb) < 0) {
+		perror("add modeset fb");
+		goto out_dumb;
+	}
+
+	set.crtc_id = crtc_id;
+	set.fb_id = fb.fb_id;
+	set.set_connectors_ptr = (uint64_t)(uintptr_t)&connector_id;
+	set.count_connectors = 1;
+	set.mode = modes[0];
+	set.mode_valid = 1;
+	if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &set) < 0) {
+		perror("SETCRTC");
+		ioctl(fd, DRM_IOCTL_MODE_RMFB, &fb.fb_id);
+		goto out_dumb;
+	}
+
+	*out_width = modes[0].hdisplay;
+	*out_height = modes[0].vdisplay;
+	ret = 0;
+
+out_dumb:
+	if (ret) {
+		destroy = (struct drm_mode_destroy_dumb){ .handle = dumb.handle };
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+	}
+out_modes:
+	free(modes);
+	return ret;
 }
 
 static int create_test_framebuffer(int fd, uint32_t width, uint32_t height,
@@ -1277,6 +1366,396 @@ out_close:
 	return ret;
 }
 
+static int run_cursor_test(const char *device, uint32_t crtc_id)
+{
+	const uint32_t cursor_w = 64, cursor_h = 64;
+	const int32_t cursor_x = 10, cursor_y = 20;
+	const int32_t hot_x = 5, hot_y = 7;
+	const uint32_t cursor_fill = 0xFFFF0000;
+	const uint64_t user_data = 0x4355525330520001ULL;
+
+	struct drm_mode_create_dumb cursor_dumb = {
+		.width = cursor_w, .height = cursor_h, .bpp = 32,
+	};
+	struct drm_mode_map_dumb cursor_map_req = {};
+	void *cursor_pixels = NULL;
+	uint32_t connector_id = 0;
+	bool attached = false;
+
+	struct drm_castkms_capture_start stream = {};
+	struct test_framebuffer capture_buf = {};
+	struct test_framebuffer second_capture_buf = {};
+	struct drm_event_castkms_capture_frame event = {};
+	uint32_t buffer_id = 0;
+	uint32_t second_buffer_id = 0;
+	uint32_t width, height;
+	uint8_t edid[TEST_EDID_BLOCK];
+	uint32_t first_serial;
+	int ioctl_ret;
+	int fd;
+	int ret = EXIT_FAILURE;
+
+	fd = open(device, O_RDWR | O_CLOEXEC);
+	if (fd < 0) {
+		perror("open DRM device");
+		return EXIT_FAILURE;
+	}
+	if (check_driver_name(fd))
+		goto out;
+
+	if (find_display_connector(fd, crtc_id, &connector_id))
+		goto out;
+	if (fill_named_edid(edid, "CursorTest"))
+		goto out;
+	ioctl_ret = attach_monitor(fd, connector_id, edid, sizeof(edid));
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("ATTACH_MONITOR");
+		goto out;
+	}
+	attached = true;
+	if (set_connector_crtc(fd, connector_id, crtc_id, &width, &height))
+		goto out;
+
+	if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &cursor_dumb) < 0) {
+		perror("create cursor dumb buffer");
+		goto out;
+	}
+	cursor_map_req.handle = cursor_dumb.handle;
+	if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &cursor_map_req) < 0) {
+		perror("map cursor dumb buffer");
+		goto out;
+	}
+	cursor_pixels = mmap(NULL, cursor_dumb.size, PROT_READ | PROT_WRITE,
+			     MAP_SHARED, fd, cursor_map_req.offset);
+	if (cursor_pixels == MAP_FAILED) {
+		cursor_pixels = NULL;
+		perror("mmap cursor buffer");
+		goto out;
+	}
+	for (uint32_t i = 0; i < cursor_w * cursor_h; i++)
+		((uint32_t *)cursor_pixels)[i] = cursor_fill;
+
+	{
+		struct drm_mode_cursor2 cur = {
+			.flags = DRM_MODE_CURSOR_BO | DRM_MODE_CURSOR_MOVE,
+			.crtc_id = crtc_id,
+			.x = cursor_x, .y = cursor_y,
+			.width = cursor_w, .height = cursor_h,
+			.handle = cursor_dumb.handle,
+			.hot_x = hot_x, .hot_y = hot_y,
+		};
+		if (ioctl(fd, DRM_IOCTL_MODE_CURSOR2, &cur) < 0) {
+			perror("set cursor");
+			goto out;
+		}
+	}
+
+	{
+		struct drm_castkms_capture_start start = {
+			.crtc_id = crtc_id,
+			.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE |
+				 DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR,
+		};
+		if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_START, &start) < 0) {
+			perror("start capture");
+			goto out;
+		}
+		stream = start;
+	}
+
+	if (create_test_framebuffer(fd, width, height, &capture_buf) ||
+	    create_test_framebuffer(fd, width, height, &second_capture_buf))
+		goto out;
+	ioctl_ret = register_capture_buffer(fd, stream.stream_id,
+					    capture_buf.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		stream.mode_generation, &buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("register capture buffer");
+		goto out;
+	}
+	ioctl_ret = register_capture_buffer(fd, stream.stream_id,
+					    second_capture_buf.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
+		stream.mode_generation, &second_buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("register second capture buffer");
+		goto out;
+	}
+
+	/* First capture: cursor visible, IMAGE_CHANGED expected */
+	ioctl_ret = queue_capture_buffer(fd, stream.stream_id, buffer_id,
+					 DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+					 stream.mode_generation, user_data, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue first capture");
+		goto out;
+	}
+	if (read_capture_event(fd, &event))
+		goto out;
+	if (!event.cursor_serial) {
+		fprintf(stderr, "cursor_serial is zero with active cursor\n");
+		goto out;
+	}
+	if (!(event.cursor_flags & DRM_CASTKMS_CURSOR_VISIBLE)) {
+		fprintf(stderr, "CURSOR_VISIBLE not set with active cursor\n");
+		goto out;
+	}
+	if (!(event.cursor_flags & DRM_CASTKMS_CURSOR_IMAGE_CHANGED)) {
+		fprintf(stderr,
+			"CURSOR_IMAGE_CHANGED not set on first capture\n");
+		goto out;
+	}
+	if (event.cursor_x != cursor_x || event.cursor_y != cursor_y) {
+		fprintf(stderr, "cursor position: (%d,%d), expected (%d,%d)\n",
+			event.cursor_x, event.cursor_y, cursor_x, cursor_y);
+		goto out;
+	}
+	if (event.cursor_hotspot_x != (uint32_t)hot_x ||
+	    event.cursor_hotspot_y != (uint32_t)hot_y) {
+		fprintf(stderr, "cursor hotspot: (%u,%u), expected (%d,%d)\n",
+			event.cursor_hotspot_x, event.cursor_hotspot_y,
+			hot_x, hot_y);
+		goto out;
+	}
+	if (event.cursor_width != cursor_w ||
+	    event.cursor_height != cursor_h) {
+		fprintf(stderr, "cursor size: %ux%u, expected %ux%u\n",
+			event.cursor_width, event.cursor_height,
+			cursor_w, cursor_h);
+		goto out;
+	}
+	first_serial = event.cursor_serial;
+	printf("cursor_metadata=pass\n");
+
+	/* READ_CURSOR_BITMAP: probe then fetch */
+	{
+		struct drm_castkms_capture_read_cursor_bitmap bmp = {
+			.stream_id = stream.stream_id,
+			.buffer_id = buffer_id,
+		};
+		void *bitmap;
+
+		if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  &bmp) < 0) {
+			perror("probe cursor bitmap size");
+			goto out;
+		}
+		if (bmp.format != DRM_FORMAT_ARGB8888) {
+			fprintf(stderr, "cursor bitmap format: %#x\n",
+				bmp.format);
+			goto out;
+		}
+		if (bmp.width != cursor_w || bmp.height != cursor_h) {
+			fprintf(stderr, "cursor bitmap size: %ux%u\n",
+				bmp.width, bmp.height);
+			goto out;
+		}
+		if (!bmp.bitmap_size) {
+			fprintf(stderr, "cursor bitmap_size is zero\n");
+			goto out;
+		}
+
+		bitmap = malloc(bmp.bitmap_size);
+		if (!bitmap)
+			goto out;
+		bmp.bitmap_ptr = (uint64_t)(uintptr_t)bitmap;
+		if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  &bmp) < 0) {
+			perror("read cursor bitmap");
+			free(bitmap);
+			goto out;
+		}
+		if (((uint32_t *)bitmap)[0] != cursor_fill) {
+			fprintf(stderr,
+				"cursor bitmap pixel[0]: %#x, expected %#x\n",
+				((uint32_t *)bitmap)[0], cursor_fill);
+			free(bitmap);
+			goto out;
+		}
+		free(bitmap);
+	}
+	printf("cursor_bitmap=pass\n");
+
+	/* Second capture: same cursor, IMAGE_CHANGED must NOT be set */
+	ioctl_ret = queue_capture_when_available(fd, stream.stream_id,
+		second_buffer_id, DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+		stream.mode_generation, user_data + 1, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue second capture");
+		goto out;
+	}
+	if (read_capture_event(fd, &event))
+		goto out;
+	if (event.cursor_serial != first_serial) {
+		fprintf(stderr,
+			"cursor_serial changed without image change: %u vs %u\n",
+			event.cursor_serial, first_serial);
+		goto out;
+	}
+	if (event.cursor_flags & DRM_CASTKMS_CURSOR_IMAGE_CHANGED) {
+		fprintf(stderr,
+			"IMAGE_CHANGED set without cursor change\n");
+		goto out;
+	}
+	printf("cursor_stream_image_state=pass\n");
+	printf("cursor_no_change=pass\n");
+
+	/* Move cursor: position only, serial must stay the same */
+	{
+		struct drm_mode_cursor2 cur = {
+			.flags = DRM_MODE_CURSOR_MOVE,
+			.crtc_id = crtc_id,
+			.x = cursor_x + 50, .y = cursor_y + 50,
+		};
+		if (ioctl(fd, DRM_IOCTL_MODE_CURSOR2, &cur) < 0) {
+			perror("move cursor");
+			goto out;
+		}
+	}
+	ioctl_ret = queue_capture_when_available(fd, stream.stream_id,
+		buffer_id, DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+		stream.mode_generation, user_data + 2, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue capture after move");
+		goto out;
+	}
+	if (read_capture_event(fd, &event))
+		goto out;
+	if (event.cursor_x != cursor_x + 50 ||
+	    event.cursor_y != cursor_y + 50) {
+		fprintf(stderr, "cursor position after move: (%d,%d)\n",
+			event.cursor_x, event.cursor_y);
+		goto out;
+	}
+	if (event.cursor_flags & DRM_CASTKMS_CURSOR_IMAGE_CHANGED) {
+		fprintf(stderr,
+			"IMAGE_CHANGED set on position-only move\n");
+		goto out;
+	}
+	printf("cursor_move=pass\n");
+
+	/* Change cursor image: serial must increment, IMAGE_CHANGED set */
+	for (uint32_t i = 0; i < cursor_w * cursor_h; i++)
+		((uint32_t *)cursor_pixels)[i] = 0xFF00FF00;
+	{
+		struct drm_mode_cursor2 cur = {
+			.flags = DRM_MODE_CURSOR_BO,
+			.crtc_id = crtc_id,
+			.width = cursor_w, .height = cursor_h,
+			.handle = cursor_dumb.handle,
+		};
+		if (ioctl(fd, DRM_IOCTL_MODE_CURSOR2, &cur) < 0) {
+			perror("update cursor image");
+			goto out;
+		}
+	}
+	ioctl_ret = queue_capture_when_available(fd, stream.stream_id,
+		buffer_id, DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+		stream.mode_generation, user_data + 3, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue capture after image change");
+		goto out;
+	}
+	if (read_capture_event(fd, &event))
+		goto out;
+	if (!(event.cursor_flags & DRM_CASTKMS_CURSOR_IMAGE_CHANGED)) {
+		fprintf(stderr,
+			"IMAGE_CHANGED not set after cursor image update\n");
+		goto out;
+	}
+	if (event.cursor_serial == first_serial) {
+		fprintf(stderr,
+			"cursor_serial did not change after image update\n");
+		goto out;
+	}
+	printf("cursor_image_changed=pass\n");
+
+	/* Clear cursor: serial=0, VISIBLE not set */
+	{
+		struct drm_mode_cursor2 cur = {
+			.flags = DRM_MODE_CURSOR_BO,
+			.crtc_id = crtc_id,
+			.width = cursor_w, .height = cursor_h,
+			.handle = 0,
+		};
+		if (ioctl(fd, DRM_IOCTL_MODE_CURSOR2, &cur) < 0) {
+			perror("clear cursor");
+			goto out;
+		}
+	}
+	ioctl_ret = queue_capture_when_available(fd, stream.stream_id,
+		buffer_id, DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+		stream.mode_generation, user_data + 4, 0, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue capture after clear");
+		goto out;
+	}
+	if (read_capture_event(fd, &event))
+		goto out;
+	if (event.cursor_serial) {
+		fprintf(stderr, "cursor_serial not zero after clear: %u\n",
+			event.cursor_serial);
+		goto out;
+	}
+	if (event.cursor_flags & DRM_CASTKMS_CURSOR_VISIBLE) {
+		fprintf(stderr, "VISIBLE set after cursor clear\n");
+		goto out;
+	}
+	{
+		struct drm_castkms_capture_read_cursor_bitmap bmp = {
+			.stream_id = stream.stream_id,
+			.buffer_id = buffer_id,
+		};
+
+		if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  &bmp) < 0) {
+			perror("read hidden cursor bitmap");
+			goto out;
+		}
+		if (bmp.format || bmp.width || bmp.height || bmp.stride ||
+		    bmp.bitmap_size) {
+			fprintf(stderr, "hidden cursor retained stale bitmap data\n");
+			goto out;
+		}
+	}
+	printf("cursor_hidden_bitmap=pass\n");
+	printf("cursor_clear=pass\n");
+
+	printf("cursor_test=pass\n");
+	ret = EXIT_SUCCESS;
+
+out:
+	if (second_buffer_id && stream.stream_id)
+		unregister_capture_buffer(fd, stream.stream_id, second_buffer_id);
+	if (buffer_id && stream.stream_id)
+		unregister_capture_buffer(fd, stream.stream_id, buffer_id);
+	if (stream.stream_id)
+		stop_capture(fd, stream.stream_id);
+	destroy_test_framebuffer(fd, &capture_buf);
+	destroy_test_framebuffer(fd, &second_capture_buf);
+	if (cursor_pixels)
+		munmap(cursor_pixels, cursor_dumb.size);
+	if (cursor_dumb.handle) {
+		struct drm_mode_destroy_dumb destroy = {
+			.handle = cursor_dumb.handle,
+		};
+		ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+	}
+	if (attached)
+		detach_monitor(fd, connector_id);
+	close(fd);
+	return ret;
+}
+
 int main(int argc, char **argv)
 {
 	const uint64_t capture_user_data = 0x434153544b4d5304ULL;
@@ -1324,6 +1803,11 @@ int main(int argc, char **argv)
 			return EXIT_FAILURE;
 		return run_deliver_one(argv[2], crtc_id);
 	}
+	if (argc == 4 && !strcmp(argv[1], "--cursor")) {
+		if (parse_crtc_id(argv[3], &crtc_id))
+			return EXIT_FAILURE;
+		return run_cursor_test(argv[2], crtc_id);
+	}
 	if (argc == 4 && !strcmp(argv[1], "--attach")) {
 		if (parse_crtc_id(argv[3], &crtc_id))
 			return EXIT_FAILURE;
@@ -1352,7 +1836,7 @@ int main(int argc, char **argv)
 	}
 	if (argc != 3) {
 		fprintf(stderr,
-			"usage: %s [--deliver-one|--attach|--mode-generation] DRM-DEVICE CRTC-ID\n",
+			"usage: %s [--deliver-one|--attach|--cursor|--mode-generation] DRM-DEVICE CRTC-ID\n",
 			argv[0]);
 		return EXIT_FAILURE;
 	}
