@@ -200,11 +200,13 @@ make clean
 test ! -e ./castkms.ko
 test ! -e ./src/tests/castkms-kunit-tests.ko
 test ! -e ./tools/castkms-capture-test
+test ! -e ./tools/castkms-audio-test
 test ! -e ./tools/pw-castkms/pw-castkms
 test ! -e ./tools/pw-castkms/pw-castkms-test
 make kunit W=1 2>&1 | tee "$result_dir/build.log"
 make tools 2>&1 | tee "$result_dir/tools-build.log"
 test -x ./tools/castkms-capture-test
+test -x ./tools/castkms-audio-test
 test -x ./tools/pw-castkms/pw-castkms
 test -x ./tools/pw-castkms/pw-castkms-test
 
@@ -254,9 +256,10 @@ if ! mountpoint -q /sys/kernel/debug; then
 	sudo mount -t debugfs none /sys/kernel/debug
 fi
 
+sudo modprobe snd-pcm
 sudo modprobe vkms create_default_dev=0
 stock_loaded=1
-sudo insmod ./castkms.ko create_default_dev=0
+sudo insmod ./castkms.ko create_default_dev=0 enable_audio=0
 cast_loaded=1
 
 test -d /sys/kernel/config/vkms
@@ -357,7 +360,8 @@ sudo insmod ./castkms.ko \
 	enable_cursor=0 \
 	enable_overlay=0 \
 	enable_writeback=1 \
-	enable_plane_pipeline=1
+	enable_plane_pipeline=1 \
+	enable_audio=0
 cast_loaded=1
 
 sudo udevadm settle
@@ -753,7 +757,8 @@ sudo insmod ./castkms.ko \
 	create_default_dev=1 \
 	enable_cursor=1 \
 	enable_writeback=0 \
-	enable_overlay=0
+	enable_overlay=0 \
+	enable_audio=0
 cast_loaded=1
 sudo udevadm settle
 
@@ -796,7 +801,8 @@ sudo insmod ./castkms.ko \
 	create_default_dev=1 \
 	enable_cursor=0 \
 	enable_overlay=0 \
-	enable_writeback=0
+	enable_writeback=0 \
+	enable_audio=1
 cast_loaded=1
 sudo udevadm settle
 
