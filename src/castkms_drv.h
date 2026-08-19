@@ -232,6 +232,10 @@ struct castkms_color_lut {
  * @wb_pending: Protected by @castkms_output.composer_lock, true when a writeback frame is requested.
  * @capture_pending: Protected by @castkms_output.composer_lock, true when a
  *                   capture frame is requested.
+ * @damage_clip: Bounding box of frame damage in CRTC coordinates, computed
+ *               from plane fb_damage_clips during atomic check.
+ * @full_damage: True when the damage bounding box covers the entire frame
+ *               (plane set changed, mode change, gamma change, etc.).
  * @frame_start: Protected by @castkms_output.composer_lock, saves the frame number before the start
  *		 of the composition process.
  * @frame_end: Protected by @castkms_output.composer_lock, saves the last requested frame number.
@@ -250,6 +254,8 @@ struct castkms_crtc_state {
 	bool crc_pending;
 	bool wb_pending;
 	bool capture_pending;
+	struct drm_rect damage_clip;
+	bool full_damage;
 	u64 frame_start;
 	u64 frame_end;
 };
