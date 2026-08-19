@@ -802,9 +802,13 @@ void castkms_composer_worker(struct work_struct *work)
 		crtc_state->capture_pending = false;
 		crtc_state->active_capture = NULL;
 		spin_unlock_irq(&out->composer_lock);
-		if (active_capture)
+			if (active_capture) {
+				castkms_capture_buffer_set_damage(active_capture,
+							  &crtc_state->damage_clip,
+							  crtc_state->full_damage);
 			castkms_capture_complete_frame(out, active_capture,
 						       capture_ret);
+		}
 	}
 
 	if (wb_pending) {

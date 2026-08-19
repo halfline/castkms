@@ -42,6 +42,8 @@ struct castkms_snapshot_plane {
  * @hdisplay: Horizontal display size from the CRTC mode
  * @vdisplay: Vertical display size from the CRTC mode
  * @background_color: Background fill color from the CRTC state
+ * @damage_clip: Bounding box of frame damage in CRTC coordinates
+ * @full_damage: True when damage covers the entire frame
  * @planes: Flexible array of per-plane snapshots with owned resources
  */
 struct castkms_frame_snapshot {
@@ -55,6 +57,8 @@ struct castkms_frame_snapshot {
 	struct drm_color_lut *gamma_lut_data;
 	u32 hdisplay, vdisplay;
 	u64 background_color;
+	struct drm_rect damage_clip;
+	bool full_damage;
 	struct castkms_snapshot_plane planes[];
 };
 

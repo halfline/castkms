@@ -18,6 +18,7 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_drv.h>
+#include <drm/drm_rect.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
@@ -85,6 +86,8 @@ struct castkms_capture_buffer {
 	u32 id;
 	bool reuse_callback_armed;
 	enum castkms_capture_buffer_state state;
+	struct drm_rect damage_clip;
+	bool full_damage;
 };
 
 struct castkms_capture_fence {
@@ -189,10 +192,17 @@ castkms_capture_finish_locked(struct castkms_capture_buffer *buffer,
 	event->status = status;
 	event->flags = flags;
 	event->dropped_frames = buffer->dropped_frames;
-	event->damage_x = 0;
-	event->damage_y = 0;
-	event->damage_width = status ? 0 : buffer->stream->width;
-	event->damage_height = status ? 0 : buffer->stream->height;
+	if (status) {
+		event->damage_x = 0;
+		event->damage_y = 0;
+		event->damage_width = 0;
+		event->damage_height = 0;
+	} else {
+		event->damage_x = buffer->damage_clip.x1;
+		event->damage_y = buffer->damage_clip.y1;
+		event->damage_width = drm_rect_width(&buffer->damage_clip);
+		event->damage_height = drm_rect_height(&buffer->damage_clip);
+	}
 
 	completion->event = &pending->pending;
 	completion->fence = buffer->completion_fence;
@@ -830,6 +840,14 @@ castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer)
 	return &buffer->output;
 }
 
+void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
+				       const struct drm_rect *clip,
+				       bool full_damage)
+{
+	buffer->damage_clip = *clip;
+	buffer->full_damage = full_damage;
+}
+
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status)
@@ -849,7 +867,7 @@ void castkms_capture_complete_frame(struct castkms_output *output,
 	if (buffer->mode_generation != capture->mode_generation) {
 		status = -ESTALE;
 		event_flags |= DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED;
-	} else if (!status) {
+	} else if (!status && buffer->full_damage) {
 		event_flags |= DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE;
 	}
 

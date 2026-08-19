@@ -274,6 +274,8 @@ castkms_frame_snapshot_create(struct castkms_crtc_state *crtc_state)
 	snapshot->hdisplay = crtc_state->base.mode.hdisplay;
 	snapshot->vdisplay = crtc_state->base.mode.vdisplay;
 	snapshot->background_color = crtc_state->base.background_color;
+	snapshot->damage_clip = crtc_state->damage_clip;
+	snapshot->full_damage = crtc_state->full_damage;
 
 	if (crtc_state->gamma_lut.base && crtc_state->gamma_lut.lut_length) {
 		size_t lut_size = crtc_state->gamma_lut.lut_length *
@@ -334,6 +336,9 @@ static void capture_composition_worker(struct work_struct *work)
 	ret = castkms_frame_snapshot_wait_for_sources(job->snapshot);
 	if (!ret)
 		ret = castkms_compose_snapshot(job->snapshot, dest);
+	castkms_capture_buffer_set_damage(job->buffer,
+					  &job->snapshot->damage_clip,
+					  job->snapshot->full_damage);
 	castkms_capture_complete_frame(job->output, job->buffer, ret);
 	castkms_frame_snapshot_put(job->snapshot);
 	kfree(job);

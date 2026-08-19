@@ -7,6 +7,8 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 
+#include <drm/drm_rect.h>
+
 struct drm_crtc_state;
 struct drm_device;
 struct drm_edid;
@@ -102,6 +104,9 @@ bool castkms_capture_prepare_frame(struct castkms_output *output,
 				   u64 sequence, ktime_t timestamp);
 const struct castkms_output_buffer *
 castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
+void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
+				       const struct drm_rect *clip,
+				       bool full_damage);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
