@@ -11,9 +11,32 @@
 #define CASTKMS_EDID_MAX_BLOCKS 2
 
 #define CASTKMS_EDID_FLAG_AUDIO (1 << 0)
+#define CASTKMS_EDID_FLAG_CEC   (1 << 1)
 
 /* Digital separate sync, +hsync +vsync (CEA-861). */
 #define CASTKMS_EDID_DTD_FEATURES_CEA	0x1e
+
+/*
+ * Validate a CEC physical address in dotted form (A.B.C.D).
+ * Each nibble must be 0-15. A nonzero nibble must not follow a zero nibble.
+ * 0.0.0.0 is reserved for the root TV and not valid as a source address.
+ */
+__attribute__((unused))
+static int castkms_edid_validate_phys_addr(unsigned int a, unsigned int b,
+					   unsigned int c, unsigned int d)
+{
+	if (a > 15 || b > 15 || c > 15 || d > 15)
+		return -1;
+	if (a == 0 && b == 0 && c == 0 && d == 0)
+		return -1;
+	if (a == 0 && (b || c || d))
+		return -1;
+	if (b == 0 && (c || d))
+		return -1;
+	if (c == 0 && d)
+		return -1;
+	return 0;
+}
 
 static void castkms_edid_set_checksum(uint8_t *edid, size_t size)
 {
@@ -55,58 +78,66 @@ static void castkms_edid_write_dtd(uint8_t *dtd, unsigned int clock_10khz,
 	dtd[17] = CASTKMS_EDID_DTD_FEATURES_CEA;
 }
 
-static void castkms_edid_write_cta_audio(uint8_t *ext)
+/*
+ * Write a CTA-861 extension block.
+ *
+ * @ext: pointer to the 128-byte extension block
+ * @flags: CASTKMS_EDID_FLAG_AUDIO and/or CASTKMS_EDID_FLAG_CEC
+ * @phys_addr_ab: high byte of CEC physical address (A<<4 | B)
+ * @phys_addr_cd: low byte of CEC physical address (C<<4 | D)
+ */
+static void castkms_edid_write_cta(uint8_t *ext, unsigned int flags,
+				   uint8_t phys_addr_ab,
+				   uint8_t phys_addr_cd)
 {
-	/*
-	 * CTA-861 extension block with basic audio support:
-	 *   - LPCM Short Audio Descriptor: 2ch, 32/44.1/48 kHz, 16-bit
-	 *   - Speaker Allocation: FL/FR
-	 */
+	unsigned int pos = 4;
+	uint8_t features = 0;
+
 	memset(ext, 0, CASTKMS_EDID_BLOCK);
 
 	/* CTA extension tag and revision. */
 	ext[0] = 0x02;
 	ext[1] = 0x03;
 
-	/*
-	 * Byte 3: offset to first DTD (or end of data blocks).
-	 * Data blocks start at byte 4.
-	 *
-	 * Audio data block: tag 1, length 3 (one SAD).
-	 *   Byte 0: (tag << 5) | length = (1 << 5) | 3 = 0x23
-	 *   Byte 1: SAD byte 1 — format=LPCM (1), channels-1=1 → (1<<3)|1 = 0x09
-	 *   Byte 2: SAD byte 2 — rates: 48kHz|44.1kHz|32kHz = 0x07
-	 *   Byte 3: SAD byte 3 — 16-bit = 0x01
-	 *
-	 * Speaker allocation block: tag 4, length 3.
-	 *   Byte 0: (tag << 5) | length = (4 << 5) | 3 = 0x83
-	 *   Byte 1: FL/FR = 0x01
-	 *   Byte 2: 0x00
-	 *   Byte 3: 0x00
-	 */
+	if (flags & CASTKMS_EDID_FLAG_AUDIO) {
+		/* Audio data block: tag=1, length=3 (one SAD). */
+		ext[pos++] = 0x23;
+		/* LPCM, 2 channels. */
+		ext[pos++] = 0x09;
+		/* 32 kHz, 44.1 kHz, 48 kHz. */
+		ext[pos++] = 0x07;
+		/* 16-bit samples. */
+		ext[pos++] = 0x01;
 
-	/* Audio data block: tag=1, length=3. */
-	ext[4] = 0x23;
-	/* LPCM, 2 channels. */
-	ext[5] = 0x09;
-	/* 32 kHz, 44.1 kHz, 48 kHz. */
-	ext[6] = 0x07;
-	/* 16-bit samples. */
-	ext[7] = 0x01;
+		/* Speaker allocation block: tag=4, length=3. */
+		ext[pos++] = 0x83;
+		/* FL/FR. */
+		ext[pos++] = 0x01;
+		/* Padding bytes. */
+		pos += 2;
 
-	/* Speaker allocation block: tag=4, length=3. */
-	ext[8] = 0x83;
-	/* FL/FR. */
-	ext[9] = 0x01;
+		features |= 0x40; /* basic audio */
+	}
 
-	/* DTD offset: data blocks span bytes 4..11, so DTDs start at 12. */
-	ext[2] = 12;
+	if (flags & CASTKMS_EDID_FLAG_CEC) {
+		/*
+		 * HDMI Vendor-Specific Data Block: tag=3, length=5.
+		 * OUI 0x000c03 in little-endian: 0x03 0x0c 0x00.
+		 * Followed by the 2-byte source physical address.
+		 */
+		ext[pos++] = (3 << 5) | 5;
+		ext[pos++] = 0x03;
+		ext[pos++] = 0x0c;
+		ext[pos++] = 0x00;
+		ext[pos++] = phys_addr_ab;
+		ext[pos++] = phys_addr_cd;
+	}
 
-	/*
-	 * Byte 3 feature bits: basic audio supported, no native DTDs.
-	 * Bit 6 = basic audio.
-	 */
-	ext[3] = 0x40;
+	/* DTD offset: data blocks end at pos. */
+	ext[2] = (uint8_t)pos;
+
+	/* Feature bits. */
+	ext[3] = features;
 
 	/* Checksum is set by the caller over the whole EDID. */
 }
@@ -114,18 +145,26 @@ static void castkms_edid_write_cta_audio(uint8_t *ext)
 /*
  * Generate a VirtualScreen EDID.
  *
- * When flags includes CASTKMS_EDID_FLAG_AUDIO, write a two-block EDID
- * with a CTA-861 extension containing a stereo LPCM Short Audio
- * Descriptor.  Otherwise write a single base block with no audio.
+ * When flags includes CASTKMS_EDID_FLAG_AUDIO and/or CASTKMS_EDID_FLAG_CEC,
+ * write a two-block EDID with a CTA-861 extension. CASTKMS_EDID_FLAG_CEC
+ * requires CASTKMS_EDID_FLAG_AUDIO or stands alone — either way a CTA
+ * extension is produced.
+ *
+ * @phys_addr_ab and @phys_addr_cd encode the CEC physical address:
+ *   A.B.C.D → ab = (A<<4)|B, cd = (C<<4)|D.
+ * They are ignored when CASTKMS_EDID_FLAG_CEC is not set.
  *
  * Returns the total EDID size in bytes, or -1 on error.
  */
-static int castkms_fill_edid(uint8_t *edid, size_t buf_size,
-			     const char *name, unsigned int flags)
+__attribute__((unused))
+static int castkms_fill_edid_full(uint8_t *edid, size_t buf_size,
+				  const char *name, unsigned int flags,
+				  uint8_t phys_addr_ab, uint8_t phys_addr_cd)
 {
 	size_t name_len;
 	size_t total_size;
 	unsigned int num_extensions;
+	unsigned int cta_flags;
 	size_t i;
 
 	if (!name)
@@ -134,7 +173,8 @@ static int castkms_fill_edid(uint8_t *edid, size_t buf_size,
 	if (name_len > 13)
 		return -1;
 
-	num_extensions = (flags & CASTKMS_EDID_FLAG_AUDIO) ? 1 : 0;
+	cta_flags = flags & (CASTKMS_EDID_FLAG_AUDIO | CASTKMS_EDID_FLAG_CEC);
+	num_extensions = cta_flags ? 1 : 0;
 	total_size = CASTKMS_EDID_BLOCK * (1 + num_extensions);
 	if (buf_size < total_size)
 		return -1;
@@ -196,11 +236,22 @@ static int castkms_fill_edid(uint8_t *edid, size_t buf_size,
 	/* Extension count in base block byte 126. */
 	edid[126] = (uint8_t)num_extensions;
 
-	if (flags & CASTKMS_EDID_FLAG_AUDIO)
-		castkms_edid_write_cta_audio(&edid[CASTKMS_EDID_BLOCK]);
+	if (cta_flags)
+		castkms_edid_write_cta(&edid[CASTKMS_EDID_BLOCK], cta_flags,
+				       phys_addr_ab, phys_addr_cd);
 
 	castkms_edid_set_checksum(edid, total_size);
 	return (int)total_size;
+}
+
+/*
+ * Convenience wrapper: generate an EDID without CEC physical address.
+ * Audio-only and video-only callers use this.
+ */
+static int castkms_fill_edid(uint8_t *edid, size_t buf_size,
+			     const char *name, unsigned int flags)
+{
+	return castkms_fill_edid_full(edid, buf_size, name, flags, 0, 0);
 }
 
 /*
