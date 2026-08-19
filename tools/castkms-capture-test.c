@@ -1176,10 +1176,11 @@ static int parse_crtc_id(const char *text, uint32_t *crtc_id)
 
 static int run_attach_hold(const char *device, uint32_t crtc_id)
 {
-	uint8_t edid[TEST_EDID_BLOCK];
+	uint8_t edid[TEST_EDID_BLOCK * CASTKMS_EDID_MAX_BLOCKS];
 	uint32_t connector_id;
 	uint32_t connection;
 	char discard;
+	int edid_size;
 	int fd;
 	int ret = EXIT_FAILURE;
 
@@ -1191,11 +1192,13 @@ static int run_attach_hold(const char *device, uint32_t crtc_id)
 		fprintf(stderr, "failed to find display connector\n");
 		goto out_close;
 	}
-	if (fill_named_edid(edid, NULL)) {
+	edid_size = castkms_fill_edid(edid, sizeof(edid), NULL,
+				      CASTKMS_EDID_FLAG_AUDIO);
+	if (edid_size < 0) {
 		fprintf(stderr, "failed to build attach EDID\n");
 		goto out_close;
 	}
-	if (attach_monitor(fd, connector_id, edid, sizeof(edid))) {
+	if (attach_monitor(fd, connector_id, edid, edid_size)) {
 		perror("ATTACH_MONITOR");
 		goto out_close;
 	}
