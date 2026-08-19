@@ -59,6 +59,7 @@ struct castkms_frame_snapshot {
 	u64 background_color;
 	struct drm_rect damage_clip;
 	bool full_damage;
+	struct castkms_cursor_snapshot cursor;
 	struct castkms_snapshot_plane planes[];
 };
 

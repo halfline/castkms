@@ -190,6 +190,8 @@ static void castkms_frame_snapshot_release(struct kref *kref)
 	for (i = 0; i < snapshot->num_source_dependencies; i++)
 		dma_fence_put(snapshot->source_dependencies[i]);
 
+	if (snapshot->cursor.fb)
+		drm_framebuffer_put(snapshot->cursor.fb);
 	kfree(snapshot->gamma_lut_data);
 	kfree(snapshot->source_dependencies);
 	kfree(snapshot->plane_ptrs);
@@ -276,6 +278,9 @@ castkms_frame_snapshot_create(struct castkms_crtc_state *crtc_state)
 	snapshot->background_color = crtc_state->base.background_color;
 	snapshot->damage_clip = crtc_state->damage_clip;
 	snapshot->full_damage = crtc_state->full_damage;
+	snapshot->cursor = crtc_state->cursor;
+	if (snapshot->cursor.fb)
+		drm_framebuffer_get(snapshot->cursor.fb);
 
 	if (crtc_state->gamma_lut.base && crtc_state->gamma_lut.lut_length) {
 		size_t lut_size = crtc_state->gamma_lut.lut_length *
@@ -339,6 +344,9 @@ static void capture_composition_worker(struct work_struct *work)
 	castkms_capture_buffer_set_damage(job->buffer,
 					  &job->snapshot->damage_clip,
 					  job->snapshot->full_damage);
+	if (!ret)
+		ret = castkms_capture_buffer_set_cursor(job->buffer,
+						       &job->snapshot->cursor);
 	castkms_capture_complete_frame(job->output, job->buffer, ret);
 	castkms_frame_snapshot_put(job->snapshot);
 	kfree(job);

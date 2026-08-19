@@ -806,7 +806,10 @@ void castkms_composer_worker(struct work_struct *work)
 				castkms_capture_buffer_set_damage(active_capture,
 							  &crtc_state->damage_clip,
 							  crtc_state->full_damage);
-			castkms_capture_complete_frame(out, active_capture,
+				if (!capture_ret)
+					capture_ret = castkms_capture_buffer_set_cursor(
+						active_capture, &crtc_state->cursor);
+				castkms_capture_complete_frame(out, active_capture,
 						       capture_ret);
 		}
 	}
