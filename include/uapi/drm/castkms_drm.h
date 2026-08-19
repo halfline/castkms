@@ -87,6 +87,16 @@ struct drm_castkms_capture_query_caps {
 #define DRM_CASTKMS_CAPTURE_START_EXCLUSIVE	(1U << 0)
 
 /**
+ * DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR:
+ *
+ * Exclude the cursor plane from captured frame composition.  The cursor
+ * position and image metadata are still reported in the capture event
+ * cursor fields.  Consumers render the cursor client-side using the
+ * reported metadata.
+ */
+#define DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR (1U << 1)
+
+/**
  * struct drm_castkms_capture_start - start an exclusive capture stream
  * @crtc_id: DRM object ID of the CRTC to observe
  * @flags: DRM_CASTKMS_CAPTURE_START_EXCLUSIVE, optionally combined with

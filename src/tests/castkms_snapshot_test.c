@@ -228,6 +228,45 @@ static void castkms_snapshot_test_rejects_null_map(struct kunit *test)
 								   tp.sp.map));
 }
 
+static void castkms_snapshot_test_packs_middle_cursor_exclusion(struct kunit *test)
+{
+	struct drm_plane *drm_planes;
+	struct castkms_plane_state *states;
+	struct castkms_plane_state *active_planes[3];
+	struct castkms_plane_state *packed[3] = {};
+	struct castkms_crtc_state crtc_state = {
+		.num_active_planes = ARRAY_SIZE(active_planes),
+		.active_planes = active_planes,
+	};
+	int count;
+
+	drm_planes = kunit_kcalloc(test, ARRAY_SIZE(active_planes),
+				    sizeof(*drm_planes), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, drm_planes);
+	states = kunit_kcalloc(test, ARRAY_SIZE(active_planes), sizeof(*states),
+			       GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, states);
+
+	active_planes[0] = &states[0];
+	active_planes[1] = &states[1];
+	active_planes[2] = &states[2];
+
+	drm_planes[0].type = DRM_PLANE_TYPE_PRIMARY;
+	drm_planes[1].type = DRM_PLANE_TYPE_CURSOR;
+	drm_planes[2].type = DRM_PLANE_TYPE_OVERLAY;
+	states[0].base.base.plane = &drm_planes[0];
+	states[1].base.base.plane = &drm_planes[1];
+	states[2].base.base.plane = &drm_planes[2];
+
+	count = castkms_snapshot_collect_planes(
+		&crtc_state, CASTKMS_SNAPSHOT_EXCLUDE_CURSOR, packed);
+
+	KUNIT_ASSERT_EQ(test, count, 2);
+	KUNIT_EXPECT_PTR_EQ(test, packed[0], &states[0]);
+	KUNIT_EXPECT_PTR_EQ(test, packed[1], &states[2]);
+	KUNIT_EXPECT_PTR_EQ(test, packed[2], NULL);
+}
+
 static void castkms_snapshot_test_damage_partial(struct kunit *test)
 {
 	u8 src_pixels[] = {
@@ -321,6 +360,7 @@ static struct kunit_case castkms_snapshot_test_cases[] = {
 	KUNIT_CASE(castkms_snapshot_test_plane_pixel_read),
 	KUNIT_CASE(castkms_snapshot_test_rejects_iomem_source),
 	KUNIT_CASE(castkms_snapshot_test_rejects_null_map),
+	KUNIT_CASE(castkms_snapshot_test_packs_middle_cursor_exclusion),
 	KUNIT_CASE(castkms_snapshot_test_damage_partial),
 	KUNIT_CASE(castkms_snapshot_test_damage_full),
 	KUNIT_CASE(castkms_snapshot_test_damage_zero_origin),

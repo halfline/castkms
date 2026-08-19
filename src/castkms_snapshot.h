@@ -65,8 +65,20 @@ struct castkms_frame_snapshot {
 
 struct castkms_capture_buffer;
 
+enum castkms_snapshot_flags {
+	CASTKMS_SNAPSHOT_EXCLUDE_CURSOR = (1 << 0),
+};
+
 struct castkms_frame_snapshot *
-castkms_frame_snapshot_create(struct castkms_crtc_state *crtc_state);
+castkms_frame_snapshot_create(struct castkms_crtc_state *crtc_state,
+				      enum castkms_snapshot_flags flags);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+int castkms_snapshot_collect_planes(
+	const struct castkms_crtc_state *crtc_state,
+	enum castkms_snapshot_flags flags,
+	struct castkms_plane_state **planes);
+#endif
 
 void castkms_frame_snapshot_put(struct castkms_frame_snapshot *snapshot);
 

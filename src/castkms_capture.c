@@ -51,6 +51,8 @@ struct castkms_capture_stream {
 	u32 cursor_serial;
 	bool active;
 	bool attached;
+	bool exclude_cursor;
+	bool cursor_serial_valid;
 };
 
 enum castkms_capture_buffer_state {
@@ -955,6 +957,13 @@ int castkms_capture_buffer_set_cursor(struct castkms_capture_buffer *buffer,
 
 	return 0;
 }
+
+bool castkms_capture_buffer_excludes_cursor(
+	const struct castkms_capture_buffer *buffer)
+{
+	return buffer->stream->exclude_cursor;
+}
+
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status)
@@ -1065,7 +1074,9 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	u32 stream_id;
 	int ret;
 
-	if (args->flags != DRM_CASTKMS_CAPTURE_START_EXCLUSIVE ||
+	if (!(args->flags & DRM_CASTKMS_CAPTURE_START_EXCLUSIVE) ||
+	    (args->flags & ~(DRM_CASTKMS_CAPTURE_START_EXCLUSIVE |
+			     DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR)) ||
 	    args->reserved)
 		return -EINVAL;
 	args->stream_id = 0;
@@ -1079,6 +1090,8 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	stream = castkms_capture_stream_create(output, &args->mode_generation);
 	if (IS_ERR(stream))
 		return PTR_ERR(stream);
+	stream->exclude_cursor =
+		!!(args->flags & DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR);
 
 	mutex_lock(&capture_file->lock);
 	ret = xa_alloc(&capture_file->streams, &stream_id, stream,

@@ -8,6 +8,7 @@
 #include <drm/drm_blend.h>
 #include <drm/drm_colorop.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_plane.h>
 #include <drm/drm_fixed.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
@@ -690,6 +691,40 @@ free_stage_buffer:
 	return ret;
 }
 
+static int castkms_compose_without_cursor(
+	const struct castkms_output_buffer *destination,
+	struct castkms_crtc_state *crtc_state)
+{
+	struct castkms_plane_state **filtered;
+	int n = 0, i;
+	u32 crc32 = 0;
+	int ret;
+
+	filtered = kcalloc(crtc_state->num_active_planes,
+			   sizeof(*filtered), GFP_KERNEL);
+	if (!filtered)
+		return -ENOMEM;
+
+	for (i = 0; i < crtc_state->num_active_planes; i++) {
+		struct drm_plane *plane =
+			crtc_state->active_planes[i]->base.base.plane;
+
+		if (plane && plane->type == DRM_PLANE_TYPE_CURSOR)
+			continue;
+		filtered[n++] = crtc_state->active_planes[i];
+	}
+
+	swap(crtc_state->active_planes, filtered);
+	swap(crtc_state->num_active_planes, n);
+
+	ret = compose_active_planes(destination, NULL, crtc_state, &crc32);
+
+	swap(crtc_state->active_planes, filtered);
+	swap(crtc_state->num_active_planes, n);
+	kfree(filtered);
+	return ret;
+}
+
 /**
  * castkms_composer_worker - ordered work_struct to compose a frame
  *
@@ -772,7 +807,9 @@ void castkms_composer_worker(struct work_struct *work)
 		if (WARN_ON(!active_capture))
 			return;
 
-		snapshot = castkms_frame_snapshot_create(crtc_state);
+		snapshot = castkms_frame_snapshot_create(crtc_state,
+			castkms_capture_buffer_excludes_cursor(active_capture) ?
+			CASTKMS_SNAPSHOT_EXCLUDE_CURSOR : 0);
 		if (IS_ERR(snapshot))
 			castkms_capture_complete_frame(out, active_capture,
 						       PTR_ERR(snapshot));
@@ -791,9 +828,18 @@ void castkms_composer_worker(struct work_struct *work)
 
 	if (WARN_ON(wb_pending && !active_wb))
 		ret = -EINVAL;
-	else if (!ret)
+	else if (!ret) {
+		bool separate_capture = capture_dest &&
+			castkms_capture_buffer_excludes_cursor(active_capture);
+
 		ret = compose_active_planes(wb_pending ? active_wb : NULL,
-					    capture_dest, crtc_state, &crc32);
+					    separate_capture ? NULL : capture_dest,
+					    crtc_state, &crc32);
+
+		if (separate_capture && !ret)
+			ret = castkms_compose_without_cursor(capture_dest,
+							     crtc_state);
+	}
 
 	if (capture_pending) {
 		int capture_ret = active_capture ? ret : -EINVAL;
