@@ -56,6 +56,7 @@ int castkms_connector_detach_monitor(struct drm_connector *connector,
 				     struct drm_file *file);
 int castkms_connector_require_attached(struct drm_crtc *crtc,
 				       struct drm_file *file);
+void castkms_connector_set_capture_active(struct drm_crtc *crtc, bool active);
 void castkms_connectors_detach_file(struct drm_device *dev,
 				    struct drm_file *file);
 

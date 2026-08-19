@@ -10,6 +10,8 @@
 #include <drm/drm_managed.h>
 #include <drm/drm_modes.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_property.h>
+#include <drm/drm_sysfs.h>
 
 #include "castkms_config.h"
 #include "castkms_connector.h"
@@ -110,6 +112,16 @@ struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsd
 
 	drm_connector_helper_add(connector, &castkms_conn_helper_funcs);
 	drm_connector_attach_edid_property(connector);
+
+	if (!castkmsdev->capture_active_prop) {
+		castkmsdev->capture_active_prop =
+			drm_property_create_range(dev, DRM_MODE_PROP_IMMUTABLE,
+						  "capture_active", 0, 1);
+		if (!castkmsdev->capture_active_prop)
+			return ERR_PTR(-ENOMEM);
+	}
+	drm_object_attach_property(&connector->base,
+				   castkmsdev->capture_active_prop, 0);
 
 	return castkms_connector;
 }
@@ -327,6 +339,24 @@ int castkms_connector_require_attached(struct drm_crtc *crtc,
 	drm_connector_put(connector);
 
 	return ret;
+}
+
+void castkms_connector_set_capture_active(struct drm_crtc *crtc, bool active)
+{
+	struct drm_device *dev = crtc->dev;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct drm_connector *connector;
+
+	connector = castkms_connector_for_crtc(crtc);
+	if (!connector)
+		return;
+
+	drm_object_property_set_value(&connector->base,
+				      castkmsdev->capture_active_prop,
+				      active ? 1 : 0);
+	drm_sysfs_connector_property_event(connector,
+					   castkmsdev->capture_active_prop);
+	drm_connector_put(connector);
 }
 
 void castkms_connectors_detach_file(struct drm_device *dev,

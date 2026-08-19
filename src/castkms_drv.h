@@ -337,6 +337,7 @@ struct castkms_device {
 	struct faux_device *faux_dev;
 	struct castkms_config *config;
 	struct mutex attach_lock;
+	struct drm_property *capture_active_prop;
 };
 
 /*

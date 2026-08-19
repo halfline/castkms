@@ -388,6 +388,8 @@ static void castkms_capture_stream_detach(struct castkms_capture_stream *stream)
 	capture->stream = NULL;
 	stream->attached = false;
 	mutex_unlock(&capture->lock);
+
+	castkms_connector_set_capture_active(&stream->output->crtc, false);
 }
 
 void castkms_capture_stream_destroy(struct castkms_capture_stream *stream)
@@ -1060,6 +1062,8 @@ int castkms_capture_stream_attach(struct castkms_capture_stream *stream)
 	capture->stream = stream;
 	stream->attached = true;
 	mutex_unlock(&capture->lock);
+
+	castkms_connector_set_capture_active(&stream->output->crtc, true);
 
 	return 0;
 }
