@@ -8,6 +8,9 @@
 #include <string.h>
 
 #define CASTKMS_EDID_BLOCK 128
+#define CASTKMS_EDID_MAX_BLOCKS 2
+
+#define CASTKMS_EDID_FLAG_AUDIO (1 << 0)
 
 /* Digital separate sync, +hsync +vsync (CEA-861). */
 #define CASTKMS_EDID_DTD_FEATURES_CEA	0x1e
@@ -52,15 +55,77 @@ static void castkms_edid_write_dtd(uint8_t *dtd, unsigned int clock_10khz,
 	dtd[17] = CASTKMS_EDID_DTD_FEATURES_CEA;
 }
 
+static void castkms_edid_write_cta_audio(uint8_t *ext)
+{
+	/*
+	 * CTA-861 extension block with basic audio support:
+	 *   - LPCM Short Audio Descriptor: 2ch, 32/44.1/48 kHz, 16-bit
+	 *   - Speaker Allocation: FL/FR
+	 */
+	memset(ext, 0, CASTKMS_EDID_BLOCK);
+
+	/* CTA extension tag and revision. */
+	ext[0] = 0x02;
+	ext[1] = 0x03;
+
+	/*
+	 * Byte 3: offset to first DTD (or end of data blocks).
+	 * Data blocks start at byte 4.
+	 *
+	 * Audio data block: tag 1, length 3 (one SAD).
+	 *   Byte 0: (tag << 5) | length = (1 << 5) | 3 = 0x23
+	 *   Byte 1: SAD byte 1 — format=LPCM (1), channels-1=1 → (1<<3)|1 = 0x09
+	 *   Byte 2: SAD byte 2 — rates: 48kHz|44.1kHz|32kHz = 0x07
+	 *   Byte 3: SAD byte 3 — 16-bit = 0x01
+	 *
+	 * Speaker allocation block: tag 4, length 3.
+	 *   Byte 0: (tag << 5) | length = (4 << 5) | 3 = 0x83
+	 *   Byte 1: FL/FR = 0x01
+	 *   Byte 2: 0x00
+	 *   Byte 3: 0x00
+	 */
+
+	/* Audio data block: tag=1, length=3. */
+	ext[4] = 0x23;
+	/* LPCM, 2 channels. */
+	ext[5] = 0x09;
+	/* 32 kHz, 44.1 kHz, 48 kHz. */
+	ext[6] = 0x07;
+	/* 16-bit samples. */
+	ext[7] = 0x01;
+
+	/* Speaker allocation block: tag=4, length=3. */
+	ext[8] = 0x83;
+	/* FL/FR. */
+	ext[9] = 0x01;
+
+	/* DTD offset: data blocks span bytes 4..11, so DTDs start at 12. */
+	ext[2] = 12;
+
+	/*
+	 * Byte 3 feature bits: basic audio supported, no native DTDs.
+	 * Bit 6 = basic audio.
+	 */
+	ext[3] = 0x40;
+
+	/* Checksum is set by the caller over the whole EDID. */
+}
+
 /*
- * Default VirtualScreen EDID: 1920x1080@60 preferred, 3840x2160@60, plus
- * established 640x480/800x600/1024x768 @ 60. 4K cannot fit in a standard
- * timing slot, so it is a detailed timing.
+ * Generate a VirtualScreen EDID.
+ *
+ * When flags includes CASTKMS_EDID_FLAG_AUDIO, write a two-block EDID
+ * with a CTA-861 extension containing a stereo LPCM Short Audio
+ * Descriptor.  Otherwise write a single base block with no audio.
+ *
+ * Returns the total EDID size in bytes, or -1 on error.
  */
-static int castkms_fill_named_edid(uint8_t edid[CASTKMS_EDID_BLOCK],
-				   const char *name)
+static int castkms_fill_edid(uint8_t *edid, size_t buf_size,
+			     const char *name, unsigned int flags)
 {
 	size_t name_len;
+	size_t total_size;
+	unsigned int num_extensions;
 	size_t i;
 
 	if (!name)
@@ -69,7 +134,12 @@ static int castkms_fill_named_edid(uint8_t edid[CASTKMS_EDID_BLOCK],
 	if (name_len > 13)
 		return -1;
 
-	memset(edid, 0, CASTKMS_EDID_BLOCK);
+	num_extensions = (flags & CASTKMS_EDID_FLAG_AUDIO) ? 1 : 0;
+	total_size = CASTKMS_EDID_BLOCK * (1 + num_extensions);
+	if (buf_size < total_size)
+		return -1;
+
+	memset(edid, 0, total_size);
 	edid[0] = 0x00;
 	edid[1] = 0xff;
 	edid[2] = 0xff;
@@ -122,7 +192,30 @@ static int castkms_fill_named_edid(uint8_t edid[CASTKMS_EDID_BLOCK],
 	castkms_edid_write_dtd(&edid[90], 59400,
 			       3840, 560, 2160, 90, 176, 88, 8, 10);
 	edid[111] = 0x10;
-	castkms_edid_set_checksum(edid, CASTKMS_EDID_BLOCK);
+
+	/* Extension count in base block byte 126. */
+	edid[126] = (uint8_t)num_extensions;
+
+	if (flags & CASTKMS_EDID_FLAG_AUDIO)
+		castkms_edid_write_cta_audio(&edid[CASTKMS_EDID_BLOCK]);
+
+	castkms_edid_set_checksum(edid, total_size);
+	return (int)total_size;
+}
+
+/*
+ * Legacy wrapper: fill a single base block without audio.
+ * Retained for callers that allocate exactly one block.
+ */
+__attribute__((unused))
+static int castkms_fill_named_edid(uint8_t edid[CASTKMS_EDID_BLOCK],
+				   const char *name)
+{
+	int ret;
+
+	ret = castkms_fill_edid(edid, CASTKMS_EDID_BLOCK, name, 0);
+	if (ret < 0)
+		return ret;
 	return 0;
 }
 
