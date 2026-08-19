@@ -92,6 +92,8 @@ static const struct drm_ioctl_desc castkms_ioctls[] = {
 			  castkms_capture_attach_monitor_ioctl, DRM_ROOT_ONLY),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_DETACH_MONITOR,
 			  castkms_capture_detach_monitor_ioctl, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  castkms_capture_read_cursor_bitmap_ioctl, DRM_ROOT_ONLY),
 };
 
 static void castkms_atomic_commit_tail(struct drm_atomic_state *old_state)

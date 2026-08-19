@@ -126,6 +126,7 @@ static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24);
 static_assert(sizeof(struct drm_castkms_capture_detach_monitor) == 16);
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112);
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108);
+static_assert(sizeof(struct drm_castkms_capture_read_cursor_bitmap) == 40);
 static const char *
 castkms_capture_fence_get_driver_name(struct dma_fence *fence)
 {
@@ -1671,6 +1672,86 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	ret = castkms_capture_buffer_submit(buffer, pending, args->user_data,
 					    args->ready_point,
 					    args->reuse_point);
+
+out_unlock:
+	mutex_unlock(&capture_file->lock);
+	return ret;
+}
+
+int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
+					     struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_read_cursor_bitmap *args = data;
+	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_stream *stream;
+	struct castkms_capture_buffer *buffer;
+	struct castkms_capture_output *capture;
+	unsigned long flags;
+	int ret;
+
+	(void)dev;
+
+	if (args->reserved)
+		return -EINVAL;
+
+	mutex_lock(&capture_file->lock);
+	stream = xa_load(&capture_file->streams, args->stream_id);
+	if (!stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	buffer = xa_load(&stream->buffers, args->buffer_id);
+	if (!buffer) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	capture = &stream->output->capture;
+	spin_lock_irqsave(&capture->state_lock, flags);
+	if (buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE) {
+		spin_unlock_irqrestore(&capture->state_lock, flags);
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+
+	if (!buffer->cursor_bitmap || !buffer->cursor_bitmap_size) {
+		args->format = 0;
+		args->width = 0;
+		args->height = 0;
+		args->stride = 0;
+		args->bitmap_size = 0;
+		ret = 0;
+		goto out_unlock;
+	}
+
+	args->format = DRM_FORMAT_ARGB8888;
+	args->width = buffer->cursor_width;
+	args->height = buffer->cursor_height;
+	args->stride = buffer->cursor_bitmap_stride;
+
+	if (args->bitmap_size == 0) {
+		args->bitmap_size = buffer->cursor_bitmap_size;
+		ret = 0;
+		goto out_unlock;
+	}
+
+	if (args->bitmap_size < buffer->cursor_bitmap_size) {
+		args->bitmap_size = buffer->cursor_bitmap_size;
+		ret = -ENOSPC;
+		goto out_unlock;
+	}
+
+	if (copy_to_user(u64_to_user_ptr(args->bitmap_ptr),
+			 buffer->cursor_bitmap,
+			 buffer->cursor_bitmap_size)) {
+		ret = -EFAULT;
+		goto out_unlock;
+	}
+
+	args->bitmap_size = buffer->cursor_bitmap_size;
+	ret = 0;
 
 out_unlock:
 	mutex_unlock(&capture_file->lock);

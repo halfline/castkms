@@ -87,6 +87,8 @@ int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,
 					 struct drm_file *file_priv);
 int castkms_capture_detach_monitor_ioctl(struct drm_device *dev, void *data,
 					 struct drm_file *file_priv);
+int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
+					     struct drm_file *file_priv);
 
 int castkms_capture_file_open(struct drm_device *dev,
 			      struct drm_file *file_priv);
