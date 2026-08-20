@@ -35,7 +35,7 @@
 #include "castkms_drv.h"
 
 #define DRIVER_NAME	"castkms"
-#define DRIVER_DESC	"CASTKMS Virtual Kernel Mode Setting"
+#define DRIVER_DESC	"CASTKMS virtual display capture"
 #define DRIVER_MAJOR	1
 #define DRIVER_MINOR	0
 
