@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 /**
- * DOC: castkms (Virtual Kernel Modesetting)
+ * DOC: castkms virtual display capture
  *
- * CASTKMS is a software-only model of a KMS driver that is useful for testing
- * and for running X (or similar) on headless machines. CASTKMS aims to enable
- * a virtual display with no need of a hardware display capability, releasing
- * the GPU in DRM API tests.
+ * CASTKMS is a software KMS sink for attaching virtual monitors and exporting
+ * their presentation as synchronized frame capture. Its primary userspace path
+ * is monitor attachment, compositor modesetting, capture, and PipeWire export;
+ * VKMS-derived CRC, writeback, and configurable topology remain development and
+ * compatibility facilities rather than the product interface.
  */
 
 #include <linux/module.h>
