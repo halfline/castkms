@@ -5,6 +5,9 @@ castkms-kunit-tests-y := \
 	castkms_format_test.o \
 	castkms_color_test.o \
 	castkms_composer_test.o \
+	castkms_grant_test.o \
 	castkms_snapshot_test.o
 
 obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += castkms-kunit-tests.o
+
+ccflags-y += -I$(src)/../../include/uapi
