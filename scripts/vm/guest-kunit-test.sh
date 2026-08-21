@@ -86,4 +86,50 @@ if test "$suite_failures" -ne 0; then
 	exit 1
 fi
 
+sudo rmmod castkms_kunit_tests
+kunit_tests_loaded=0
+sudo rmmod castkms
+cast_loaded=0
+
+make -C tools castkms-grant-test 2>&1 | tee "$result_dir/grant-build.log"
+
+sudo dmesg --clear
+sudo insmod ./castkms.ko enable_audio=0 enable_cec=1 enable_writeback=1
+cast_loaded=1
+
+card_path=
+for candidate in /sys/class/drm/card[0-9]*; do
+	device_path=$(readlink -f "$candidate/device" 2>/dev/null || true)
+	if test -n "$device_path" && test "${device_path##*/}" = castkms; then
+		card_path=/dev/dri/${candidate##*/}
+		card_name=${candidate##*/}
+		break
+	fi
+done
+test -n "$card_path"
+
+connector_id=
+for candidate in "/sys/class/drm/$card_name"-Virtual-*; do
+	if test -r "$candidate/connector_id"; then
+		read -r connector_id < "$candidate/connector_id"
+		break
+	fi
+done
+test -n "$connector_id"
+
+sudo ./tools/castkms-grant-test "$card_path" "$connector_id" 2>&1 | \
+	tee "$result_dir/grant-live.log"
+grep -Fxq 'grant_lifecycle=pass' "$result_dir/grant-live.log"
+sudo rmmod castkms
+cast_loaded=0
+sudo dmesg > "$result_dir/grant-dmesg.txt"
+kernel_error_pattern='BUG:|WARNING:|KASAN:|KCSAN:|refcount_t:|use-after-free|'
+kernel_error_pattern+='general protection fault|possible circular locking dependency'
+if grep -E "$kernel_error_pattern" \
+	"$result_dir/grant-dmesg.txt" > "$result_dir/grant-kernel-errors.txt"; then
+	cat "$result_dir/grant-kernel-errors.txt" >&2
+	exit 1
+fi
+
+printf '%s\n' 'grant-live=pass' | tee -a "$result_dir/summary.txt"
 printf '%s\n' 'result=pass' | tee -a "$result_dir/summary.txt"
