@@ -209,11 +209,6 @@ test ! -e ./tools/castkms-audio-test
 test ! -e ./tools/pw-castkms/pw-castkms
 test ! -e ./tools/pw-castkms/pw-castkms-test
 make kunit W=1 2>&1 | tee "$result_dir/build.log"
-make tools 2>&1 | tee "$result_dir/tools-build.log"
-test -x ./tools/castkms-capture-test
-test -x ./tools/castkms-audio-test
-test -x ./tools/pw-castkms/pw-castkms
-test -x ./tools/pw-castkms/pw-castkms-test
 
 test "$(modinfo -F name ./castkms.ko)" = castkms
 case "$(modinfo -F vermagic ./castkms.ko)" in
@@ -232,6 +227,17 @@ case ",$(modinfo -F depends ./src/tests/castkms-kunit-tests.ko)," in
 	*) printf '%s\n' 'KUnit module dependencies are incomplete' >&2; exit 1 ;;
 esac
 printf '%s\n' 'kunit_build=pass' | tee -a "$result_dir/summary.txt"
+"$repo_dir/scripts/vm/guest-kunit-test.sh" "$repo_dir" "$expected_release"
+grep -Fx 'result=pass' "$repo_dir/test-results/vm-kunit/summary.txt" >/dev/null
+cp "$repo_dir/test-results/vm-kunit/summary.txt" \
+	"$result_dir/kunit-summary.txt"
+printf '%s\n' 'kunit_run=pass' | tee -a "$result_dir/summary.txt"
+
+make tools 2>&1 | tee "$result_dir/tools-build.log"
+test -x ./tools/castkms-capture-test
+test -x ./tools/castkms-audio-test
+test -x ./tools/pw-castkms/pw-castkms
+test -x ./tools/pw-castkms/pw-castkms-test
 printf '%s\n' 'capture_probe_build=pass' | tee -a "$result_dir/summary.txt"
 
 if ! strings ./castkms.ko > "$result_dir/module-strings.txt"; then

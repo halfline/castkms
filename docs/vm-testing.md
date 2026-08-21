@@ -23,8 +23,8 @@ into that kernel. Re-running it is safe and idempotent.
 
 `test` mirrors the current working tree into the guest and then:
 
-1. builds `castkms.ko`, the four-suite KUnit module with `W=1`, and the
-   userspace capture protocol test;
+1. builds `castkms.ko` and the five-suite KUnit module with `W=1`, executes all
+   KUnit suites, and builds the userspace protocol and PipeWire tests;
 2. verifies both modules' names, vermagic, dependencies, legacy strings, and
    exported symbols;
 3. loads stock `vkms` and `castkms` together without default devices;
@@ -61,10 +61,11 @@ into that kernel. Re-running it is safe and idempotent.
     output;
 11. unloads every module it loaded and verifies cleanup.
 
-The pinned Fedora kernel publishes the KUnit ABI in its development package
-but does not ship the corresponding `kunit.ko`, so the VM currently provides
-compile and linkage coverage for the KUnit suites rather than executing them.
-The standalone build target is also available directly with `make kunit`.
+The smoke test invokes `guest-kunit-test.sh`, loads `kunit`, `castkms`, and the
+out-of-tree test module, and rejects missing or failing suites before continuing
+with integration coverage. Run that gate alone with
+`./scripts/vm/castkms-vm kunit-test`; the standalone build target remains
+available as `make kunit`.
 
 Results are copied to:
 
