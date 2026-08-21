@@ -16,6 +16,7 @@
 #include <linux/dma-mapping.h>
 
 #include <drm/clients/drm_client_setup.h>
+#include <drm/drm_auth.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
@@ -36,10 +37,14 @@
 
 #include "castkms_audio.h"
 #include "castkms_capture.h"
+#include "castkms_capture_authority.h"
+#include "castkms_capture_uapi.h"
 #include "castkms_cec.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_drv.h"
+#include "castkms_framebuffer.h"
+#include "castkms_grant.h"
 
 #define DRIVER_NAME	"castkms"
 #define DRIVER_DESC	"CASTKMS virtual display capture"
@@ -87,38 +92,44 @@ static const struct drm_ioctl_desc castkms_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_QUERY_CAPS,
 			  castkms_capture_query_caps_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_START,
-			  castkms_capture_start_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_start_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_STOP,
-			  castkms_capture_stop_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_stop_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_REGISTER_BUFFER,
-			  castkms_capture_register_buffer_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_register_buffer_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_UNREGISTER_BUFFER,
-			  castkms_capture_unregister_buffer_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_unregister_buffer_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_QUEUE_BUFFER,
-			  castkms_capture_queue_buffer_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_queue_buffer_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_SET_OUTPUT_EDID,
-			  castkms_capture_set_output_edid_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_set_output_edid_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_ATTACH_MONITOR,
-			  castkms_capture_attach_monitor_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_attach_monitor_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_DETACH_MONITOR,
-			  castkms_capture_detach_monitor_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_detach_monitor_ioctl, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
-			  castkms_capture_read_cursor_bitmap_ioctl, DRM_ROOT_ONLY),
+			  castkms_capture_read_cursor_bitmap_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(CASTKMS_CREATE_GRANT,
+			  castkms_grant_create_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(CASTKMS_REVOKE_GRANT,
+			  castkms_grant_revoke_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(CASTKMS_GET_GRANT,
+			  castkms_grant_get_ioctl, 0),
 #if IS_REACHABLE(CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER)
 	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_QUERY_CAPS,
 			  castkms_cec_query_caps, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_BIND_TRANSPORT,
-			  castkms_cec_bind_transport, DRM_ROOT_ONLY),
+			  castkms_cec_bind_transport, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_UNBIND_TRANSPORT,
-			  castkms_cec_unbind_transport, DRM_ROOT_ONLY),
+			  castkms_cec_unbind_transport, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_SET_TRANSPORT_STATE,
-			  castkms_cec_set_transport_state, DRM_ROOT_ONLY),
+			  castkms_cec_set_transport_state, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_TX_COMPLETE,
-			  castkms_cec_tx_complete, DRM_ROOT_ONLY),
+			  castkms_cec_tx_complete, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_RECEIVE,
-			  castkms_cec_receive, DRM_ROOT_ONLY),
+			  castkms_cec_receive, 0),
 	DRM_IOCTL_DEF_DRV(CASTKMS_CEC_GET_STATE,
-			  castkms_cec_get_state, DRM_ROOT_ONLY),
+			  castkms_cec_get_state, 0),
 #endif
 };
 
@@ -134,6 +145,7 @@ static void castkms_atomic_commit_tail(struct drm_atomic_state *old_state)
 	drm_atomic_helper_commit_planes(dev, old_state, 0);
 
 	drm_atomic_helper_commit_modeset_enables(dev, old_state);
+	castkms_capture_authority_publish_content_owners(old_state);
 
 	drm_atomic_helper_fake_vblank(old_state);
 
@@ -158,6 +170,9 @@ static const struct drm_driver castkms_driver = {
 	.num_ioctls		= ARRAY_SIZE(castkms_ioctls),
 	.open			= castkms_capture_file_open,
 	.postclose		= castkms_capture_file_close,
+	.master_set		= castkms_capture_authority_master_set,
+	.master_drop		= castkms_capture_authority_master_drop,
+	.show_fdinfo		= castkms_grant_show_fdinfo,
 	.fops			= &castkms_driver_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
@@ -168,10 +183,54 @@ static const struct drm_driver castkms_driver = {
 	.minor			= DRIVER_MINOR,
 };
 
+static int
+castkms_atomic_check_writeback_ownership(struct drm_atomic_state *state)
+{
+	struct drm_master *current_master = NULL;
+	struct drm_connector_state *connector_state;
+	struct drm_connector *connector;
+	int i;
+	int ret = 0;
+
+	for_each_new_connector_in_state(state, connector, connector_state, i) {
+		struct drm_master *capture_owner;
+		struct drm_crtc_state *crtc_state;
+
+		if (connector->connector_type != DRM_MODE_CONNECTOR_WRITEBACK ||
+		    !connector_state->writeback_job ||
+		    !connector_state->writeback_job->fb)
+			continue;
+
+		if (!connector_state->crtc) {
+			ret = -EINVAL;
+			break;
+		}
+		crtc_state = drm_atomic_get_new_crtc_state(state, connector_state->crtc);
+		if (!crtc_state) {
+			ret = -EINVAL;
+			break;
+		}
+		if (!current_master)
+			current_master =
+				castkms_capture_authority_current_master_get(state->dev);
+		capture_owner = to_castkms_crtc_state(crtc_state)->capture_owner;
+		if (!castkms_capture_owner_is_current(capture_owner,
+						      current_master)) {
+			ret = -EACCES;
+			break;
+		}
+	}
+
+	if (current_master)
+		drm_master_put(&current_master);
+	return ret;
+}
+
 static int castkms_atomic_check(struct drm_device *dev, struct drm_atomic_state *state)
 {
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *new_crtc_state;
+	int ret;
 	int i;
 
 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
@@ -187,11 +246,20 @@ static int castkms_atomic_check(struct drm_device *dev, struct drm_atomic_state 
 			return -EINVAL;
 	}
 
-	return drm_atomic_helper_check(dev, state);
+	ret = drm_atomic_helper_check(dev, state);
+	if (ret)
+		return ret;
+
+	/*
+	 * Writeback is a second pixel-export path.  A newly installed DRM master
+	 * must not use a no-op writeback commit to read the previous master's
+	 * residual composition and bypass capture grants' content-owner barrier.
+	 */
+	return castkms_atomic_check_writeback_ownership(state);
 }
 
 static const struct drm_mode_config_funcs castkms_mode_funcs = {
-	.fb_create = drm_gem_fb_create,
+	.fb_create = castkms_framebuffer_create,
 	.atomic_check = castkms_atomic_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
@@ -257,7 +325,14 @@ int castkms_create(struct castkms_config *config)
 	castkms_device->faux_dev = fdev;
 	castkms_device->config = config;
 	config->dev = castkms_device;
+	mutex_init(&castkms_device->attach_transition_lock);
 	mutex_init(&castkms_device->attach_lock);
+	ret = castkms_capture_authority_device_init(castkms_device);
+	if (ret)
+		goto out_devres;
+	ret = castkms_grant_device_init(castkms_device);
+	if (ret)
+		goto out_devres;
 
 	ret = dma_coerce_mask_and_coherent(castkms_device->drm.dev,
 					   DMA_BIT_MASK(64));
@@ -368,6 +443,7 @@ void castkms_destroy(struct castkms_config *config)
 	castkms_device = config->dev;
 	fdev = castkms_device->faux_dev;
 
+	castkms_capture_authority_revoke_all(castkms_device, -ENODEV);
 	drm_dev_unplug(&castkms_device->drm);
 	drm_atomic_helper_shutdown(&castkms_device->drm);
 	castkms_audio_cleanup(castkms_device);

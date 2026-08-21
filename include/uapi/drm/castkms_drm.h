@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define DRM_CASTKMS_CAPTURE_UAPI_MAJOR	0
-#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	8
+#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	9
 
 /**
  * DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE:
@@ -39,6 +39,182 @@ extern "C" {
  * imported framebuffer and interpreting the returned errno.
  */
 #define DRM_CASTKMS_CAPTURE_CAP_DMA_BUF_IMPORT		(1ULL << 2)
+
+/**
+ * DRM_CASTKMS_CAPTURE_CAP_GRANT_FD:
+ *
+ * Sensitive capture, monitor-management, and CEC operations require a
+ * connector-scoped grant-bearing DRM file descriptor. Opening the primary
+ * node does not confer those rights.
+ */
+#define DRM_CASTKMS_CAPTURE_CAP_GRANT_FD		(1ULL << 3)
+
+/**
+ * DRM_CASTKMS_GRANT_CAPTURE_PIXELS:
+ *
+ * Permit capture stream creation and buffer operations for the connector
+ * named by the grant. Cursor access additionally requires
+ * DRM_CASTKMS_GRANT_READ_CURSOR.
+ */
+#define DRM_CASTKMS_GRANT_CAPTURE_PIXELS	(1U << 0)
+
+/**
+ * DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT:
+ *
+ * Permit monitor attachment and detachment for the connector named by the
+ * grant.
+ */
+#define DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT	(1U << 1)
+
+/**
+ * DRM_CASTKMS_GRANT_UPDATE_EDID:
+ *
+ * Permit publishing or clearing the connector's EDID.
+ */
+#define DRM_CASTKMS_GRANT_UPDATE_EDID		(1U << 2)
+
+/**
+ * DRM_CASTKMS_GRANT_READ_CURSOR:
+ *
+ * Permit cursor inclusion, metadata, and bitmap retrieval in a capture
+ * stream. Pixel capture without this right must exclude the cursor.
+ */
+#define DRM_CASTKMS_GRANT_READ_CURSOR		(1U << 3)
+
+/**
+ * DRM_CASTKMS_GRANT_MANAGE_CEC:
+ *
+ * Permit ownership and use of the userspace CEC transport for the connector
+ * named by the grant.
+ */
+#define DRM_CASTKMS_GRANT_MANAGE_CEC		(1U << 4)
+
+#define DRM_CASTKMS_GRANT_RIGHTS_MASK \
+	(DRM_CASTKMS_GRANT_CAPTURE_PIXELS | \
+	 DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT | \
+	 DRM_CASTKMS_GRANT_UPDATE_EDID | \
+	 DRM_CASTKMS_GRANT_READ_CURSOR | \
+	 DRM_CASTKMS_GRANT_MANAGE_CEC)
+
+/**
+ * DRM_CASTKMS_GRANT_CREATE_ADMIN:
+ *
+ * Create a master-independent administrative grant. This flag requires
+ * CAP_SYS_ADMIN in the initial user namespace. An administrative grant is not
+ * suspended merely because DRM master changes, but pixel capture still waits
+ * until the current master owns capture-safe content on the connector.
+ */
+#define DRM_CASTKMS_GRANT_CREATE_ADMIN		(1U << 0)
+
+/**
+ * DRM_CASTKMS_GRANT_CREATE_DELEGATED:
+ *
+ * Create a holder-lived normal grant bound to the device's current top-level
+ * DRM owner master. This flag requires CAP_SYS_ADMIN in the initial user
+ * namespace and cannot be combined with DRM_CASTKMS_GRANT_CREATE_ADMIN. The
+ * caller must not itself be a current DRM master. Closing the creating file
+ * does not revoke a delegated grant.
+ */
+#define DRM_CASTKMS_GRANT_CREATE_DELEGATED	(1U << 1)
+
+#define DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK \
+	(DRM_CASTKMS_GRANT_CREATE_ADMIN | \
+	 DRM_CASTKMS_GRANT_CREATE_DELEGATED)
+
+/** DRM_CASTKMS_GRANT_FLAG_ADMIN: Grant has roaming administrative semantics. */
+#define DRM_CASTKMS_GRANT_FLAG_ADMIN		(1U << 0)
+/** DRM_CASTKMS_GRANT_FLAG_DELEGATED: Grant is holder-lived and master-bound. */
+#define DRM_CASTKMS_GRANT_FLAG_DELEGATED	(1U << 1)
+#define DRM_CASTKMS_GRANT_FLAGS_MASK \
+	(DRM_CASTKMS_GRANT_FLAG_ADMIN | DRM_CASTKMS_GRANT_FLAG_DELEGATED)
+
+/**
+ * struct drm_castkms_create_grant - create a connector-scoped capability fd
+ * @connector_id: DRM object ID of a non-writeback CastKMS connector
+ * @rights: nonzero mask of DRM_CASTKMS_GRANT_* rights
+ * @flags: DRM_CASTKMS_GRANT_CREATE_* flags
+ * @fd: output file descriptor carrying the grant
+ * @grant_id: output device-unique grant identifier
+ * @fd_flags: flags for the returned file; only O_NONBLOCK is accepted
+ *
+ * With no creation flags, this operation requires the device's current
+ * top-level DRM owner master and creates a normal grant revoked when that
+ * creating file closes. A DRM lease master cannot create such a grant.
+ * DRM_CASTKMS_GRANT_CREATE_DELEGATED requires CAP_SYS_ADMIN in the initial
+ * user namespace and creates a holder-lived normal grant bound to the current
+ * owner master; it returns -EAGAIN when the caller is current or no owner
+ * master exists. DRM_CASTKMS_GRANT_CREATE_ADMIN requires the same capability
+ * and explicitly asks for master-independent administrative semantics. The
+ * two creation flags are mutually exclusive.
+ * The returned file has a fresh DRM namespace, is neither master nor
+ * authenticated, and may be passed with SCM_RIGHTS. A normal or delegated
+ * grant is suspended while another DRM master is current and revivifies when
+ * its bound master returns and owns capture-safe connector content. An
+ * administrative grant follows current safe content across master changes.
+ * Closing the final holder reference permanently revokes every grant. Closing
+ * the creating file also revokes normal and administrative grants, but not a
+ * delegated grant. The kernel always creates @fd with close-on-exec set,
+ * independently of @fd_flags.
+ */
+struct drm_castkms_create_grant {
+	__u32 connector_id;
+	__u32 rights;
+	__u32 flags;
+	__s32 fd;
+	__u32 grant_id;
+	__u32 fd_flags;
+};
+
+/**
+ * struct drm_castkms_revoke_grant - permanently revoke a live grant
+ * @grant_id: identifier returned by DRM_IOCTL_CASTKMS_CREATE_GRANT
+ * @flags: must be zero
+ * @reserved: must be zero
+ *
+ * A grant's revoker file may revoke it even while its DRM master is inactive.
+ * A caller with CAP_SYS_ADMIN in the initial user namespace may revoke any
+ * live grant on the device, including a delegated grant after its creator has
+ * closed.
+ */
+struct drm_castkms_revoke_grant {
+	__u32 grant_id;
+	__u32 flags;
+	__u64 reserved;
+};
+
+#define DRM_CASTKMS_GRANT_STATE_PENDING			0
+#define DRM_CASTKMS_GRANT_STATE_ACTIVE			1
+#define DRM_CASTKMS_GRANT_STATE_SUSPENDED_NO_MASTER	2
+#define DRM_CASTKMS_GRANT_STATE_SUSPENDED_OTHER_MASTER	3
+#define DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT 4
+#define DRM_CASTKMS_GRANT_STATE_REVOKED			5
+
+/**
+ * struct drm_castkms_get_grant - query a held or revocable grant
+ * @grant_id: holder input zero/output identity; revoker input grant identifier
+ * @connector_id: output authorized connector ID
+ * @rights: output DRM_CASTKMS_GRANT_* mask
+ * @state: output DRM_CASTKMS_GRANT_STATE_* value
+ * @flags: must be zero on input; output DRM_CASTKMS_GRANT_FLAG_* mask
+ * @reserved: must be zero on input and is zero on output
+ * @reserved2: must be zero on input and is zero on output
+ *
+ * An ordinary DRM file returns -ENODATA. A normal or delegated suspended grant
+ * becomes active again whenever its bound DRM master returns and reestablishes
+ * a capture-safe composition, even after an intervening owner. A delegated
+ * holder reports DRM_CASTKMS_GRANT_FLAG_DELEGATED. Mode-specific streams must
+ * still be recreated after any master loss. A revoked grant remains queryable
+ * but can never regain authority.
+ */
+struct drm_castkms_get_grant {
+	__u32 grant_id;
+	__u32 connector_id;
+	__u32 rights;
+	__u32 state;
+	__u32 flags;
+	__u32 reserved;
+	__u64 reserved2;
+};
 
 /**
  * struct drm_castkms_capture_format - capture buffer format
@@ -89,10 +265,10 @@ struct drm_castkms_capture_query_caps {
 /**
  * DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR:
  *
- * Exclude the cursor plane from captured frame composition.  The cursor
- * position and image metadata are still reported in the capture event
- * cursor fields.  Consumers render the cursor client-side using the
- * reported metadata.
+ * Exclude the cursor plane from captured frame composition. With
+ * DRM_CASTKMS_GRANT_READ_CURSOR, position and image metadata are still
+ * reported in capture events so consumers can render the cursor client-side.
+ * Without that right all cursor fields and bitmaps are suppressed.
  */
 #define DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR (1U << 1)
 
@@ -246,18 +422,18 @@ struct drm_castkms_capture_queue_buffer {
 
 /**
  * struct drm_castkms_capture_set_output_edid - publish an EDID for the captured output
- * @stream_id: file-local capture stream identifier
+ * @connector_id: DRM object ID of the grant's connector
  * @flags: must be zero
  * @edid_size: EDID blob size in bytes; zero clears the published EDID
  * @reserved: must be zero
  * @edid_ptr: userspace pointer to @edid_size bytes, or zero when clearing
  *
- * The stream owner may push a complete EDID while this file owns an attached
- * monitor on the captured CRTC. The driver copies and validates the blob,
- * updates the connector, and emits a standard KMS hotplug so compositors
+ * A grant with DRM_CASTKMS_GRANT_UPDATE_EDID may push a complete EDID while
+ * it owns an attachment on this connector. The driver copies and validates the
+ * blob, updates the connector, and emits a standard KMS hotplug so compositors
  * reread identity and modes. Call again when the sink identity changes. A
  * zero-length blob clears the published EDID without detaching. Stream stop
- * leaves the attachment and EDID in place. DETACH_MONITOR or file close
+ * leaves the attachment and EDID in place. DETACH_MONITOR or grant revocation
  * unplugs the monitor and clears the EDID.
  *
  * This ioctl is fire-and-forget. Capture completion events do not report
@@ -265,12 +441,11 @@ struct drm_castkms_capture_queue_buffer {
  * wrote. Consumers observe the connector EDID property and KMS hotplug.
  *
  * When setting, @edid_size must be a non-zero multiple of 128 and at most
- * 512. Invalid EDIDs return -EINVAL. A stream that is not owned by this file
- * returns -ENOENT. A connector that is not attached returns -ENOTCONN.
- * A connector attached by another file returns -EACCES.
+ * 512. Invalid EDIDs return -EINVAL. A connector that is not attached returns
+ * -ENOTCONN. A connector attached by another grant returns -EACCES.
  */
 struct drm_castkms_capture_set_output_edid {
-	__u32 stream_id;
+	__u32 connector_id;
 	__u32 flags;
 	__u32 edid_size;
 	__u32 reserved;
@@ -288,11 +463,12 @@ struct drm_castkms_capture_set_output_edid {
  * The default device publishes a fixed set of disconnected virtual ports at
  * load. This ioctl is the plug-in: the connector becomes connected, the
  * optional EDID is published, and a standard KMS hotplug is emitted. The
- * calling file owns the attachment until DETACH_MONITOR or close.
+ * calling grant owns the attachment until DETACH_MONITOR, revocation, or final
+ * holder close.
  *
  * When setting an EDID, @edid_size must be a non-zero multiple of 128 and
  * at most 512. Invalid EDIDs return -EINVAL. A writeback or unknown
- * connector returns -ENOENT. A connector already attached by any file
+ * connector returns -ENOENT. A connector already attached by any grant
  * returns -EBUSY.
  */
 struct drm_castkms_capture_attach_monitor {
@@ -310,9 +486,9 @@ struct drm_castkms_capture_attach_monitor {
  * @reserved: must be zero
  *
  * Clears the published EDID, marks the connector disconnected, and emits a
- * standard KMS hotplug. Only the attaching file may detach. A connector
- * that is not attached returns -ENOTCONN. A connector attached by another
- * file returns -EACCES.
+ * standard KMS hotplug. Only the attachment-owning grant may detach. A
+ * connector that is not attached returns -ENOTCONN. A connector attached by
+ * another grant returns -EACCES.
  */
 struct drm_castkms_capture_detach_monitor {
 	__u32 connector_id;
@@ -326,6 +502,51 @@ struct drm_castkms_capture_detach_monitor {
  * Driver-private event type carrying a completed capture frame.
  */
 #define DRM_CASTKMS_CAPTURE_EVENT_FRAME	0x80000000U
+
+/**
+ * DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED:
+ *
+ * Reliable notification that a grant has become permanently inert. This is
+ * intentionally distinct from a mode-generation change, after which the same
+ * grant may start a replacement stream.
+ */
+#define DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED	0x80000003U
+#define DRM_CASTKMS_CAPTURE_EVENT_GRANT_STATE	0x80000004U
+
+/**
+ * struct drm_event_castkms_grant_revoked - grant revocation notification
+ * @base: event header with type DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED
+ * @grant_id: revoked grant identifier
+ * @status: -EKEYREVOKED for policy or lifetime revoke; -ENODEV for teardown
+ * @timestamp_ns: monotonic revocation timestamp
+ */
+struct drm_event_castkms_grant_revoked {
+	struct drm_event base;
+	__u32 grant_id;
+	__s32 status;
+	__u64 timestamp_ns;
+};
+
+/**
+ * struct drm_event_castkms_grant_state - non-terminal grant state change
+ * @base: event header with type DRM_CASTKMS_CAPTURE_EVENT_GRANT_STATE
+ * @grant_id: grant identifier
+ * @state: new DRM_CASTKMS_GRANT_STATE_* value
+ * @status: errno returned by pixel-capture operations in this state
+ * @reserved: zero
+ * @timestamp_ns: monotonic transition timestamp
+ *
+ * State events are advisory. Userspace must use GET_GRANT as the
+ * authoritative state if transitions coalesce or event reservation fails.
+ */
+struct drm_event_castkms_grant_state {
+	struct drm_event base;
+	__u32 grant_id;
+	__u32 state;
+	__s32 status;
+	__u32 reserved;
+	__u64 timestamp_ns;
+};
 
 /**
  * DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE:
@@ -423,6 +644,9 @@ struct drm_event_castkms_capture_frame {
 #define DRM_CASTKMS_CAPTURE_ATTACH_MONITOR	0x07
 #define DRM_CASTKMS_CAPTURE_DETACH_MONITOR	0x08
 #define DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP	0x09
+#define DRM_CASTKMS_CREATE_GRANT			0x11
+#define DRM_CASTKMS_REVOKE_GRANT			0x12
+#define DRM_CASTKMS_GET_GRANT			0x13
 
 /**
  * struct drm_castkms_capture_read_cursor_bitmap - read cursor image data
@@ -482,6 +706,15 @@ struct drm_castkms_capture_read_cursor_bitmap {
 #define DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, \
 		 struct drm_castkms_capture_read_cursor_bitmap)
+#define DRM_IOCTL_CASTKMS_CREATE_GRANT \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
+		 struct drm_castkms_create_grant)
+#define DRM_IOCTL_CASTKMS_REVOKE_GRANT \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_REVOKE_GRANT, \
+		struct drm_castkms_revoke_grant)
+#define DRM_IOCTL_CASTKMS_GET_GRANT \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_GET_GRANT, \
+		 struct drm_castkms_get_grant)
 
 /* --- CEC transport UAPI --- */
 

@@ -6,6 +6,7 @@
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_auth.h>
 #include <drm/drm_blend.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_managed.h>
@@ -16,7 +17,9 @@
 
 #include <kunit/visibility.h>
 
+#include "castkms_capture_authority.h"
 #include "castkms_drv.h"
+#include "castkms_framebuffer.h"
 
 static int castkms_plane_state_zpos_cmp(const void *a, const void *b)
 {
@@ -38,6 +41,18 @@ castkms_sort_plane_states(struct castkms_plane_state **planes, size_t count)
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_sort_plane_states);
 
+VISIBLE_IF_KUNIT bool
+castkms_capture_blank_establishes_owner(bool old_state_exists,
+					bool old_had_visible_planes,
+					bool mode_changed,
+					bool active_changed,
+					bool background_changed)
+{
+	return !old_state_exists || old_had_visible_planes || mode_changed ||
+	       active_changed || background_changed;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_capture_blank_establishes_owner);
+
 static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 {
 	struct castkms_output *output = drm_crtc_to_castkms_output(crtc);
@@ -57,7 +72,8 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 		ktime_t frame_time;
 		u64 frame = drm_crtc_vblank_count_and_time(crtc, &frame_time);
 
-		if (output->composer_demand.crc_enabled) {
+		if (output->composer_demand.crc_enabled &&
+		    castkms_capture_output_content_is_safe_locked(output)) {
 			/* Update frame_start only after the worker consumed it. */
 			spin_lock(&output->composer_lock);
 			if (!state->crc_pending)
@@ -99,6 +115,10 @@ castkms_atomic_crtc_duplicate_state(struct drm_crtc *crtc)
 		return NULL;
 
 	__drm_atomic_helper_crtc_duplicate_state(crtc, &castkms_state->base);
+	castkms_state->capture_owner =
+		to_castkms_crtc_state(crtc->state)->capture_owner;
+	if (castkms_state->capture_owner)
+		drm_master_get(castkms_state->capture_owner);
 
 	INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
 
@@ -110,6 +130,8 @@ static void castkms_atomic_crtc_destroy_state(struct drm_crtc *crtc,
 {
 	struct castkms_crtc_state *castkms_state = to_castkms_crtc_state(state);
 
+	if (castkms_state->capture_owner)
+		drm_master_put(&castkms_state->capture_owner);
 	__drm_atomic_helper_crtc_destroy_state(state);
 
 	WARN_ON(work_pending(&castkms_state->composer_work));
@@ -340,6 +362,61 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 	castkms_sort_plane_states(castkms_state->active_planes,
 				  castkms_state->num_active_planes);
 
+	if (castkms_state->num_active_planes) {
+		struct drm_master *owner = NULL;
+
+		for (i = 0; i < castkms_state->num_active_planes; i++) {
+			struct drm_framebuffer *fb =
+				castkms_state->active_planes[i]->base.base.fb;
+			struct drm_master *plane_owner =
+				castkms_framebuffer_capture_owner(fb);
+
+			if (!plane_owner || (owner && owner != plane_owner)) {
+				owner = NULL;
+				break;
+			}
+			owner = plane_owner;
+		}
+
+		if (owner != castkms_state->capture_owner) {
+			if (owner)
+				drm_master_get(owner);
+			if (castkms_state->capture_owner)
+				drm_master_put(&castkms_state->capture_owner);
+			castkms_state->capture_owner = owner;
+		}
+	} else if (!crtc_state->active) {
+		if (castkms_state->capture_owner)
+			drm_master_put(&castkms_state->capture_owner);
+	} else {
+		struct drm_crtc_state *old_crtc_state =
+			drm_atomic_get_old_crtc_state(state, crtc);
+		struct castkms_crtc_state *old_castkms_state = old_crtc_state ?
+			to_castkms_crtc_state(old_crtc_state) : NULL;
+		bool background_changed = old_crtc_state &&
+			old_crtc_state->background_color !=
+				crtc_state->background_color;
+		bool had_visible_planes = old_castkms_state &&
+			old_castkms_state->num_active_planes;
+		bool establishes_blank;
+
+		establishes_blank =
+			castkms_capture_blank_establishes_owner(!!old_crtc_state,
+								had_visible_planes,
+								crtc_state->mode_changed,
+								crtc_state->active_changed,
+								background_changed);
+
+		if (establishes_blank) {
+			struct drm_master *owner =
+				castkms_capture_authority_current_master_get(crtc->dev);
+
+			if (castkms_state->capture_owner)
+				drm_master_put(&castkms_state->capture_owner);
+			castkms_state->capture_owner = owner;
+		}
+	}
+
 	castkms_compute_frame_damage(castkms_state, state, crtc);
 	castkms_snapshot_cursor(castkms_state, state, crtc);
 
@@ -362,6 +439,7 @@ static void castkms_crtc_atomic_begin(struct drm_crtc *crtc,
 	 * from scheduling castkms_composer_worker until the composer is updated
 	 */
 	spin_lock_irq(&castkms_output->lock);
+	castkms_output->capture_owner_updating = true;
 }
 
 static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
@@ -409,6 +487,24 @@ static const struct drm_crtc_helper_funcs castkms_crtc_helper_funcs = {
 	.handle_vblank_timeout = castkms_crtc_handle_vblank_timeout,
 };
 
+static void castkms_crtc_capture_owner_cleanup(struct drm_device *dev,
+					       void *data)
+{
+	struct castkms_output *output = data;
+	struct drm_master *owner;
+	unsigned long flags;
+
+	(void)dev;
+
+	spin_lock_irqsave(&output->lock, flags);
+	owner = output->capture_owner;
+	output->capture_owner = NULL;
+	output->capture_owner_updating = true;
+	spin_unlock_irqrestore(&output->lock, flags);
+	if (owner)
+		drm_master_put(&owner);
+}
+
 struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plane *primary,
 				   struct drm_plane *cursor)
 {
@@ -440,6 +536,11 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 
 	spin_lock_init(&castkms_out->lock);
 	spin_lock_init(&castkms_out->composer_lock);
+	err = drmm_add_action_or_reset(dev,
+				       castkms_crtc_capture_owner_cleanup,
+				       castkms_out);
+	if (err)
+		return ERR_PTR(err);
 	err = castkms_capture_output_init(dev, castkms_out);
 	if (err)
 		return ERR_PTR(err);

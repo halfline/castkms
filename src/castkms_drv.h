@@ -5,7 +5,9 @@
 
 #include <linux/hrtimer.h>
 #include <linux/mutex.h>
+#include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/xarray.h>
 
 #include <drm/drm.h>
 #include <drm/drm_colorop.h>
@@ -267,6 +269,7 @@ struct castkms_cursor_snapshot {
 struct castkms_crtc_state {
 	struct drm_crtc_state base;
 	struct work_struct composer_work;
+	struct drm_master *capture_owner;
 
 	int num_active_planes;
 	struct castkms_plane_state **active_planes;
@@ -296,6 +299,12 @@ struct castkms_crtc_state {
  * @composer_demand: Protected by @lock, clients keeping the composer active
  * @composer_state: Protected by @lock, current state of this CASTKMS output
  * @composer_lock: Lock used internally to protect @composer_state members
+ * @capture_owner: Refcounted master whose content is currently safe to expose,
+ *                 protected by @lock
+ * @capture_owner_generation: Changes whenever capture-safe ownership is
+ *                            republished, protected by @lock
+ * @capture_owner_updating: An atomic commit is replacing composition state;
+ *                          capture is unsafe until commit-tail publication
  * @capture: Passive capture ownership and mode-generation state
  *
  * Lock ordering (outermost first):
@@ -315,12 +324,17 @@ struct castkms_output {
 	struct castkms_crtc_state *composer_state;
 
 	spinlock_t composer_lock;
+	struct drm_master *capture_owner;
+	u64 capture_owner_generation;
+	bool capture_owner_updating;
 
 	struct castkms_capture_output capture;
 };
 
 struct castkms_config;
 struct castkms_config_plane;
+struct drm_file;
+struct drm_master;
 
 /**
  * struct castkms_device - Description of a CASTKMS device
@@ -331,13 +345,46 @@ struct castkms_config_plane;
  * @config: Configuration used in this CASTKMS device. Runtime callbacks must
  *          hold a drm_dev_enter() reference while accessing it because its
  *          configfs owner may release it after unplug.
+ * @attach_transition_lock: Serializes complete attachment transitions,
+ *                          including EDID, audio, CEC, and hotplug side effects;
+ *                          precedes a holder grant lock when both are needed.
  * @attach_lock: Serializes monitor attach/detach ownership on connectors.
+ * @authority_registry_lock: Serializes the kernel-native authority registry.
+ * @authorities: Live capture authorities, including non-UAPI kernel clients.
+ * @next_authority_id: Internal cyclic authority-registry cursor.
+ * @authorities_shutdown: Prevents new authorities during device teardown.
+ * @capture_master_lock: Protects current DRM-master activation state.
+ * @capture_master: Refcounted current or most recently dropped DRM master.
+ * @capture_master_file: File which most recently installed @capture_master.
+ * @capture_master_transition: Monotonic master/content transition generation.
+ * @capture_master_cleanup_sequence: Master-drop cleanup generation; normal
+ *                                   streams must be restarted afterward.
+ * @capture_master_active: Whether @capture_master is currently installed.
+ * @capture_master_work: Deferred authority suspension and state notification.
+ * @grant_registry_lock: Serializes UAPI grant IDs and revoker associations.
+ * @grants: Live grant-fd wrappers, retained through holder final close.
+ * @next_grant_id: Cyclic allocation cursor for device-unique UAPI grant IDs.
  */
 struct castkms_device {
 	struct drm_device drm;
 	struct faux_device *faux_dev;
 	struct castkms_config *config;
+	struct mutex attach_transition_lock; /* Serialize attachment side effects. */
 	struct mutex attach_lock;
+	struct mutex authority_registry_lock;
+	struct xarray authorities;
+	u32 next_authority_id;
+	bool authorities_shutdown;
+	spinlock_t capture_master_lock;
+	struct drm_master *capture_master;
+	struct drm_file *capture_master_file;
+	u64 capture_master_transition;
+	u64 capture_master_cleanup_sequence;
+	bool capture_master_active;
+	struct work_struct capture_master_work;
+	struct mutex grant_registry_lock; /* Protects @grants and revokers. */
+	struct xarray grants;
+	u32 next_grant_id;
 	struct drm_property *capture_active_prop;
 	struct castkms_audio *audio;
 };

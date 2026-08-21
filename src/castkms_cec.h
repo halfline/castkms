@@ -5,9 +5,11 @@
 
 #include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/wait.h>
 #include <linux/workqueue.h>
 
 struct castkms_connector;
+struct castkms_capture_authority;
 struct castkms_device;
 struct drm_connector;
 struct drm_device;
@@ -20,7 +22,11 @@ struct drm_file;
  *
  * @connector: Back-pointer to the owning castkms connector
  * @lock: Protects transport ownership, pending transaction, and state fields
- * @transport_file: DRM file that owns the backend binding, or NULL
+ * @transport_wait: Waits for adapter callbacks which are preparing an event
+ * @transport_users: Number of adapter callbacks outside @lock
+ * @transport_cleanup: Number of cleanups blocking a replacement binding
+ * @transport_authority: Core authority owning the backend binding, or NULL
+ * @transport_file: Grant-bearing DRM file used for event delivery, or NULL
  * @transport_id: File-local binding identifier
  * @transport_generation: Monotonic; incremented on rebind to reject stale events
  * @transport_online: Whether the backend is ready for dispatch
@@ -45,7 +51,11 @@ struct drm_file;
 struct castkms_cec_output {
 	struct castkms_connector *connector;
 	spinlock_t lock;
+	wait_queue_head_t transport_wait;
+	unsigned int transport_users;
+	unsigned int transport_cleanup;
 
+	struct castkms_capture_authority *transport_authority;
 	struct drm_file *transport_file;
 	u32 transport_id;
 	u64 transport_generation;
@@ -91,7 +101,11 @@ int castkms_cec_query_caps(struct drm_device *dev, void *data,
 int castkms_cec_get_state(struct drm_device *dev, void *data,
 			  struct drm_file *file_priv);
 
-void castkms_cec_unbind_file(struct drm_device *dev, struct drm_file *file);
+void castkms_cec_unbind_authority(
+	struct castkms_capture_authority *authority);
+void castkms_cec_suspend_authority(
+	struct castkms_capture_authority *authority);
+void castkms_cec_suspend_connector(struct drm_connector *connector);
 
 #else /* !CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER */
 
@@ -107,7 +121,13 @@ static inline void
 castkms_cec_refresh_connector_state(struct drm_connector *connector) { }
 
 static inline void
-castkms_cec_unbind_file(struct drm_device *dev, struct drm_file *file) { }
+castkms_cec_unbind_authority(struct castkms_capture_authority *authority) { }
+
+static inline void
+castkms_cec_suspend_authority(struct castkms_capture_authority *authority) { }
+
+static inline void
+castkms_cec_suspend_connector(struct drm_connector *connector) { }
 
 #endif /* CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER */
 #endif /* _CASTKMS_CEC_H_ */

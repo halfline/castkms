@@ -16,9 +16,11 @@
 
 #include <drm/castkms_drm.h>
 
+#include "castkms_capture_authority.h"
 #include "castkms_cec.h"
 #include "castkms_connector.h"
 #include "castkms_drv.h"
+#include "castkms_grant.h"
 
 #define CEC_TX_TIMEOUT_MS 2000
 
@@ -61,15 +63,85 @@ cec_lookup(struct drm_device *dev, struct drm_file *file_priv,
 	return cec_out;
 }
 
+static struct castkms_cec_output *
+cec_lookup_granted(struct drm_device *dev, struct drm_file *file_priv,
+		   u32 connector_id, struct drm_connector **out_connector,
+		   struct castkms_capture_authority **out_authority)
+{
+	struct castkms_cec_output *cec_out;
+	struct drm_connector *connector;
+	int ret;
+
+	cec_out = cec_lookup(dev, file_priv, connector_id, &connector);
+	if (IS_ERR(cec_out))
+		return cec_out;
+
+	ret = castkms_grant_begin(file_priv, connector,
+				  CASTKMS_CAPTURE_AUTHORITY_MANAGE_CEC,
+				  out_authority);
+	if (ret) {
+		drm_connector_put(connector);
+		return ERR_PTR(ret);
+	}
+
+	*out_connector = connector;
+	return cec_out;
+}
+
 static bool cec_abort_pending_locked(struct castkms_cec_output *cec_out)
 {
 	if (!cec_out->pending_cookie)
 		return false;
 
 	cec_out->pending_cookie = 0;
-	cec_out->stats_tx_timeout++;
 	cec_out->state_generation++;
 	return true;
+}
+
+static void cec_transport_user_put(struct castkms_cec_output *cec_out)
+{
+	unsigned long flags;
+	bool idle;
+
+	spin_lock_irqsave(&cec_out->lock, flags);
+	if (WARN_ON(!cec_out->transport_users)) {
+		spin_unlock_irqrestore(&cec_out->lock, flags);
+		return;
+	}
+	idle = !--cec_out->transport_users;
+	spin_unlock_irqrestore(&cec_out->lock, flags);
+
+	if (idle)
+		wake_up_all(&cec_out->transport_wait);
+}
+
+static void cec_transport_user_release(struct castkms_cec_output *cec_out,
+				       struct file *active_file)
+{
+	/*
+	 * Final fput may enter holder postclose and wait for transport cleanup.
+	 * Leave the callback-use barrier first so that cleanup cannot wait on the
+	 * callback which is performing that final fput.
+	 */
+	cec_transport_user_put(cec_out);
+	fput(active_file);
+}
+
+static void cec_transport_wait_idle(struct castkms_cec_output *cec_out)
+{
+	wait_event(cec_out->transport_wait,
+		   !READ_ONCE(cec_out->transport_users));
+}
+
+static void cec_transport_cleanup_done(struct castkms_cec_output *cec_out)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&cec_out->lock, flags);
+	WARN_ON(!cec_out->transport_cleanup);
+	if (cec_out->transport_cleanup)
+		cec_out->transport_cleanup--;
+	spin_unlock_irqrestore(&cec_out->lock, flags);
 }
 
 static void cec_tx_timeout_work_fn(struct work_struct *work)
@@ -109,23 +181,27 @@ static int castkms_cec_enable(struct drm_connector *connector, bool enable)
 {
 	struct castkms_cec_output *cec_out = connector_to_cec(connector);
 	unsigned long flags;
-	bool aborted = false;
+	bool canceled = false;
 
 	spin_lock_irqsave(&cec_out->lock, flags);
 	if (cec_out->adapter_enabled != enable) {
 		cec_out->adapter_enabled = enable;
 		cec_out->state_generation++;
 		if (!enable)
-			aborted = cec_abort_pending_locked(cec_out);
+			canceled = cec_abort_pending_locked(cec_out);
 	}
 	spin_unlock_irqrestore(&cec_out->lock, flags);
 
-	if (aborted) {
-		cancel_delayed_work_sync(&cec_out->tx_timeout_work);
-		drm_connector_hdmi_cec_transmit_done(connector,
-						     CEC_TX_STATUS_ERROR,
-						     0, 0, 0, 1);
-	}
+	/*
+	 * CEC core invokes ->enable() with its adapter mutex held.  Never wait
+	 * synchronously for the timeout worker here: that worker may already be
+	 * waiting for the same core mutex in cec_transmit_done().  CEC core cancels
+	 * its in-progress transaction itself immediately after ->enable(false)
+	 * returns, and a racing timeout completion is explicitly tolerated by the
+	 * core.
+	 */
+	if (canceled)
+		cancel_delayed_work(&cec_out->tx_timeout_work);
 
 	return 0;
 }
@@ -151,15 +227,24 @@ static int castkms_cec_transmit(struct drm_connector *connector, u8 attempts,
 {
 	struct castkms_cec_output *cec_out = connector_to_cec(connector);
 	struct drm_device *dev = connector->dev;
+	struct castkms_capture_authority *transport_authority;
 	struct drm_pending_event *pending_event;
 	struct drm_castkms_cec_event_tx *tx_event;
+	struct drm_file *transport_file;
+	struct file *active_file;
+	u64 transport_generation;
+	u64 cookie;
 	unsigned long flags;
 	int ret = 0;
 
 	spin_lock_irqsave(&cec_out->lock, flags);
 
-	if (!cec_out->adapter_enabled || !cec_out->transport_file ||
-	    !cec_out->transport_online) {
+	if (!cec_out->adapter_enabled ||
+	    !READ_ONCE(cec_out->connector->monitor_attached) ||
+	    !cec_out->transport_authority ||
+	    !castkms_capture_authority_is_active(cec_out->transport_authority) ||
+	    !cec_out->transport_file ||
+	    !cec_out->transport_online || cec_out->transport_cleanup) {
 		spin_unlock_irqrestore(&cec_out->lock, flags);
 		return -ENONET;
 	}
@@ -168,6 +253,12 @@ static int castkms_cec_transmit(struct drm_connector *connector, u8 attempts,
 		spin_unlock_irqrestore(&cec_out->lock, flags);
 		return -EBUSY;
 	}
+	active_file = get_file_active(&cec_out->transport_file->filp);
+	if (!active_file) {
+		spin_unlock_irqrestore(&cec_out->lock, flags);
+		return -ENONET;
+	}
+	cec_out->transport_users++;
 
 	cec_out->next_cookie++;
 	cec_out->pending_cookie = cec_out->next_cookie;
@@ -175,6 +266,10 @@ static int castkms_cec_transmit(struct drm_connector *connector, u8 attempts,
 	cec_out->pending_attempts = attempts;
 	cec_out->pending_signal_free_time = signal_free_time;
 	memcpy(cec_out->pending_msg, msg->msg, msg->len);
+	transport_authority = cec_out->transport_authority;
+	transport_file = cec_out->transport_file;
+	transport_generation = cec_out->transport_generation;
+	cookie = cec_out->pending_cookie;
 
 	spin_unlock_irqrestore(&cec_out->lock, flags);
 
@@ -182,8 +277,12 @@ static int castkms_cec_transmit(struct drm_connector *connector, u8 attempts,
 				GFP_KERNEL);
 	if (!pending_event) {
 		spin_lock_irqsave(&cec_out->lock, flags);
-		cec_out->pending_cookie = 0;
+		if (cec_out->transport_authority == transport_authority &&
+		    cec_out->transport_generation == transport_generation &&
+		    cec_out->pending_cookie == cookie)
+			cec_out->pending_cookie = 0;
 		spin_unlock_irqrestore(&cec_out->lock, flags);
+		cec_transport_user_release(cec_out, active_file);
 		return -ENOMEM;
 	}
 
@@ -193,9 +292,15 @@ static int castkms_cec_transmit(struct drm_connector *connector, u8 attempts,
 
 	spin_lock_irqsave(&cec_out->lock, flags);
 
-	if (!cec_out->transport_file || !cec_out->pending_cookie) {
+	if (cec_out->transport_authority != transport_authority ||
+	    !castkms_capture_authority_is_active(transport_authority) ||
+	    cec_out->transport_file != transport_file ||
+	    cec_out->transport_generation != transport_generation ||
+	    cec_out->pending_cookie != cookie ||
+	    cec_out->transport_cleanup) {
 		spin_unlock_irqrestore(&cec_out->lock, flags);
 		kfree(pending_event);
+		cec_transport_user_release(cec_out, active_file);
 		return -ENONET;
 	}
 
@@ -212,12 +317,13 @@ static int castkms_cec_transmit(struct drm_connector *connector, u8 attempts,
 
 	pending_event->event = &tx_event->base;
 
-	ret = drm_event_reserve_init(dev, cec_out->transport_file,
+	ret = drm_event_reserve_init(dev, transport_file,
 				     pending_event, &tx_event->base);
 	if (ret) {
 		cec_out->pending_cookie = 0;
 		spin_unlock_irqrestore(&cec_out->lock, flags);
 		kfree(pending_event);
+		cec_transport_user_release(cec_out, active_file);
 		return ret;
 	}
 	cec_out->stats_tx_submitted++;
@@ -227,6 +333,7 @@ static int castkms_cec_transmit(struct drm_connector *connector, u8 attempts,
 
 	schedule_delayed_work(&cec_out->tx_timeout_work,
 			      msecs_to_jiffies(CEC_TX_TIMEOUT_MS));
+	cec_transport_user_release(cec_out, active_file);
 
 	return 0;
 }
@@ -253,7 +360,9 @@ void castkms_cec_refresh_connector_state(struct drm_connector *connector)
 	castkms_conn = drm_connector_to_castkms_connector(connector);
 
 	spin_lock_irqsave(&cec_out->lock, flags);
-	should_be_valid = castkms_conn->monitor_attached &&
+	should_be_valid = READ_ONCE(castkms_conn->monitor_attached) &&
+			  cec_out->transport_authority &&
+			  castkms_capture_authority_is_active(cec_out->transport_authority) &&
 			  cec_out->transport_file &&
 			  cec_out->transport_online &&
 			  connector->display_info.source_physical_address !=
@@ -285,6 +394,7 @@ void castkms_cec_connector_init(struct castkms_connector *castkms_conn)
 
 	cec_out->connector = castkms_conn;
 	spin_lock_init(&cec_out->lock);
+	init_waitqueue_head(&cec_out->transport_wait);
 	INIT_DELAYED_WORK(&cec_out->tx_timeout_work, cec_tx_timeout_work_fn);
 	cec_out->next_cookie = 1;
 
@@ -375,6 +485,7 @@ int castkms_cec_bind_transport(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv)
 {
 	struct drm_castkms_cec_bind_transport *args = data;
+	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
 	struct castkms_connector *castkms_conn;
 	struct castkms_cec_output *cec_out;
@@ -387,7 +498,8 @@ int castkms_cec_bind_transport(struct drm_device *dev, void *data,
 	if (!drm_dev_enter(dev, &idx))
 		return -ENODEV;
 
-	cec_out = cec_lookup(dev, file_priv, args->connector_id, &connector);
+	cec_out = cec_lookup_granted(dev, file_priv, args->connector_id,
+				     &connector, &authority);
 	if (IS_ERR(cec_out)) {
 		drm_dev_exit(idx);
 		return PTR_ERR(cec_out);
@@ -395,13 +507,16 @@ int castkms_cec_bind_transport(struct drm_device *dev, void *data,
 	castkms_conn = drm_connector_to_castkms_connector(connector);
 
 	spin_lock_irqsave(&cec_out->lock, flags);
-	if (cec_out->transport_file) {
+	if (cec_out->transport_authority || cec_out->transport_cleanup) {
 		spin_unlock_irqrestore(&cec_out->lock, flags);
+		castkms_grant_end(authority);
 		drm_connector_put(connector);
 		drm_dev_exit(idx);
 		return -EBUSY;
 	}
 
+	cec_out->transport_authority = authority;
+	castkms_capture_authority_get(authority);
 	cec_out->transport_file = file_priv;
 	cec_out->transport_generation++;
 	cec_out->transport_id = cec_out->transport_generation & 0xFFFFFFFF;
@@ -413,7 +528,7 @@ int castkms_cec_bind_transport(struct drm_device *dev, void *data,
 	args->state_generation = cec_out->state_generation;
 	args->output_index = castkms_conn->output_index;
 	args->state_flags = 0;
-	if (castkms_conn->monitor_attached)
+	if (READ_ONCE(castkms_conn->monitor_attached))
 		args->state_flags |= DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED;
 	if (cec_out->adapter_enabled)
 		args->state_flags |= DRM_CASTKMS_CEC_STATE_ADAPTER_ENABLED;
@@ -421,6 +536,7 @@ int castkms_cec_bind_transport(struct drm_device *dev, void *data,
 	args->logical_addr_mask = cec_out->logical_addr_mask;
 
 	spin_unlock_irqrestore(&cec_out->lock, flags);
+	castkms_grant_end(authority);
 	drm_connector_put(connector);
 	drm_dev_exit(idx);
 
@@ -431,6 +547,8 @@ int castkms_cec_unbind_transport(struct drm_device *dev, void *data,
 				 struct drm_file *file_priv)
 {
 	struct drm_castkms_cec_unbind_transport *args = data;
+	struct castkms_capture_authority *authority;
+	struct castkms_capture_authority *transport_authority;
 	struct drm_connector *connector;
 	struct castkms_cec_output *cec_out;
 	unsigned long flags;
@@ -443,27 +561,33 @@ int castkms_cec_unbind_transport(struct drm_device *dev, void *data,
 	if (!drm_dev_enter(dev, &idx))
 		return -ENODEV;
 
-	cec_out = cec_lookup(dev, file_priv, args->connector_id, &connector);
+	cec_out = cec_lookup_granted(dev, file_priv, args->connector_id,
+				     &connector, &authority);
 	if (IS_ERR(cec_out)) {
 		drm_dev_exit(idx);
 		return PTR_ERR(cec_out);
 	}
 
 	spin_lock_irqsave(&cec_out->lock, flags);
-	if (cec_out->transport_file != file_priv ||
+	if (cec_out->transport_authority != authority ||
 	    cec_out->transport_id != args->transport_id) {
 		spin_unlock_irqrestore(&cec_out->lock, flags);
+		castkms_grant_end(authority);
 		drm_connector_put(connector);
 		drm_dev_exit(idx);
 		return -EACCES;
 	}
 
 	aborted = cec_abort_pending_locked(cec_out);
+	cec_out->transport_cleanup++;
+	transport_authority = cec_out->transport_authority;
+	cec_out->transport_authority = NULL;
 	cec_out->transport_file = NULL;
 	cec_out->transport_online = false;
 	cec_out->state_generation++;
 	spin_unlock_irqrestore(&cec_out->lock, flags);
 
+	cec_transport_wait_idle(cec_out);
 	cancel_delayed_work_sync(&cec_out->tx_timeout_work);
 
 	if (aborted)
@@ -472,6 +596,9 @@ int castkms_cec_unbind_transport(struct drm_device *dev, void *data,
 						     0, 0, 0, 1);
 
 	castkms_cec_refresh_connector_state(connector);
+	castkms_capture_authority_put(transport_authority);
+	cec_transport_cleanup_done(cec_out);
+	castkms_grant_end(authority);
 
 	drm_connector_put(connector);
 	drm_dev_exit(idx);
@@ -483,6 +610,7 @@ int castkms_cec_set_transport_state(struct drm_device *dev, void *data,
 				    struct drm_file *file_priv)
 {
 	struct drm_castkms_cec_set_transport_state *args = data;
+	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
 	struct castkms_cec_output *cec_out;
 	unsigned long flags;
@@ -498,19 +626,28 @@ int castkms_cec_set_transport_state(struct drm_device *dev, void *data,
 	if (!drm_dev_enter(dev, &idx))
 		return -ENODEV;
 
-	cec_out = cec_lookup(dev, file_priv, args->connector_id, &connector);
+	cec_out = cec_lookup_granted(dev, file_priv, args->connector_id,
+				     &connector, &authority);
 	if (IS_ERR(cec_out)) {
 		drm_dev_exit(idx);
 		return PTR_ERR(cec_out);
 	}
 
 	spin_lock_irqsave(&cec_out->lock, flags);
-	if (cec_out->transport_file != file_priv ||
+	if (cec_out->transport_authority != authority ||
 	    cec_out->transport_id != args->transport_id) {
 		spin_unlock_irqrestore(&cec_out->lock, flags);
+		castkms_grant_end(authority);
 		drm_connector_put(connector);
 		drm_dev_exit(idx);
 		return -EACCES;
+	}
+	if (cec_out->transport_cleanup) {
+		spin_unlock_irqrestore(&cec_out->lock, flags);
+		castkms_grant_end(authority);
+		drm_connector_put(connector);
+		drm_dev_exit(idx);
+		return -EAGAIN;
 	}
 
 	if (args->flags & DRM_CASTKMS_CEC_TRANSPORT_ONLINE) {
@@ -524,21 +661,27 @@ int castkms_cec_set_transport_state(struct drm_device *dev, void *data,
 			cec_out->transport_online = false;
 			cec_out->state_generation++;
 			aborted = cec_abort_pending_locked(cec_out);
+			cec_out->transport_cleanup++;
 			changed = true;
 		}
 	}
 	spin_unlock_irqrestore(&cec_out->lock, flags);
 
-	if (aborted) {
+	if (changed && !(args->flags & DRM_CASTKMS_CEC_TRANSPORT_ONLINE)) {
+		cec_transport_wait_idle(cec_out);
 		cancel_delayed_work_sync(&cec_out->tx_timeout_work);
-		drm_connector_hdmi_cec_transmit_done(connector,
-						     CEC_TX_STATUS_ERROR,
-						     0, 0, 0, 1);
+		if (aborted)
+			drm_connector_hdmi_cec_transmit_done(connector,
+							     CEC_TX_STATUS_ERROR,
+							     0, 0, 0, 1);
 	}
 
 	if (changed)
 		castkms_cec_refresh_connector_state(connector);
+	if (changed && !(args->flags & DRM_CASTKMS_CEC_TRANSPORT_ONLINE))
+		cec_transport_cleanup_done(cec_out);
 
+	castkms_grant_end(authority);
 	drm_connector_put(connector);
 	drm_dev_exit(idx);
 
@@ -549,9 +692,11 @@ int castkms_cec_tx_complete(struct drm_device *dev, void *data,
 			    struct drm_file *file_priv)
 {
 	struct drm_castkms_cec_tx_complete *args = data;
+	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
 	struct castkms_cec_output *cec_out;
 	unsigned long flags;
+	int ret = 0;
 	int idx;
 
 	if (args->reserved[0] || args->reserved[1] || args->reserved[2])
@@ -562,37 +707,32 @@ int castkms_cec_tx_complete(struct drm_device *dev, void *data,
 	if (!drm_dev_enter(dev, &idx))
 		return -ENODEV;
 
-	cec_out = cec_lookup(dev, file_priv, args->connector_id, &connector);
+	cec_out = cec_lookup_granted(dev, file_priv, args->connector_id,
+				     &connector, &authority);
 	if (IS_ERR(cec_out)) {
 		drm_dev_exit(idx);
 		return PTR_ERR(cec_out);
 	}
 
 	spin_lock_irqsave(&cec_out->lock, flags);
-	if (cec_out->transport_file != file_priv ||
+	if (cec_out->transport_authority != authority ||
 	    cec_out->transport_id != args->transport_id) {
 		cec_out->stats_invalid++;
-		spin_unlock_irqrestore(&cec_out->lock, flags);
-		drm_connector_put(connector);
-		drm_dev_exit(idx);
-		return -EACCES;
+		ret = -EACCES;
+		goto out_unlock;
 	}
 
 	if (cec_out->transport_generation != args->transport_generation) {
 		cec_out->stats_invalid++;
-		spin_unlock_irqrestore(&cec_out->lock, flags);
-		drm_connector_put(connector);
-		drm_dev_exit(idx);
-		return -ESTALE;
+		ret = -ESTALE;
+		goto out_unlock;
 	}
 
 	if (!cec_out->pending_cookie ||
 	    cec_out->pending_cookie != args->cookie) {
 		cec_out->stats_invalid++;
-		spin_unlock_irqrestore(&cec_out->lock, flags);
-		drm_connector_put(connector);
-		drm_dev_exit(idx);
-		return -ENOENT;
+		ret = -ENOENT;
+		goto out_unlock;
 	}
 
 	cec_out->pending_cookie = 0;
@@ -612,21 +752,29 @@ int castkms_cec_tx_complete(struct drm_device *dev, void *data,
 					     args->low_drive_cnt,
 					     args->error_cnt);
 
+	goto out;
+
+out_unlock:
+	spin_unlock_irqrestore(&cec_out->lock, flags);
+out:
+	castkms_grant_end(authority);
 	drm_connector_put(connector);
 	drm_dev_exit(idx);
 
-	return 0;
+	return ret;
 }
 
 int castkms_cec_receive(struct drm_device *dev, void *data,
 			struct drm_file *file_priv)
 {
 	struct drm_castkms_cec_receive *args = data;
+	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
 	struct castkms_cec_output *cec_out;
 	struct cec_msg msg = {};
 	unsigned long flags;
 	u8 initiator;
+	int ret = 0;
 	int idx;
 
 	if (args->flags || args->reserved)
@@ -637,45 +785,43 @@ int castkms_cec_receive(struct drm_device *dev, void *data,
 	if (!drm_dev_enter(dev, &idx))
 		return -ENODEV;
 
-	cec_out = cec_lookup(dev, file_priv, args->connector_id, &connector);
+	cec_out = cec_lookup_granted(dev, file_priv, args->connector_id,
+				     &connector, &authority);
 	if (IS_ERR(cec_out)) {
 		drm_dev_exit(idx);
 		return PTR_ERR(cec_out);
 	}
 
 	spin_lock_irqsave(&cec_out->lock, flags);
-	if (cec_out->transport_file != file_priv ||
+	if (cec_out->transport_authority != authority ||
 	    cec_out->transport_id != args->transport_id) {
 		cec_out->stats_invalid++;
-		spin_unlock_irqrestore(&cec_out->lock, flags);
-		drm_connector_put(connector);
-		drm_dev_exit(idx);
-		return -EACCES;
+		ret = -EACCES;
+		goto out_unlock;
 	}
 
 	if (cec_out->transport_generation != args->transport_generation) {
 		cec_out->stats_invalid++;
-		spin_unlock_irqrestore(&cec_out->lock, flags);
-		drm_connector_put(connector);
-		drm_dev_exit(idx);
-		return -ESTALE;
+		ret = -ESTALE;
+		goto out_unlock;
 	}
 
 	if (!cec_out->transport_online) {
 		cec_out->stats_invalid++;
-		spin_unlock_irqrestore(&cec_out->lock, flags);
-		drm_connector_put(connector);
-		drm_dev_exit(idx);
-		return -ENONET;
+		ret = -ENONET;
+		goto out_unlock;
+	}
+	if (!READ_ONCE(cec_out->connector->monitor_attached)) {
+		cec_out->stats_invalid++;
+		ret = -ENOTCONN;
+		goto out_unlock;
 	}
 
 	initiator = (args->msg[0] >> 4) & 0x0f;
 	if (cec_out->logical_addr_mask & BIT(initiator)) {
 		cec_out->stats_invalid++;
-		spin_unlock_irqrestore(&cec_out->lock, flags);
-		drm_connector_put(connector);
-		drm_dev_exit(idx);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_unlock;
 	}
 
 	cec_out->stats_rx++;
@@ -685,17 +831,23 @@ int castkms_cec_receive(struct drm_device *dev, void *data,
 	memcpy(msg.msg, args->msg, args->length);
 
 	drm_connector_hdmi_cec_received_msg(connector, &msg);
+	goto out;
 
+out_unlock:
+	spin_unlock_irqrestore(&cec_out->lock, flags);
+out:
+	castkms_grant_end(authority);
 	drm_connector_put(connector);
 	drm_dev_exit(idx);
 
-	return 0;
+	return ret;
 }
 
 int castkms_cec_get_state(struct drm_device *dev, void *data,
 			  struct drm_file *file_priv)
 {
 	struct drm_castkms_cec_get_state *args = data;
+	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
 	struct castkms_connector *castkms_conn;
 	struct castkms_cec_output *cec_out;
@@ -708,7 +860,8 @@ int castkms_cec_get_state(struct drm_device *dev, void *data,
 	if (!drm_dev_enter(dev, &idx))
 		return -ENODEV;
 
-	cec_out = cec_lookup(dev, file_priv, args->connector_id, &connector);
+	cec_out = cec_lookup_granted(dev, file_priv, args->connector_id,
+				     &connector, &authority);
 	if (IS_ERR(cec_out)) {
 		drm_dev_exit(idx);
 		return PTR_ERR(cec_out);
@@ -716,9 +869,10 @@ int castkms_cec_get_state(struct drm_device *dev, void *data,
 	castkms_conn = drm_connector_to_castkms_connector(connector);
 
 	spin_lock_irqsave(&cec_out->lock, flags);
-	if (cec_out->transport_file != file_priv ||
+	if (cec_out->transport_authority != authority ||
 	    cec_out->transport_id != args->transport_id) {
 		spin_unlock_irqrestore(&cec_out->lock, flags);
+		castkms_grant_end(authority);
 		drm_connector_put(connector);
 		drm_dev_exit(idx);
 		return -EACCES;
@@ -729,7 +883,7 @@ int castkms_cec_get_state(struct drm_device *dev, void *data,
 	args->state_flags = 0;
 	if (cec_out->transport_online)
 		args->state_flags |= DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE;
-	if (castkms_conn->monitor_attached)
+	if (READ_ONCE(castkms_conn->monitor_attached))
 		args->state_flags |= DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED;
 	if (cec_out->adapter_enabled)
 		args->state_flags |= DRM_CASTKMS_CEC_STATE_ADAPTER_ENABLED;
@@ -748,73 +902,124 @@ int castkms_cec_get_state(struct drm_device *dev, void *data,
 
 	spin_unlock_irqrestore(&cec_out->lock, flags);
 
+	castkms_grant_end(authority);
 	drm_connector_put(connector);
 	drm_dev_exit(idx);
 
 	return 0;
 }
 
-/* --- File close cleanup --- */
+/* --- Grant revoke/final-close cleanup --- */
 
-void castkms_cec_unbind_file(struct drm_device *dev, struct drm_file *file)
+void castkms_cec_unbind_authority(struct castkms_capture_authority *authority)
 {
-	struct castkms_cec_output *found[CASTKMS_MAX_OUTPUT_OBJECTS];
-	struct drm_connector *connectors[CASTKMS_MAX_OUTPUT_OBJECTS];
-	struct drm_connector_list_iter iter;
-	struct drm_connector *connector;
-	unsigned int n = 0;
-	unsigned int i;
-	int idx;
+	struct drm_connector *connector = castkms_capture_authority_connector(authority);
+	struct castkms_connector *castkms_conn =
+		drm_connector_to_castkms_connector(connector);
+	struct castkms_cec_output *cec_out = castkms_conn->cec;
+	struct castkms_capture_authority *transport_authority = NULL;
+	unsigned long flags;
+	bool aborted = false;
 
-	if (!drm_dev_enter(dev, &idx))
+	if (!cec_out)
 		return;
 
-	drm_connector_list_iter_begin(dev, &iter);
-	drm_for_each_connector_iter(connector, &iter) {
-		struct castkms_connector *castkms_conn;
-		struct castkms_cec_output *cec_out;
-
-		if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
-			continue;
-		if (n == ARRAY_SIZE(found))
-			break;
-
-		castkms_conn = drm_connector_to_castkms_connector(connector);
-		cec_out = castkms_conn->cec;
-		if (!cec_out || cec_out->transport_file != file)
-			continue;
-
-		drm_connector_get(connector);
-		found[n] = cec_out;
-		connectors[n] = connector;
-		n++;
+	spin_lock_irqsave(&cec_out->lock, flags);
+	if (cec_out->transport_authority == authority) {
+		aborted = cec_abort_pending_locked(cec_out);
+		cec_out->transport_cleanup++;
+		transport_authority = cec_out->transport_authority;
+		cec_out->transport_authority = NULL;
+		cec_out->transport_file = NULL;
+		cec_out->transport_online = false;
+		cec_out->state_generation++;
 	}
-	drm_connector_list_iter_end(&iter);
+	spin_unlock_irqrestore(&cec_out->lock, flags);
 
-	drm_dev_exit(idx);
+	if (!transport_authority)
+		return;
 
-	for (i = 0; i < n; i++) {
-		struct castkms_cec_output *cec_out = found[i];
-		unsigned long flags;
-		bool aborted = false;
+	cec_transport_wait_idle(cec_out);
+	cancel_delayed_work_sync(&cec_out->tx_timeout_work);
+	if (aborted)
+		drm_connector_hdmi_cec_transmit_done(connector,
+						     CEC_TX_STATUS_ERROR,
+						     0, 0, 0, 1);
 
-		spin_lock_irqsave(&cec_out->lock, flags);
-		if (cec_out->transport_file == file) {
-			aborted = cec_abort_pending_locked(cec_out);
-			cec_out->transport_file = NULL;
-			cec_out->transport_online = false;
-			cec_out->state_generation++;
-		}
+	castkms_cec_refresh_connector_state(connector);
+	castkms_capture_authority_put(transport_authority);
+	cec_transport_cleanup_done(cec_out);
+}
+
+void castkms_cec_suspend_authority(struct castkms_capture_authority *authority)
+{
+	struct drm_connector *connector = castkms_capture_authority_connector(authority);
+	struct castkms_connector *castkms_conn =
+		drm_connector_to_castkms_connector(connector);
+	struct castkms_cec_output *cec_out = castkms_conn->cec;
+	unsigned long flags;
+	bool aborted = false;
+	bool suspended = false;
+
+	if (!cec_out)
+		return;
+
+	spin_lock_irqsave(&cec_out->lock, flags);
+	if (cec_out->transport_authority == authority) {
+		aborted = cec_abort_pending_locked(cec_out);
+		cec_out->transport_online = false;
+		cec_out->transport_cleanup++;
+		cec_out->state_generation++;
+		suspended = true;
+	}
+	spin_unlock_irqrestore(&cec_out->lock, flags);
+
+	if (!suspended)
+		return;
+
+	cec_transport_wait_idle(cec_out);
+	cancel_delayed_work_sync(&cec_out->tx_timeout_work);
+	if (aborted)
+		drm_connector_hdmi_cec_transmit_done(connector,
+						     CEC_TX_STATUS_ERROR,
+						     0, 0, 0, 1);
+	castkms_cec_refresh_connector_state(connector);
+	cec_transport_cleanup_done(cec_out);
+}
+
+void castkms_cec_suspend_connector(struct drm_connector *connector)
+{
+	struct castkms_cec_output *cec_out = connector_to_cec(connector);
+	unsigned long flags;
+	bool aborted;
+
+	if (!cec_out)
+		return;
+
+	/*
+	 * A monitor detach may belong to a different authority from a CEC-only
+	 * transport.  Block event preparation while the attachment disappears,
+	 * then retire any transaction which was already pending.  Keep the
+	 * userspace transport binding and online preference so reattachment can
+	 * restore the physical address without requiring a new capability.
+	 */
+	spin_lock_irqsave(&cec_out->lock, flags);
+	if (!cec_out->transport_authority) {
 		spin_unlock_irqrestore(&cec_out->lock, flags);
-
-		cancel_delayed_work_sync(&cec_out->tx_timeout_work);
-
-		if (aborted)
-			drm_connector_hdmi_cec_transmit_done(connectors[i],
-							     CEC_TX_STATUS_ERROR,
-							     0, 0, 0, 1);
-
-		castkms_cec_refresh_connector_state(connectors[i]);
-		drm_connector_put(connectors[i]);
+		castkms_cec_refresh_connector_state(connector);
+		return;
 	}
+	aborted = cec_abort_pending_locked(cec_out);
+	cec_out->transport_cleanup++;
+	cec_out->state_generation++;
+	spin_unlock_irqrestore(&cec_out->lock, flags);
+
+	cec_transport_wait_idle(cec_out);
+	cancel_delayed_work_sync(&cec_out->tx_timeout_work);
+	if (aborted)
+		drm_connector_hdmi_cec_transmit_done(connector,
+						     CEC_TX_STATUS_ERROR,
+						     0, 0, 0, 1);
+	castkms_cec_refresh_connector_state(connector);
+	cec_transport_cleanup_done(cec_out);
 }

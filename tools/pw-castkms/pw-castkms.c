@@ -385,11 +385,11 @@ static int read_edid_file(const char *path, uint8_t **out, uint32_t *out_size)
 	return 0;
 }
 
-static int capture_set_output_edid(int fd, uint32_t stream_id,
+static int capture_set_output_edid(int fd, uint32_t connector_id,
 				   const void *edid, uint32_t size)
 {
 	struct drm_castkms_capture_set_output_edid args = {
-		.stream_id = stream_id,
+		.connector_id = connector_id,
 		.edid_size = size,
 		.edid_ptr = (uint64_t)(uintptr_t)edid,
 	};
@@ -1321,7 +1321,7 @@ int main(int argc, char *argv[])
 		b->stream_id, (unsigned long long)b->mode_generation);
 
 	if (edid_size) {
-		ioctl_ret = capture_set_output_edid(b->drm_fd, b->stream_id,
+		ioctl_ret = capture_set_output_edid(b->drm_fd, b->connector_id,
 						    edid, edid_size);
 		if (ioctl_ret) {
 			errno = -ioctl_ret;

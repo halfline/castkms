@@ -6,6 +6,7 @@
 #include "castkms_drv.h"
 
 struct castkms_cec_output;
+struct castkms_capture_authority;
 struct drm_crtc;
 struct drm_edid;
 struct drm_file;
@@ -19,14 +20,14 @@ struct drm_file;
  * @base: Base DRM connector
  * @output_index: Stable non-writeback output identity, assigned once at creation
  * @cec: CEC adapter and transport state, or NULL if CEC is unavailable
- * @attach_file: File that owns the current monitor attachment, or NULL
+ * @attachment_authority: Core authority owning the monitor attachment, or NULL
  * @monitor_attached: Whether ATTACH_MONITOR has plugged a sink into this port
  */
 struct castkms_connector {
 	struct drm_connector base;
 	unsigned int output_index;
 	struct castkms_cec_output *cec;
-	struct drm_file *attach_file;
+	struct castkms_capture_authority *attachment_authority;
 	bool monitor_attached;
 };
 
@@ -47,24 +48,33 @@ struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsd
  */
 void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev);
 
-/**
- * castkms_connector_update_edid() - Publish or clear the display connector EDID
- * @crtc: CRTC whose non-writeback connector should be updated
- * @drm_edid: Validated EDID, or NULL to clear
- *
- * Updates the connector EDID property and emits a standard KMS hotplug.
+/*
+ * Callers must hold castkms_device.attach_transition_lock and a matching
+ * authority acquired with castkms_capture_authority_begin(). Stream teardown
+ * for a successful detach runs only after releasing the transition lock.
  */
-int castkms_connector_update_edid(struct drm_crtc *crtc,
-				  const struct drm_edid *drm_edid);
 int castkms_connector_attach_monitor(struct drm_connector *connector,
-				     struct drm_file *file,
-				     const struct drm_edid *drm_edid);
+					     struct castkms_capture_authority *authority,
+					     const struct drm_edid *drm_edid);
 int castkms_connector_detach_monitor(struct drm_connector *connector,
-				     struct drm_file *file);
-int castkms_connector_require_attached(struct drm_crtc *crtc,
-				       struct drm_file *file);
-void castkms_connector_set_capture_active(struct drm_crtc *crtc, bool active);
-void castkms_connectors_detach_file(struct drm_device *dev,
-				    struct drm_file *file);
+					     struct castkms_capture_authority *authority);
+int castkms_connector_update_authority_edid(struct drm_connector *connector,
+					struct castkms_capture_authority *authority,
+					const struct drm_edid *drm_edid);
+bool castkms_connector_authority_is_attached(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority);
+bool castkms_connector_is_attached(struct drm_connector *connector);
+bool castkms_connector_is_attached_fast(struct drm_connector *connector);
+int castkms_connector_require_authority_attached(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority);
+int castkms_connector_get_routed_output(
+	struct drm_connector *connector,
+	struct castkms_output **output);
+bool castkms_connector_detach_authority(
+	struct castkms_capture_authority *authority);
+void castkms_connector_set_capture_active(struct drm_connector *connector,
+					  bool active);
 
 #endif /* _CASTKMS_CONNECTOR_H_ */

@@ -9,11 +9,13 @@
 #include <drm/drm_file.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_modes.h>
+#include <drm/drm_modeset_lock.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_property.h>
 #include <drm/drm_sysfs.h>
 
 #include "castkms_audio.h"
+#include "castkms_capture_authority.h"
 #include "castkms_cec.h"
 #include "castkms_config.h"
 #include "castkms_connector.h"
@@ -39,7 +41,7 @@ static enum drm_connector_status castkms_connector_detect(struct drm_connector *
 	if (!drm_dev_enter(dev, &idx))
 		return status;
 
-	if (castkms_connector->monitor_attached) {
+	if (READ_ONCE(castkms_connector->monitor_attached)) {
 		status = connector_status_connected;
 		goto out;
 	}
@@ -137,39 +139,6 @@ void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev)
 	drm_kms_helper_hotplug_event(dev);
 }
 
-static struct drm_connector *
-castkms_connector_for_crtc(struct drm_crtc *crtc)
-{
-	struct drm_device *dev = crtc->dev;
-	struct drm_connector_list_iter conn_iter;
-	struct drm_connector *connector;
-	struct drm_connector *found = NULL;
-
-	drm_connector_list_iter_begin(dev, &conn_iter);
-	drm_for_each_connector_iter(connector, &conn_iter) {
-		struct drm_encoder *encoder;
-		bool matches = false;
-
-		if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
-			continue;
-
-		drm_connector_for_each_possible_encoder(connector, encoder) {
-			if (encoder->possible_crtcs & drm_crtc_mask(crtc)) {
-				matches = true;
-				break;
-			}
-		}
-		if (!matches || found)
-			continue;
-
-		drm_connector_get(connector);
-		found = connector;
-	}
-	drm_connector_list_iter_end(&conn_iter);
-
-	return found;
-}
-
 static void
 castkms_connector_sync_config_status(struct drm_connector *connector,
 				     enum drm_connector_status status)
@@ -228,31 +197,9 @@ castkms_connector_set_status(struct drm_connector *connector,
 	mutex_unlock(&dev->mode_config.mutex);
 }
 
-int castkms_connector_update_edid(struct drm_crtc *crtc,
-				  const struct drm_edid *drm_edid)
-{
-	struct drm_device *dev = crtc->dev;
-	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
-	struct drm_connector *connector;
-	int ret;
-
-	connector = castkms_connector_for_crtc(crtc);
-	if (!connector)
-		return -ENOENT;
-
-	ret = castkms_connector_publish_edid(connector, drm_edid);
-	if (!ret) {
-		castkms_audio_notify_eld(castkmsdev, connector);
-		castkms_cec_refresh_connector_state(connector);
-	}
-	drm_connector_put(connector);
-
-	return ret;
-}
-
 int castkms_connector_attach_monitor(struct drm_connector *connector,
-				     struct drm_file *file,
-				     const struct drm_edid *drm_edid)
+					     struct castkms_capture_authority *authority,
+					     const struct drm_edid *drm_edid)
 {
 	struct drm_device *dev = connector->dev;
 	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
@@ -263,14 +210,16 @@ int castkms_connector_attach_monitor(struct drm_connector *connector,
 	if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
 		return -ENOENT;
 
+	lockdep_assert_held(&castkmsdev->attach_transition_lock);
 	mutex_lock(&castkmsdev->attach_lock);
 	if (castkms_connector->monitor_attached) {
 		mutex_unlock(&castkmsdev->attach_lock);
 		return -EBUSY;
 	}
 
-	castkms_connector->monitor_attached = true;
-	castkms_connector->attach_file = file;
+	WRITE_ONCE(castkms_connector->monitor_attached, true);
+	castkms_connector->attachment_authority = authority;
+	castkms_capture_authority_get(authority);
 	mutex_unlock(&castkmsdev->attach_lock);
 
 	castkms_connector_set_status(connector, connector_status_connected);
@@ -279,9 +228,10 @@ int castkms_connector_attach_monitor(struct drm_connector *connector,
 	ret = castkms_connector_publish_edid(connector, drm_edid);
 	if (ret) {
 		mutex_lock(&castkmsdev->attach_lock);
-		castkms_connector->monitor_attached = false;
-		castkms_connector->attach_file = NULL;
+		WRITE_ONCE(castkms_connector->monitor_attached, false);
+		castkms_connector->attachment_authority = NULL;
 		mutex_unlock(&castkmsdev->attach_lock);
+		castkms_capture_authority_put(authority);
 		castkms_connector_set_status(connector,
 					     connector_status_disconnected);
 		castkms_connector_sync_config_status(connector,
@@ -291,12 +241,11 @@ int castkms_connector_attach_monitor(struct drm_connector *connector,
 
 	castkms_audio_notify_eld(castkmsdev, connector);
 	castkms_cec_refresh_connector_state(connector);
-
 	return 0;
 }
 
 int castkms_connector_detach_monitor(struct drm_connector *connector,
-				     struct drm_file *file)
+					     struct castkms_capture_authority *authority)
 {
 	struct drm_device *dev = connector->dev;
 	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
@@ -307,110 +256,171 @@ int castkms_connector_detach_monitor(struct drm_connector *connector,
 	if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
 		return -ENOENT;
 
+	lockdep_assert_held(&castkmsdev->attach_transition_lock);
 	mutex_lock(&castkmsdev->attach_lock);
 	if (!castkms_connector->monitor_attached) {
 		mutex_unlock(&castkmsdev->attach_lock);
 		return -ENOTCONN;
 	}
-	if (castkms_connector->attach_file != file) {
+	if (castkms_connector->attachment_authority != authority) {
 		mutex_unlock(&castkmsdev->attach_lock);
 		return -EACCES;
 	}
 
-	castkms_connector->monitor_attached = false;
-	castkms_connector->attach_file = NULL;
+	WRITE_ONCE(castkms_connector->monitor_attached, false);
+	castkms_connector->attachment_authority = NULL;
 	mutex_unlock(&castkmsdev->attach_lock);
 
 	castkms_audio_notify_disconnect(castkmsdev, connector);
-	castkms_cec_refresh_connector_state(connector);
+	castkms_cec_suspend_connector(connector);
 
 	castkms_connector_set_status(connector,
 				     connector_status_disconnected);
 	castkms_connector_sync_config_status(connector,
 					     connector_status_disconnected);
 	ret = castkms_connector_publish_edid(connector, NULL);
+	castkms_capture_authority_put(authority);
 
 	return ret;
 }
 
-int castkms_connector_require_attached(struct drm_crtc *crtc,
-				       struct drm_file *file)
+bool castkms_connector_authority_is_attached(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority)
 {
-	struct drm_device *dev = crtc->dev;
+	struct drm_device *dev = connector->dev;
 	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
-	struct drm_connector *connector;
-	struct castkms_connector *castkms_connector;
+	struct castkms_connector *castkms_connector =
+		drm_connector_to_castkms_connector(connector);
+	bool attached;
+
+	mutex_lock(&castkmsdev->attach_lock);
+	attached = castkms_connector->monitor_attached &&
+		   castkms_connector->attachment_authority == authority;
+	mutex_unlock(&castkmsdev->attach_lock);
+
+	return attached;
+}
+
+bool castkms_connector_is_attached(struct drm_connector *connector)
+{
+	struct drm_device *dev = connector->dev;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_connector *castkms_connector =
+		drm_connector_to_castkms_connector(connector);
+	bool attached;
+
+	mutex_lock(&castkmsdev->attach_lock);
+	attached = castkms_connector->monitor_attached;
+	mutex_unlock(&castkmsdev->attach_lock);
+
+	return attached;
+}
+
+bool castkms_connector_is_attached_fast(struct drm_connector *connector)
+{
+	struct castkms_connector *castkms_connector =
+		drm_connector_to_castkms_connector(connector);
+
+	return READ_ONCE(castkms_connector->monitor_attached);
+}
+
+int castkms_connector_require_authority_attached(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority)
+{
+	struct drm_device *dev = connector->dev;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_connector *castkms_connector =
+		drm_connector_to_castkms_connector(connector);
 	int ret = 0;
 
-	connector = castkms_connector_for_crtc(crtc);
-	if (!connector)
-		return -ENOENT;
-
-	castkms_connector = drm_connector_to_castkms_connector(connector);
 	mutex_lock(&castkmsdev->attach_lock);
 	if (!castkms_connector->monitor_attached)
 		ret = -ENOTCONN;
-	else if (castkms_connector->attach_file != file)
+	else if (castkms_connector->attachment_authority != authority)
 		ret = -EACCES;
 	mutex_unlock(&castkmsdev->attach_lock);
-	drm_connector_put(connector);
 
 	return ret;
 }
 
-void castkms_connector_set_capture_active(struct drm_crtc *crtc, bool active)
+int castkms_connector_get_routed_output(
+	struct drm_connector *connector,
+	struct castkms_output **output)
 {
-	struct drm_device *dev = crtc->dev;
-	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
-	struct drm_connector *connector;
+	struct drm_modeset_lock *connection_lock =
+		&connector->dev->mode_config.connection_mutex;
+	struct drm_crtc *crtc = NULL;
+	int ret;
 
-	connector = castkms_connector_for_crtc(crtc);
-	if (!connector)
-		return;
+	*output = NULL;
+	ret = drm_modeset_lock_single_interruptible(connection_lock);
+	if (ret)
+		return ret;
+	if (connector->state)
+		crtc = connector->state->crtc;
+	drm_modeset_unlock(connection_lock);
+
+	if (crtc)
+		*output = drm_crtc_to_castkms_output(crtc);
+	return 0;
+}
+
+int castkms_connector_update_authority_edid(struct drm_connector *connector,
+					struct castkms_capture_authority *authority,
+					const struct drm_edid *drm_edid)
+{
+	struct castkms_device *castkmsdev =
+		drm_device_to_castkms_device(connector->dev);
+	int ret;
+
+	lockdep_assert_held(&castkmsdev->attach_transition_lock);
+	ret = castkms_connector_require_authority_attached(connector, authority);
+	if (ret)
+		return ret;
+
+	ret = castkms_connector_publish_edid(connector, drm_edid);
+	if (!ret) {
+		castkms_audio_notify_eld(castkmsdev, connector);
+		castkms_cec_refresh_connector_state(connector);
+	}
+
+	return ret;
+}
+
+bool castkms_connector_detach_authority(
+	struct castkms_capture_authority *authority)
+{
+	struct drm_connector *connector =
+		castkms_capture_authority_connector(authority);
+	struct castkms_device *castkmsdev =
+		drm_device_to_castkms_device(connector->dev);
+	bool detached = false;
+
+	/* A revoked non-owner cannot become the attachment owner afterward. */
+	if (!castkms_connector_authority_is_attached(connector, authority))
+		return false;
+
+	mutex_lock(&castkmsdev->attach_transition_lock);
+	if (castkms_connector_authority_is_attached(connector, authority)) {
+		castkms_connector_detach_monitor(connector, authority);
+		detached = true;
+	}
+	mutex_unlock(&castkmsdev->attach_transition_lock);
+
+	return detached;
+}
+
+void castkms_connector_set_capture_active(struct drm_connector *connector,
+					  bool active)
+{
+	struct drm_device *dev = connector->dev;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
 
 	drm_object_property_set_value(&connector->base,
 				      castkmsdev->capture_active_prop,
 				      active ? 1 : 0);
 	drm_sysfs_connector_property_event(connector,
 					   castkmsdev->capture_active_prop);
-	drm_connector_put(connector);
-}
-
-void castkms_connectors_detach_file(struct drm_device *dev,
-				    struct drm_file *file)
-{
-	struct drm_connector *owned[CASTKMS_MAX_OUTPUT_OBJECTS];
-	struct drm_connector_list_iter iter;
-	struct drm_connector *connector;
-	unsigned int n = 0;
-	unsigned int i;
-	int idx;
-
-	if (!drm_dev_enter(dev, &idx))
-		return;
-
-	drm_connector_list_iter_begin(dev, &iter);
-	drm_for_each_connector_iter(connector, &iter) {
-		struct castkms_connector *castkms_connector;
-
-		if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
-			continue;
-		if (n == ARRAY_SIZE(owned))
-			break;
-
-		castkms_connector = drm_connector_to_castkms_connector(connector);
-		if (castkms_connector->attach_file != file)
-			continue;
-
-		drm_connector_get(connector);
-		owned[n++] = connector;
-	}
-	drm_connector_list_iter_end(&iter);
-
-	for (i = 0; i < n; i++) {
-		castkms_connector_detach_monitor(owned[i], file);
-		drm_connector_put(owned[i]);
-	}
-
-	drm_dev_exit(idx);
 }

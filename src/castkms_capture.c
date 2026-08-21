@@ -29,21 +29,21 @@
 #include <drm/drm_syncobj.h>
 
 #include "castkms_capture.h"
+#include "castkms_capture_authority.h"
+#include "castkms_capture_uapi.h"
 #include "castkms_cec.h"
 #include "castkms_connector.h"
 #include "castkms_drv.h"
+#include "castkms_grant.h"
 #include "castkms_output_buffer.h"
 
 #define CASTKMS_CAPTURE_MAX_BUFFERS 8
 
-struct castkms_capture_file {
-	struct mutex lock; /* Protects streams. */
-	struct xarray streams;
-};
-
 struct castkms_capture_stream {
 	struct castkms_output *output;
+	struct castkms_capture_authority *authority;
 	struct xarray buffers;
+	u64 authority_generation;
 	u64 mode_generation;
 	u32 width;
 	u32 height;
@@ -54,6 +54,7 @@ struct castkms_capture_stream {
 	bool attached;
 	bool exclude_cursor;
 	bool cursor_serial_valid;
+	int cancel_status;
 };
 
 enum castkms_capture_buffer_state {
@@ -322,7 +323,8 @@ castkms_capture_buffer_destroy(struct castkms_capture_buffer *buffer)
 	kfree(buffer);
 }
 
-static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream)
+static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream,
+					  int status)
 {
 	struct castkms_capture_output *capture = &stream->output->capture;
 	struct castkms_capture_completion completion = {};
@@ -341,13 +343,14 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream)
 	 */
 	spin_lock_irqsave(&stream->output->lock, flags);
 	spin_lock(&capture->state_lock);
+	stream->cancel_status = status;
 	buffer = capture->queued_buffer;
 	if (buffer && buffer->stream == stream) {
 		queued_buffer = buffer;
 		capture->queued_buffer = NULL;
 		remove_callback = buffer->reuse_callback_armed;
 		buffer->reuse_callback_armed = false;
-		castkms_capture_finish_locked(buffer, &completion, -ECANCELED, 0,
+		castkms_capture_finish_locked(buffer, &completion, status, 0,
 					      capture->mode_generation, 0,
 					      ktime_get());
 		put_composer = true;
@@ -365,7 +368,10 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream)
 	if (put_composer)
 		castkms_composer_put(stream->output,
 				     CASTKMS_COMPOSER_CLIENT_CAPTURE);
-	castkms_capture_cancel_completion(stream->output, &completion);
+	if (status == -ECANCELED)
+		castkms_capture_cancel_completion(stream->output, &completion);
+	else
+		castkms_capture_send_completion(stream->output, &completion);
 	if (in_flight) {
 		flush_workqueue(stream->output->composer_workq);
 		flush_workqueue(stream->output->capture_workq);
@@ -388,23 +394,31 @@ static void castkms_capture_stream_detach(struct castkms_capture_stream *stream)
 	}
 	capture->stream = NULL;
 	stream->attached = false;
+	castkms_connector_set_capture_active(castkms_capture_authority_connector(stream->authority),
+					     false);
 	mutex_unlock(&capture->lock);
-
-	castkms_connector_set_capture_active(&stream->output->crtc, false);
 }
 
-void castkms_capture_stream_destroy(struct castkms_capture_stream *stream)
+static void
+castkms_capture_stream_destroy_status(struct castkms_capture_stream *stream,
+				      int status)
 {
 	struct castkms_capture_buffer *buffer;
 	unsigned long id;
 
-	castkms_capture_stream_cancel(stream);
+	castkms_capture_stream_cancel(stream, status);
 	xa_for_each(&stream->buffers, id, buffer)
 		castkms_capture_buffer_destroy(buffer);
 	xa_destroy(&stream->buffers);
 
 	castkms_capture_stream_detach(stream);
+	castkms_capture_authority_put(stream->authority);
 	kfree(stream);
+}
+
+void castkms_capture_stream_destroy(struct castkms_capture_stream *stream)
+{
+	castkms_capture_stream_destroy_status(stream, -ECANCELED);
 }
 
 int castkms_capture_edid_parse(const void *raw, u32 size,
@@ -709,6 +723,7 @@ int castkms_capture_file_open(struct drm_device *dev,
 
 	mutex_init(&capture_file->lock);
 	xa_init_flags(&capture_file->streams, XA_FLAGS_ALLOC);
+	xa_init_flags(&capture_file->revocable_grants, XA_FLAGS_ALLOC);
 	file_priv->driver_priv = capture_file;
 
 	return 0;
@@ -721,18 +736,65 @@ void castkms_capture_file_close(struct drm_device *dev,
 	struct castkms_capture_stream *stream;
 	unsigned long id;
 
+	castkms_capture_authority_master_file_close(dev, file_priv);
+	castkms_grant_file_close(dev, file_priv);
+
 	mutex_lock(&capture_file->lock);
 	xa_for_each(&capture_file->streams, id, stream) {
 		castkms_capture_stream_destroy(stream);
 	}
 	xa_destroy(&capture_file->streams);
 	mutex_unlock(&capture_file->lock);
-	castkms_cec_unbind_file(dev, file_priv);
-	castkms_connectors_detach_file(dev, file_priv);
+	xa_destroy(&capture_file->revocable_grants);
 	mutex_destroy(&capture_file->lock);
 
 	kfree(capture_file);
 	file_priv->driver_priv = NULL;
+}
+
+void castkms_capture_stop_authority_streams(struct drm_file *file_priv,
+						struct castkms_capture_authority *authority,
+						int status)
+{
+	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_stream *stream;
+	unsigned long id;
+
+	if (!capture_file)
+		return;
+
+	mutex_lock(&capture_file->lock);
+	xa_for_each(&capture_file->streams, id, stream) {
+		if (stream->authority != authority)
+			continue;
+		xa_erase(&capture_file->streams, id);
+		castkms_capture_stream_destroy_status(stream, status);
+	}
+	mutex_unlock(&capture_file->lock);
+}
+
+void castkms_capture_stop_authority_streams_before(
+	struct drm_file *file_priv,
+	struct castkms_capture_authority *authority,
+	u64 before_generation, int status)
+{
+	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_stream *stream;
+	unsigned long id;
+
+	if (!capture_file)
+		return;
+
+	mutex_lock(&capture_file->lock);
+	xa_for_each(&capture_file->streams, id, stream) {
+		if (stream->authority != authority ||
+		    !castkms_capture_authority_generation_is_stale(
+			    stream->authority_generation, before_generation))
+			continue;
+		xa_erase(&capture_file->streams, id);
+		castkms_capture_stream_destroy_status(stream, status);
+	}
+	mutex_unlock(&capture_file->lock);
 }
 
 int castkms_capture_output_init(struct drm_device *dev,
@@ -818,7 +880,10 @@ bool castkms_capture_prepare_frame(struct castkms_output *output,
 {
 	struct castkms_capture_output *capture = &output->capture;
 	struct castkms_capture_buffer *buffer;
+	struct castkms_capture_authority *authority;
 	unsigned long flags;
+	u64 authority_generation;
+	int authority_status;
 
 	spin_lock_irqsave(&capture->state_lock, flags);
 	buffer = capture->queued_buffer;
@@ -826,10 +891,14 @@ bool castkms_capture_prepare_frame(struct castkms_output *output,
 		spin_unlock_irqrestore(&capture->state_lock, flags);
 		return false;
 	}
+	authority = buffer->stream->authority;
+	authority_generation = buffer->stream->authority_generation;
+	authority_status = castkms_capture_authority_stream_status_locked(
+		authority, output, authority_generation);
 	if (capture->in_flight_buffer ||
 	    buffer->state != CASTKMS_CAPTURE_BUFFER_QUEUED ||
 	    buffer->mode_generation != capture->mode_generation ||
-	    !capture->active) {
+	    !capture->active || authority_status) {
 		if (buffer->dropped_frames != U32_MAX)
 			buffer->dropped_frames++;
 		spin_unlock_irqrestore(&capture->state_lock, flags);
@@ -921,6 +990,10 @@ int castkms_capture_buffer_set_cursor(struct castkms_capture_buffer *buffer,
 	struct castkms_capture_stream *stream = buffer->stream;
 	int ret;
 
+	if (!castkms_capture_authority_has_rights(stream->authority,
+				      CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR))
+		cursor = NULL;
+
 	if (!cursor || !cursor->visible) {
 		stream->cursor_serial = cursor ? cursor->serial : 0;
 		stream->cursor_serial_valid = !!cursor;
@@ -975,8 +1048,14 @@ void castkms_capture_complete_frame(struct castkms_output *output,
 {
 	struct castkms_capture_output *capture = &output->capture;
 	struct castkms_capture_completion completion = {};
+	struct castkms_capture_authority *authority = buffer->stream->authority;
 	unsigned long flags;
+	u64 authority_generation = buffer->stream->authority_generation;
 	u32 event_flags = 0;
+	int authority_status;
+
+	authority_status = castkms_capture_authority_stream_status_only(
+		authority, authority_generation);
 
 	spin_lock_irqsave(&capture->state_lock, flags);
 	if (WARN_ON(capture->in_flight_buffer != buffer ||
@@ -985,7 +1064,11 @@ void castkms_capture_complete_frame(struct castkms_output *output,
 		return;
 	}
 
-	if (buffer->mode_generation != capture->mode_generation) {
+	if (buffer->stream->cancel_status) {
+		status = buffer->stream->cancel_status;
+	} else if (authority_status) {
+		status = authority_status;
+	} else if (buffer->mode_generation != capture->mode_generation) {
 		status = -ESTALE;
 		event_flags |= DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED;
 	} else if (!status && buffer->full_damage) {
@@ -1019,6 +1102,7 @@ int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 	args->uapi_minor = DRM_CASTKMS_CAPTURE_UAPI_MINOR;
 	args->flags = 0;
 	args->flags |= DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC;
+	args->flags |= DRM_CASTKMS_CAPTURE_CAP_GRANT_FD;
 	if (drm_core_check_feature(dev, DRIVER_SYNCOBJ_TIMELINE))
 		args->flags |= DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE;
 	args->max_registered_buffers = CASTKMS_CAPTURE_MAX_BUFFERS;
@@ -1034,6 +1118,7 @@ int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 
 struct castkms_capture_stream *
 castkms_capture_stream_create(struct castkms_output *output,
+			      struct castkms_capture_authority *authority,
 			      u64 *mode_generation)
 {
 	struct castkms_capture_stream *stream;
@@ -1043,6 +1128,10 @@ castkms_capture_stream_create(struct castkms_output *output,
 		return ERR_PTR(-ENOMEM);
 
 	stream->output = output;
+	stream->authority = authority;
+	castkms_capture_authority_get(authority);
+	stream->authority_generation =
+		castkms_capture_authority_stream_generation(authority);
 	xa_init_flags(&stream->buffers, XA_FLAGS_ALLOC);
 	castkms_capture_stream_snapshot_mode(stream);
 
@@ -1063,9 +1152,9 @@ int castkms_capture_stream_attach(struct castkms_capture_stream *stream)
 	}
 	capture->stream = stream;
 	stream->attached = true;
+	castkms_connector_set_capture_active(castkms_capture_authority_connector(stream->authority),
+					     true);
 	mutex_unlock(&capture->lock);
-
-	castkms_connector_set_capture_active(&stream->output->crtc, true);
 
 	return 0;
 }
@@ -1075,9 +1164,12 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_castkms_capture_start *args = data;
 	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_authority *authority;
 	struct castkms_capture_stream *stream;
 	struct castkms_output *output;
+	struct castkms_output *routed_output;
 	struct drm_crtc *crtc;
+	u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS;
 	u32 stream_id;
 	int ret;
 
@@ -1093,12 +1185,25 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	if (!crtc)
 		return -ENOENT;
 	output = drm_crtc_to_castkms_output(crtc);
+	if (!(args->flags & DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR))
+		rights |= CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR;
 
-	stream = castkms_capture_stream_create(output, &args->mode_generation);
+	ret = castkms_grant_begin_crtc(file_priv, crtc, rights, &authority);
+	if (ret)
+		return ret;
+
+	stream = castkms_capture_stream_create(output, authority,
+					       &args->mode_generation);
 	if (IS_ERR(stream))
-		return PTR_ERR(stream);
+		goto out_unlock_grant;
 	stream->exclude_cursor =
 		!!(args->flags & DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR);
+	ret = castkms_capture_authority_stream_status(authority, output,
+					  stream->authority_generation);
+	if (ret) {
+		castkms_capture_stream_destroy(stream);
+		goto out_unlock_grant;
+	}
 
 	mutex_lock(&capture_file->lock);
 	ret = xa_alloc(&capture_file->streams, &stream_id, stream,
@@ -1106,23 +1211,42 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	if (ret) {
 		mutex_unlock(&capture_file->lock);
 		castkms_capture_stream_destroy(stream);
-		return ret;
+		goto out_unlock_grant;
 	}
 	stream->id = stream_id;
-	mutex_unlock(&capture_file->lock);
 
 	ret = castkms_capture_stream_attach(stream);
-	if (ret) {
-		mutex_lock(&capture_file->lock);
-		xa_erase(&capture_file->streams, stream->id);
-		mutex_unlock(&capture_file->lock);
-		castkms_capture_stream_destroy(stream);
-		return ret;
+	if (!ret)
+		ret = castkms_capture_authority_stream_status(authority, output,
+						  stream->authority_generation);
+	if (!ret)
+		ret = castkms_capture_validate_mode(stream,
+						    stream->mode_generation);
+	if (!ret) {
+		ret = castkms_connector_get_routed_output(
+			castkms_capture_authority_connector(authority),
+			&routed_output);
+		if (!ret && routed_output != output)
+			ret = -ESTALE;
 	}
+	if (ret) {
+		xa_erase(&capture_file->streams, stream->id);
+		castkms_capture_stream_destroy(stream);
+		mutex_unlock(&capture_file->lock);
+		goto out_unlock_grant;
+	}
+	mutex_unlock(&capture_file->lock);
 
 	args->stream_id = stream_id;
+	ret = 0;
 
-	return 0;
+out_unlock_grant:
+	if (IS_ERR(stream))
+		ret = PTR_ERR(stream);
+	if (ret)
+		args->mode_generation = 0;
+	castkms_grant_end(authority);
+	return ret;
 }
 
 int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
@@ -1150,15 +1274,14 @@ int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
 }
 
 int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
-					  struct drm_file *file_priv)
+						  struct drm_file *file_priv)
 {
 	struct drm_castkms_capture_set_output_edid *args = data;
-	struct castkms_capture_file *capture_file = file_priv->driver_priv;
-	struct castkms_capture_stream *stream;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_capture_authority *authority;
+	struct drm_connector *connector;
 	const struct drm_edid *drm_edid = NULL;
 	int ret;
-
-	(void)dev;
 
 	if (args->flags || args->reserved)
 		return -EINVAL;
@@ -1168,22 +1291,24 @@ int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		return ret;
 
-	mutex_lock(&capture_file->lock);
-	stream = xa_load(&capture_file->streams, args->stream_id);
-	if (!stream) {
+	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
+	if (!connector) {
 		ret = -ENOENT;
-		goto out_unlock;
+		goto out_free_edid;
 	}
 
-	ret = castkms_connector_require_attached(&stream->output->crtc,
-						 file_priv);
+	mutex_lock(&castkmsdev->attach_transition_lock);
+	ret = castkms_grant_begin(file_priv, connector,
+				  CASTKMS_CAPTURE_AUTHORITY_UPDATE_EDID, &authority);
 	if (ret)
-		goto out_unlock;
+		goto out_unlock_transition;
 
-	ret = castkms_connector_update_edid(&stream->output->crtc, drm_edid);
-
-out_unlock:
-	mutex_unlock(&capture_file->lock);
+	ret = castkms_connector_update_authority_edid(connector, authority, drm_edid);
+	castkms_grant_end(authority);
+out_unlock_transition:
+	mutex_unlock(&castkmsdev->attach_transition_lock);
+	drm_connector_put(connector);
+out_free_edid:
 	if (drm_edid)
 		drm_edid_free(drm_edid);
 
@@ -1191,11 +1316,14 @@ out_unlock:
 }
 
 int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,
-					 struct drm_file *file_priv)
+						 struct drm_file *file_priv)
 {
 	struct drm_castkms_capture_attach_monitor *args = data;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
 	const struct drm_edid *drm_edid = NULL;
+	u32 rights = CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT;
 	int ret;
 
 	if (args->flags || args->reserved)
@@ -1212,7 +1340,15 @@ int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,
 		goto out_edid;
 	}
 
-	ret = castkms_connector_attach_monitor(connector, file_priv, drm_edid);
+	if (drm_edid)
+		rights |= CASTKMS_CAPTURE_AUTHORITY_UPDATE_EDID;
+	mutex_lock(&castkmsdev->attach_transition_lock);
+	ret = castkms_grant_begin(file_priv, connector, rights, &authority);
+	if (!ret) {
+		ret = castkms_connector_attach_monitor(connector, authority, drm_edid);
+		castkms_grant_end(authority);
+	}
+	mutex_unlock(&castkmsdev->attach_transition_lock);
 	drm_connector_put(connector);
 
 out_edid:
@@ -1223,10 +1359,13 @@ out_edid:
 }
 
 int castkms_capture_detach_monitor_ioctl(struct drm_device *dev, void *data,
-					 struct drm_file *file_priv)
+						 struct drm_file *file_priv)
 {
 	struct drm_castkms_capture_detach_monitor *args = data;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
+	bool detached = false;
 	int ret;
 
 	if (args->flags || args->reserved)
@@ -1236,7 +1375,22 @@ int castkms_capture_detach_monitor_ioctl(struct drm_device *dev, void *data,
 	if (!connector)
 		return -ENOENT;
 
-	ret = castkms_connector_detach_monitor(connector, file_priv);
+	mutex_lock(&castkmsdev->attach_transition_lock);
+	ret = castkms_grant_begin(file_priv, connector,
+				  CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT,
+				  &authority);
+	if (!ret) {
+		ret = castkms_connector_require_authority_attached(connector, authority);
+		if (!ret) {
+			ret = castkms_connector_detach_monitor(connector, authority);
+			detached = true;
+		}
+		castkms_grant_end(authority);
+	}
+	mutex_unlock(&castkmsdev->attach_transition_lock);
+	if (detached)
+		castkms_capture_authority_stop_connector_streams(
+			connector, NULL, -ENOTCONN);
 	drm_connector_put(connector);
 
 	return ret;
@@ -1310,6 +1464,7 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_castkms_capture_register_buffer *args = data;
 	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_authority *authority;
 	struct castkms_capture_buffer *buffer;
 	struct castkms_capture_stream *stream;
 	struct drm_syncobj *ready_syncobj = NULL;
@@ -1328,6 +1483,10 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC &&
 	    (!args->ready_syncobj_handle || !args->reuse_syncobj_handle))
 		return -EINVAL;
+	ret = castkms_grant_begin(file_priv, NULL,
+				  CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS, &authority);
+	if (ret)
+		return ret;
 
 	mutex_lock(&capture_file->lock);
 	stream = xa_load(&capture_file->streams, args->stream_id);
@@ -1335,6 +1494,14 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto out_unlock;
 	}
+	if (stream->authority != authority) {
+		ret = -EACCES;
+		goto out_unlock;
+	}
+	ret = castkms_capture_authority_stream_status(authority, stream->output,
+					  stream->authority_generation);
+	if (ret)
+		goto out_unlock;
 	if (drm_crtc_find(dev, file_priv, stream->output->crtc.base.id) !=
 	    &stream->output->crtc) {
 		ret = -ENOENT;
@@ -1389,6 +1556,7 @@ out_put_fb:
 	drm_framebuffer_put(fb);
 out_unlock:
 	mutex_unlock(&capture_file->lock);
+	castkms_grant_end(authority);
 	return ret;
 }
 
@@ -1558,7 +1726,9 @@ castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 	 */
 	spin_lock_irqsave(&stream->output->lock, flags);
 	spin_lock(&capture->state_lock);
-	if (capture->mode_generation != stream->mode_generation) {
+	ret = castkms_capture_authority_stream_status_locked(stream->authority, stream->output,
+						 stream->authority_generation);
+	if (!ret && capture->mode_generation != stream->mode_generation) {
 		ret = -ESTALE;
 	} else if (!capture->active) {
 		ret = -ENOLINK;
@@ -1606,6 +1776,7 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_castkms_capture_queue_buffer *args = data;
 	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_authority *authority;
 	struct castkms_capture_pending_event *pending;
 	struct castkms_capture_buffer *buffer;
 	struct castkms_capture_output *capture;
@@ -1620,6 +1791,10 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	if (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
 	    (args->ready_point || args->reuse_point))
 		return -EINVAL;
+	ret = castkms_grant_begin(file_priv, NULL,
+				  CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS, &authority);
+	if (ret)
+		return ret;
 
 	mutex_lock(&capture_file->lock);
 	stream = xa_load(&capture_file->streams, args->stream_id);
@@ -1627,6 +1802,14 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto out_unlock;
 	}
+	if (stream->authority != authority) {
+		ret = -EACCES;
+		goto out_unlock;
+	}
+	ret = castkms_capture_authority_stream_status(authority, stream->output,
+					  stream->authority_generation);
+	if (ret)
+		goto out_unlock;
 	if (drm_crtc_find(dev, file_priv, stream->output->crtc.base.id) !=
 	    &stream->output->crtc) {
 		ret = -ENOENT;
@@ -1681,6 +1864,7 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 
 out_unlock:
 	mutex_unlock(&capture_file->lock);
+	castkms_grant_end(authority);
 	return ret;
 }
 
@@ -1689,6 +1873,7 @@ int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
 {
 	struct drm_castkms_capture_read_cursor_bitmap *args = data;
 	struct castkms_capture_file *capture_file = file_priv->driver_priv;
+	struct castkms_capture_authority *authority;
 	struct castkms_capture_stream *stream;
 	struct castkms_capture_buffer *buffer;
 	struct castkms_capture_output *capture;
@@ -1699,6 +1884,11 @@ int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
 
 	if (args->reserved)
 		return -EINVAL;
+	ret = castkms_grant_begin(file_priv, NULL,
+				  CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS |
+				  CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR, &authority);
+	if (ret)
+		return ret;
 
 	mutex_lock(&capture_file->lock);
 	stream = xa_load(&capture_file->streams, args->stream_id);
@@ -1706,6 +1896,14 @@ int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto out_unlock;
 	}
+	if (stream->authority != authority) {
+		ret = -EACCES;
+		goto out_unlock;
+	}
+	ret = castkms_capture_authority_stream_status(authority, stream->output,
+					  stream->authority_generation);
+	if (ret)
+		goto out_unlock;
 
 	buffer = xa_load(&stream->buffers, args->buffer_id);
 	if (!buffer) {
@@ -1761,5 +1959,6 @@ int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
 
 out_unlock:
 	mutex_unlock(&capture_file->lock);
+	castkms_grant_end(authority);
 	return ret;
 }

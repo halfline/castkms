@@ -224,11 +224,11 @@ static int fill_named_edid(uint8_t edid[TEST_EDID_BLOCK], const char *name)
 	return castkms_fill_named_edid(edid, name);
 }
 
-static int set_output_edid(int fd, uint32_t stream_id, const void *edid,
+static int set_output_edid(int fd, uint32_t connector_id, const void *edid,
 			   uint32_t size)
 {
 	struct drm_castkms_capture_set_output_edid args = {
-		.stream_id = stream_id,
+		.connector_id = connector_id,
 		.edid_size = size,
 		.edid_ptr = (uint64_t)(uintptr_t)edid,
 	};
@@ -1941,7 +1941,7 @@ int main(int argc, char **argv)
 				"display connector is not disconnected at rest\n");
 			goto out_close;
 		}
-		ioctl_ret = set_output_edid(fd, first_stream.stream_id, edid,
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
 					    sizeof(edid));
 		if (ioctl_ret != -ENOTCONN) {
 			fprintf(stderr,
@@ -1996,7 +1996,7 @@ int main(int argc, char **argv)
 			perror("restart capture after attach modeset");
 			goto out_close;
 		}
-		ioctl_ret = set_output_edid(fd, first_stream.stream_id, edid,
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
 					    sizeof(edid));
 		if (ioctl_ret) {
 			errno = -ioctl_ret;
@@ -2012,7 +2012,7 @@ int main(int argc, char **argv)
 			goto out_close;
 		}
 		edid[TEST_EDID_BLOCK - 1] ^= 0xff;
-		ioctl_ret = set_output_edid(fd, first_stream.stream_id, edid,
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
 					    sizeof(edid));
 		if (ioctl_ret != -EINVAL) {
 			fprintf(stderr,
@@ -2024,7 +2024,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "failed to rebuild test EDID\n");
 			goto out_close;
 		}
-		ioctl_ret = set_output_edid(fd, first_stream.stream_id, edid,
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
 					    100);
 		if (ioctl_ret != -EINVAL) {
 			fprintf(stderr,
@@ -2033,7 +2033,7 @@ int main(int argc, char **argv)
 			goto out_close;
 		}
 		ioctl_ret = set_output_edid(competitor_fd,
-					    first_stream.stream_id, edid,
+					    connector_id, edid,
 					    sizeof(edid));
 		if (ioctl_ret != -ENOENT) {
 			fprintf(stderr,
@@ -2041,7 +2041,7 @@ int main(int argc, char **argv)
 				ioctl_ret, -ENOENT);
 			goto out_close;
 		}
-		ioctl_ret = set_output_edid(fd, first_stream.stream_id, NULL, 0);
+		ioctl_ret = set_output_edid(fd, connector_id, NULL, 0);
 		if (ioctl_ret) {
 			errno = -ioctl_ret;
 			perror("clear output EDID");
@@ -2054,7 +2054,7 @@ int main(int argc, char **argv)
 				"cleared EDID remained on the connector\n");
 			goto out_close;
 		}
-		ioctl_ret = set_output_edid(fd, first_stream.stream_id, edid,
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
 					    sizeof(edid));
 		if (ioctl_ret) {
 			errno = -ioctl_ret;
@@ -2775,7 +2775,7 @@ int main(int argc, char **argv)
 			goto out_close;
 		}
 		ioctl_ret = set_output_edid(competitor_fd,
-					    second_stream.stream_id, edid,
+					    connector_id, edid,
 					    sizeof(edid));
 		if (ioctl_ret) {
 			errno = -ioctl_ret;

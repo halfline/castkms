@@ -14,10 +14,10 @@ struct drm_device;
 struct drm_edid;
 struct drm_framebuffer;
 struct drm_pending_event;
-struct drm_file;
 struct drm_syncobj;
 struct dma_fence;
 struct castkms_capture_buffer;
+struct castkms_capture_authority;
 struct castkms_capture_stream;
 struct castkms_crtc_state;
 struct castkms_cursor_snapshot;
@@ -69,32 +69,6 @@ struct castkms_capture_output {
 	bool active;
 };
 
-int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
-				     struct drm_file *file_priv);
-int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
-				struct drm_file *file_priv);
-int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
-			       struct drm_file *file_priv);
-int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
-					  struct drm_file *file_priv);
-int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
-					    struct drm_file *file_priv);
-int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
-				       struct drm_file *file_priv);
-int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
-					  struct drm_file *file_priv);
-int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,
-					 struct drm_file *file_priv);
-int castkms_capture_detach_monitor_ioctl(struct drm_device *dev, void *data,
-					 struct drm_file *file_priv);
-int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
-					     struct drm_file *file_priv);
-
-int castkms_capture_file_open(struct drm_device *dev,
-			      struct drm_file *file_priv);
-void castkms_capture_file_close(struct drm_device *dev,
-				struct drm_file *file_priv);
-
 int castkms_capture_output_init(struct drm_device *dev,
 				struct castkms_output *output);
 bool castkms_capture_mode_changed(struct castkms_output *output,
@@ -118,9 +92,11 @@ void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
 
+/* The caller must hold @authority through begin_output()/end(). */
 struct castkms_capture_stream *
 castkms_capture_stream_create(struct castkms_output *output,
-			      u64 *mode_generation);
+				      struct castkms_capture_authority *authority,
+				      u64 *mode_generation);
 int castkms_capture_stream_attach(struct castkms_capture_stream *stream);
 void castkms_capture_stream_destroy(struct castkms_capture_stream *stream);
 

@@ -2,6 +2,7 @@
 
 #include <linux/crc32.h>
 #include <linux/dma-direction.h>
+#include <linux/slab.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
@@ -16,6 +17,7 @@
 #include <linux/minmax.h>
 #include <kunit/visibility.h>
 
+#include "castkms_capture_authority.h"
 #include "castkms_composer.h"
 #include "castkms_formats.h"
 #include "castkms_luts.h"
@@ -509,9 +511,8 @@ static void blend(const struct castkms_output_buffer *destination,
 		fill_background(&background_color, output_buffer);
 
 		/* The active planes are composed associatively in z-order. */
-		for (size_t i = 0; i < n_active_planes; i++) {
+		for (size_t i = 0; i < n_active_planes; i++)
 			blend_line(plane[i], y, crtc_x_limit, stage_buffer, output_buffer);
-		}
 
 		apply_lut(crtc_state, output_buffer);
 
@@ -769,8 +770,10 @@ void castkms_composer_worker(struct work_struct *work)
 	 */
 	crtc_state->crc_pending = false;
 
-	/* Recomputed each invocation because the blob pointer in base.gamma_lut
-	 * can change between duplicate_state and the worker running. */
+	/*
+	 * Recomputed each invocation because the blob pointer in base.gamma_lut
+	 * can change between duplicate_state and the worker running.
+	 */
 	if (crtc_state->base.gamma_lut) {
 		s64 max_lut_index_fp;
 		s64 u16_max_fp = drm_int2fixp(0xffff);
@@ -848,15 +851,15 @@ void castkms_composer_worker(struct work_struct *work)
 		crtc_state->capture_pending = false;
 		crtc_state->active_capture = NULL;
 		spin_unlock_irq(&out->composer_lock);
-			if (active_capture) {
-				castkms_capture_buffer_set_damage(active_capture,
+		if (active_capture) {
+			castkms_capture_buffer_set_damage(active_capture,
 							  &crtc_state->damage_clip,
 							  crtc_state->full_damage);
-				if (!capture_ret)
-					capture_ret = castkms_capture_buffer_set_cursor(
-						active_capture, &crtc_state->cursor);
-				castkms_capture_complete_frame(out, active_capture,
-						       capture_ret);
+			if (!capture_ret)
+				capture_ret = castkms_capture_buffer_set_cursor(
+					active_capture, &crtc_state->cursor);
+			castkms_capture_complete_frame(out, active_capture,
+							       capture_ret);
 		}
 	}
 
@@ -871,7 +874,9 @@ void castkms_composer_worker(struct work_struct *work)
 		drm_writeback_signal_completion(&out->wb_connector, wb_ret);
 	}
 
-	if (ret || !crc_pending)
+	if (ret || !crc_pending ||
+	    !castkms_capture_owner_is_active_current(
+		    crtc->dev, crtc_state->capture_owner))
 		return;
 
 	/*
@@ -888,7 +893,7 @@ int castkms_compose_snapshot(const struct castkms_frame_snapshot *snapshot,
 	u32 crc32 = 0;
 	int ret;
 
-	state = kzalloc(sizeof(*state), GFP_KERNEL);
+	state = kzalloc_obj(*state);
 	if (!state)
 		return -ENOMEM;
 
@@ -1053,6 +1058,8 @@ void castkms_composer_put(struct castkms_output *out,
 int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name)
 {
 	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
+	unsigned long flags;
+	bool content_safe;
 	bool enabled = false;
 	int ret = 0;
 
@@ -1060,7 +1067,13 @@ int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name)
 	if (ret)
 		return ret;
 
-	if (enabled)
+	spin_lock_irqsave(&out->lock, flags);
+	content_safe = castkms_capture_output_content_is_safe_locked(out);
+	spin_unlock_irqrestore(&out->lock, flags);
+
+	if (enabled && !content_safe)
+		ret = -EACCES;
+	else if (enabled)
 		ret = castkms_composer_get(out, CASTKMS_COMPOSER_CLIENT_CRC);
 	else
 		castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_CRC);
