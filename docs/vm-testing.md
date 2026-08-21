@@ -10,20 +10,28 @@ firmware, so the guest does not enforce Secure Boot module signatures.
 
 ## Quick start
 
-Provision the guest and run the smoke test:
+Provision the guest and run the kernel test gate:
 
 ```sh
 ./scripts/vm/castkms-vm provision
-./scripts/vm/castkms-vm test
+./scripts/vm/castkms-vm kunit-test
 ```
 
 `provision` downloads the base image, creates a 30 GiB sparse overlay, boots
 the guest, installs the pinned kernel and build tools, and reboots the guest
 into that kernel. Re-running it is safe and idempotent.
 
-`test` mirrors the current working tree into the guest and then:
+`kunit-test` mirrors the current working tree into the guest, builds with
+`W=1`, runs all six suites, then loads the normal device with CEC enabled and
+runs the focused live grant-fd lifecycle gate. It rejects kernel warnings and
+requires a clean module unload.
 
-1. builds `castkms.ko` and the five-suite KUnit module with `W=1`, executes all
+The broader `test` command currently retains the pre-`0.9` single-fd capture
+and PipeWire workflow. Its post-KUnit phases require userspace support for an
+inherited grant fd and are not expected to pass during that migration. Once
+updated, those phases cover the following existing integration matrix:
+
+1. builds `castkms.ko` and the six-suite KUnit module with `W=1`, executes all
    KUnit suites, and builds the userspace protocol and PipeWire tests;
 2. verifies both modules' names, vermagic, dependencies, legacy strings, and
    exported symbols;
@@ -61,13 +69,35 @@ into that kernel. Re-running it is safe and idempotent.
     output;
 11. unloads every module it loaded and verifies cleanup.
 
-The smoke test invokes `guest-kunit-test.sh`, loads `kunit`, `castkms`, and the
+The full smoke test invokes `guest-kunit-test.sh`, loads `kunit`, `castkms`, and the
 out-of-tree test module, and rejects missing or failing suites before continuing
 with integration coverage. Run that gate alone with
 `./scripts/vm/castkms-vm kunit-test`; the standalone build target remains
 available as `make kunit`.
 
-Results are copied to:
+The grant-specific kernel/UAPI tool can also be run independently after
+loading the module:
+
+```sh
+sudo ./tools/castkms-grant-test /dev/dri/cardN CONNECTOR-ID
+```
+
+It verifies denial on an ordinary fd, grant creation by DRM master, fd passing,
+positive and missing-right attachment checks, and real modeset plus
+`START`/`REGISTER_BUFFER`/`QUEUE_BUFFER` frame capture. It stress-tests a new
+stream across 32 immediate drop/reacquire cycles to cover deferred master
+cleanup. A one-shot privileged non-master then creates a delegated grant bound
+to the current owner and exits; the test verifies that the holder remains
+usable, its old stream is collected on master loss, another master cannot
+activate it, and the original master can revivify it after presenting safe
+content. It also checks root revocation and final-holder cleanup after creator
+exit. A replacement master is denied capture, CRC, and writeback access to the
+first master's residual composition; after presenting its own framebuffer,
+its normal grant and the roaming administrative grant can capture. The test
+also covers explicit normal revocation and creator-close revocation for the
+administrative class.
+
+KUnit logs, live-grant output, and the live kernel log are copied to:
 
 ```text
 ~/.cache/castkms-vm/results/default/
