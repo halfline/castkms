@@ -37,7 +37,7 @@ jobs:
         run: ./scripts/vm/castkms-vm provision
 
       - name: Run VM integration gate
-        run: ./scripts/vm/castkms-vm test
+        run: ./scripts/vm/castkms-vm kunit-test
 
       - name: Stop guest
         if: always()
