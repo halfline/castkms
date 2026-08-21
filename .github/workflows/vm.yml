@@ -1,0 +1,54 @@
+name: VM integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: vm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install VM host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes genisoimage qemu-system-x86 qemu-utils rsync
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+
+      - name: Cache verified Fedora base image
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/castkms-vm/images
+          key: castkms-fedora-43-cloud-1.6
+
+      - name: Provision pinned guest
+        run: ./scripts/vm/castkms-vm provision
+
+      - name: Run VM integration gate
+        run: ./scripts/vm/castkms-vm test
+
+      - name: Stop guest
+        if: always()
+        run: ./scripts/vm/castkms-vm stop || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: castkms-vm-results
+          path: |
+            ~/.cache/castkms-vm/results
+            ~/.cache/castkms-vm/instances/default/*.log
+          if-no-files-found: warn
