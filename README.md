@@ -1,11 +1,15 @@
 # castkms
 
-`castkms` is an experimental, VKMS-derived DRM/KMS driver for virtual display
-and passive frame-capture development. It currently provides a fully renamed
-VKMS baseline that builds as an external `castkms.ko` module.
+`castkms` is an experimental DRM/KMS virtual display sink. A capture agent
+attaches a monitor, lets an ordinary compositor modeset and render it, captures
+the resulting frames with explicit ownership synchronization, and publishes
+them to a consumer such as PipeWire. The driver is derived from VKMS, but DRM
+test topology, CRC, and writeback are supporting facilities rather than the
+primary product path.
 
 The imported source and matching kernel baseline are recorded in
-[`UPSTREAM.md`](UPSTREAM.md).
+[`UPSTREAM.md`](UPSTREAM.md). The ownership and synchronization invariants are
+documented in [`docs/architecture.md`](docs/architecture.md).
 
 ## Build
 
@@ -22,56 +26,78 @@ Override `KDIR` to target another fully prepared kernel build:
 make KDIR=/path/to/kernel/build W=1
 ```
 
-## Experimental capture protocol
-
-The experimental version 0.7 capture interface provides a per-CRTC capability
-query, exclusive stream ownership, persistent destination-buffer registration,
-and bounded frame delivery. It accepts up to eight linear `XRGB8888`
-framebuffers per stream, keeps at most one capture in flight, and can queue the
-next destination for a future vblank. Completion arrives as a reserved DRM
-event with the vblank sequence, monotonic timestamp, mode generation, and
-full-frame damage. Implicit queueing honors existing reservation fences without
-waiting in the vblank path and attaches a producer fence before returning.
-Explicit queueing
-waits for a consumer-owned reuse timeline point and publishes the producer
-fence at a new ready timeline point; the first queue may use reuse point zero,
-and subsequent points must advance. Events report completion metadata but do
-not transfer buffer ownership; the implicit reservation fence or explicit
-ready point remains the ownership boundary. Capture destinations currently
-must be GEM
-objects created by castkms and may be exported as DMA-BUFs for consumers. Each
-explicit buffer uses a dedicated ready/reuse syncobj pair retained at
-registration.
-
-The default device publishes a fixed number of disconnected virtual connectors
-at load (`max_outputs`, default 1). Loading the module does not create a
-monitor. Userspace plugs a sink in with `ATTACH_MONITOR` (optional EDID) and
-unplugs it with `DETACH_MONITOR` or by closing the DRM file. The stream owner
-may then push a complete EDID for an attached output. The driver validates the
-blob, publishes it on the connector, and emits a standard KMS hotplug so
-compositors reread the name and modes. Call the same ioctl again when the sink
-identity changes. A zero-length blob clears the published EDID without
-unplugging. Stream stop leaves the attachment in place. Capture events do not
-report EDID changes; the client already knows what it wrote.
-
-Starting a stream observes a CRTC without activating or modesetting it.
-After a mode change, stop that generation-bound stream and start a new one
-before registering or queueing buffers for the new mode.
-Stopping the stream or closing its DRM file cancels pending work and unmaps and
-releases every registered buffer automatically. Version 0 interfaces may
-change as the remaining operations are developed.
-
-Build the neutral userspace protocol test with:
+Build the protocol tests and PipeWire bridge with:
 
 ```sh
 make tools
+```
+
+## Monitor attachment and capture
+
+The default device publishes `max_outputs` disconnected virtual connectors
+(`1` by default). Loading the module does not create a monitor. A privileged
+agent plugs a sink in with `ATTACH_MONITOR`, optionally supplies an EDID, and
+unplugs it with `DETACH_MONITOR` or by closing its DRM file. Standard connector
+state, EDID properties, and hotplug events let an unmodified compositor own the
+display side.
+
+The experimental capture UAPI is version `0.8`. It provides per-CRTC capability
+queries, exclusive stream ownership, up to eight persistent destinations, one
+in-flight capture plus one queued destination, implicit reservation fences, and
+explicit timeline syncobjs. Completion events carry sequence, timestamp, mode
+generation, damage, and cursor metadata, but the producer fence is always the
+buffer ownership boundary.
+
+Destinations are currently linear `XRGB8888` framebuffers backed by GEM objects
+created on the castkms device. They may be exported to consumers as DMA-BUFs;
+foreign DMA-BUF import is not supported and is reported by the absence of
+`DRM_CASTKMS_CAPTURE_CAP_DMA_BUF_IMPORT`. A mode change invalidates the stream
+generation, so the agent must stop, restart, and register mode-sized buffers.
+Version 0 interfaces may still change.
+
+Run the neutral protocol test with:
+
+```sh
 sudo ./tools/castkms-capture-test /dev/dri/cardN CRTC-ID
 ```
 
-The public definitions are in
+Public definitions are in
 [`include/uapi/drm/castkms_drm.h`](include/uapi/drm/castkms_drm.h).
+Capture and attachment ioctls other than capability queries remain root-only
+while the seat/session permission model is being designed.
 
-## VM smoke test
+## PipeWire video
+
+`tools/pw-castkms/pw-castkms` is the reference end-to-end client. It attaches a
+monitor, follows mode generations, queues synchronized capture buffers, and
+publishes a PipeWire video source:
+
+```sh
+sudo ./tools/pw-castkms/pw-castkms -d /dev/dri/cardN -c CRTC-ID
+```
+
+The VM smoke test negotiates that node and validates frame pixels, monotonic
+sequence/timestamps, and metadata. It is a reference bridge, not yet a complete
+desktop session agent or installed user service.
+
+## HDMI audio
+
+Audio is enabled by default with `enable_audio=1`. Each output behaves as an
+HDMI PCM sink with connector jack state, ELD derived from the attached EDID,
+pause/resume, and ALSA timing. The kernel PCM endpoint models presentation and
+does not retain an independent copy of samples for the capture UAPI. A local
+remote-desktop agent can capture audio from the PipeWire sink monitor; there is
+no capture-associated kernel audio transport today.
+
+## CEC
+
+CEC is disabled by default and remains a separate experimental `0.1` transport.
+Enable it explicitly with `enable_cec=1`. The current capability query does not
+advertise state events, only one transmit may be outstanding, and CEC is not
+part of the default VM or PipeWire product path. Clients must treat it as
+development-only until its lifecycle and session ownership are completed.
+
+## VM integration gate
 
 The repository includes a reproducible QEMU/KVM guest for development on hosts
 that cannot load unsigned modules:
@@ -81,9 +107,9 @@ that cannot load unsigned modules:
 ./scripts/vm/castkms-vm test
 ```
 
-A separate desktop instance installs GNOME/Mutter, attaches a virtual
-monitor through the capture protocol, and checks that the connector is
-visible to the compositor:
+The smoke command builds and executes KUnit before exercising attachment,
+capture, synchronization, modesets, CRC/writeback overlap, PipeWire video,
+audio, and teardown. A separate desktop instance checks Mutter discovery:
 
 ```sh
 ./scripts/vm/castkms-vm desktop-provision
@@ -91,7 +117,7 @@ visible to the compositor:
 ```
 
 See [`docs/vm-testing.md`](docs/vm-testing.md) for lifecycle commands,
-configuration, test coverage, and graphical-console setup.
+configuration, coverage, and graphical-console setup.
 
 ## License
 
