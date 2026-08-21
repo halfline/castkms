@@ -11,22 +11,87 @@ CASTKMS is a virtual presentation sink. The primary path is:
 
 Configfs topology construction, CRC, and writeback remain useful VKMS-derived
 development facilities. They must not drive capture UAPI design or weaken the
-bounded ownership rules of the primary path.
+bounded ownership rules of the primary path. CRC and writeback therefore use
+the same current-master content-owner barrier and cannot expose a predecessor's
+residual composition.
+
+## Kernel core and UAPI boundary
+
+Capture authorization has a one-way dependency from the grant-fd UAPI to the
+kernel-native capture core:
+
+```text
+grant fd, DRM files, IDs, ioctls, and events
+                    |
+                    v
+connector-scoped capture authority
+                    |
+                    v
+attachments, streams, buffers, CEC, and composition
+```
+
+`struct castkms_capture_authority` is the durable core security object. It owns
+connector scope, immutable internal rights, DRM-master/content activation,
+revocation, references, and resource-cleanup sequencing. Streams, attachments,
+and CEC bindings retain this object and check it in acquisition and frame hot
+paths. These checks are core invariants, not UAPI policy.
+
+The grant-fd layer wraps one authority. It owns the device-visible grant ID,
+optional close-to-revoke file, holder DRM file, cloned fd, file-local handle
+namespaces, and DRM events. It translates public `DRM_CASTKMS_GRANT_*` values
+to internal authority rights and states. Core code does not recover authority
+from a `drm_file` and does not depend on a grant ID or event structure.
+
+An in-kernel client can create and retain an authority directly, provide
+optional stream-cleanup and notification callbacks, and use the same capture
+lifecycle without constructing a DRM file or invoking an ioctl. Such a client
+does not bypass authorization: it must explicitly create an authority with a
+connector, rights, and either master-bound or administrative semantics, and the
+same synchronous revoke and content-ownership checks apply. Acquisition is
+bracketed by `castkms_capture_authority_begin()`/`end()`, or by the
+output-validating `begin_output()` variant before stream construction.
+
+The layering rule is: UAPI adapters may depend on core authority and capture
+interfaces; core interfaces must not depend on the grant-fd wrapper.
 
 ## Ownership
 
-Attachment and capture are deliberately separate lifetimes today.
-`ATTACH_MONITOR` gives one DRM file ownership of connector plug state and EDID.
-`START` gives one file an exclusive, file-local stream for one CRTC. Stopping a
-stream releases its buffers but leaves a monitor attached; detaching does not
-implicitly define a reusable capture session. Closing the file cancels its
-streams, releases their buffers, unbinds its CEC transports, and detaches its
-monitors.
+Authorization is represented by a connector-scoped capture grant fd. The
+device's current top-level DRM owner master can create a normal grant bound to
+itself. Initial-user-namespace root can explicitly create either a delegated
+grant bound to the current owner master or a roaming administrative grant. DRM
+lease masters cannot create normal grants because capture-safe content
+ownership is device-global. A fresh card fd has no capture authority. The grant
+fd has fresh DRM object namespaces, is non-master and unauthenticated, and can
+be passed with `SCM_RIGHTS`.
 
-ALSA exposes one device-global presentation card, and CEC has a separate
-per-connector transport owner. These are not yet grouped with attachment and
-capture in a session or lease. All mutating capture and transport ioctls remain
-root-only while that authorization and lifetime model is unresolved.
+Grant, attachment, and stream are separate lifetimes. The grant is durable
+authorization. `ATTACH_MONITOR` makes that grant own connector plug and EDID
+state. `START` creates an exclusive, file-local stream for the connector's
+current CRTC and mode generation. Stopping a stream leaves the attachment and
+grant intact. Detaching stops connector streams but leaves the grant valid for
+reattachment. Revocation or final holder close cancels streams, unbinds CEC,
+and detaches the monitor.
+
+Normal and delegated grants are active only while their bound `drm_master` is
+current and owns the output's capture-safe content. A normal grant is also
+revoked when its creator file closes. A delegated grant is holder-lived, so a
+one-shot privileged creator can exit; the retained master reference prevents
+the grant from following a different compositor. Master loss makes every
+existing capture stream obsolete, while either durable grant can revivify if
+the same master returns and presents safe content. Explicit root administrative
+grants follow safe current-master content across handoffs and keep their
+creator file as a revocation anchor. Every holder must create a fresh
+mode-specific stream in each master epoch. No grant may capture residual
+content from a previous owner. Framebuffers created by the current master and
+atomic CRTC compositions carry refcounted master ownership; a non-master
+client's framebuffer is ownerless, and no-op commits cannot transfer ownership.
+
+ALSA remains one device-global presentation card. CEC transport ownership is
+now a distinct grant right and follows grant suspension/revocation. PipeWire
+node visibility remains a userspace policy boundary. See
+[`capture-grants.md`](capture-grants.md) for the state machine and teardown
+rules.
 
 ## Capture buffer state
 
@@ -61,8 +126,11 @@ by a cancellation event.
 ## Locking and completion delivery
 
 Slow file operations hold the file's capture mutex while looking up streams.
-Connector attachment uses the device attachment mutex. Per-output slow stream
-ownership uses `capture.lock`.
+Complete attach, detach, and EDID transitions use the device attachment-
+transition mutex; the nested attachment mutex protects the owner pointer and
+attached bit. Cross-authority stream cancellation occurs after the transition
+mutex and the detaching authority's resource mutex are released. Per-output
+slow stream ownership uses `capture.lock`.
 
 The spinlock order for atomic, vblank, and completion paths is:
 
@@ -105,13 +173,15 @@ must add one of those mechanisms and preserve full-frame CRC policy.
 
 ## Cursor exclusion
 
-`EXCLUDE_CURSOR` removes cursor planes only from capture pixels. The event still
-reports position and a stream-global image serial. `IMAGE_CHANGED` means the
-client must read the bitmap from that event's buffer and cache it for later
-events; hidden cursors expose no bitmap. CRC and DRM writeback continue to
-include the cursor. When those clients overlap an excluded capture, composition
-currently pays for separate full and cursor-free results rather than changing
-either interface's pixels.
+`EXCLUDE_CURSOR` removes cursor planes only from capture pixels. With the
+grant's `READ_CURSOR` right, the event still reports position and a
+stream-global image serial. `IMAGE_CHANGED` means the client must read the
+bitmap from that event's buffer and cache it for later events; hidden cursors
+expose no bitmap. Without `READ_CURSOR`, starting capture requires exclusion
+and all cursor metadata is suppressed. CRC and DRM writeback continue to
+include the cursor. When those clients overlap an excluded capture,
+composition currently pays for separate full and cursor-free results rather
+than changing either interface's pixels.
 
 ## Audio and CEC
 
@@ -119,15 +189,18 @@ The ALSA device models an HDMI presentation sink: jack, ELD, PCM lifecycle, and
 timing are meaningful, but samples are not retained as a capture transport.
 PipeWire sink-monitor capture is the supported local bridge today.
 
-CEC `0.1` is opt-in and development-only. It has a distinct owner, one
-outstanding transmit, no advertised state events, and no default VM coverage.
-It must either gain a complete tested lifecycle or remain outside the session
-agent product story.
+CEC `0.1` is opt-in and development-only. Its transport is owned by a grant
+with `MANAGE_CEC`, permits one outstanding transmit, and is canceled on
+terminal revoke. A normal or delegated grant's transport is suspended on
+master loss; an administrative transport survives handoff. Monitor detach
+invalidates the physical address and cancels any pending transmit while
+retaining the binding for reattachment. CEC still has no advertised state
+events or default end-to-end VM coverage.
 
 ## Experimental compatibility
 
 Capture major version `0` permits incompatible iteration. Clients must query
-the version, formats, limits, synchronization flags, and DMA-BUF import bit;
-they must not probe optional operations by errno. A stable major version
-requires a settled seat/session authorization model, mode-change lifecycle,
-and buffer interoperability contract.
+the version, formats, limits, synchronization flags, grant-fd capability, and
+DMA-BUF import bit; they must not probe optional operations by errno. A stable
+major version requires userspace broker/compositor integration and a settled
+buffer interoperability contract.
