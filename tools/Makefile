@@ -10,7 +10,8 @@ CPPFLAGS += -I../include/uapi
 ALSA_CFLAGS := $(shell pkg-config --cflags alsa 2>/dev/null)
 ALSA_LIBS := $(shell pkg-config --libs alsa 2>/dev/null)
 
-all: castkms-capture-test castkms-edid-test castkms-cec-test
+all: castkms-capture-test castkms-grant-test castkms-edid-test \
+	castkms-cec-test
 	$(MAKE) -C pw-castkms
 ifneq ($(ALSA_LIBS),)
 	$(MAKE) castkms-audio-test
@@ -18,6 +19,10 @@ endif
 
 castkms-capture-test: castkms-capture-test.c \
 		virtualscreen-edid.h \
+		../include/uapi/drm/castkms_drm.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ $<
+
+castkms-grant-test: castkms-grant-test.c \
 		../include/uapi/drm/castkms_drm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ $<
 
@@ -36,5 +41,6 @@ castkms-audio-test: castkms-audio-test.c
 		-o $@ $< $(ALSA_LIBS) -lm
 
 clean:
-	$(RM) castkms-capture-test castkms-edid-test castkms-cec-test castkms-audio-test
+	$(RM) castkms-capture-test castkms-grant-test castkms-edid-test \
+		castkms-cec-test castkms-audio-test
 	$(MAKE) -C pw-castkms clean
