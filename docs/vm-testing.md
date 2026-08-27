@@ -80,6 +80,20 @@ CASTKMS_VM_SSH_PORT=22223 \
 directory's `archive/` folder before creating a fresh overlay. The downloaded
 base image and SSH key are retained.
 
+Each VM test copies its logs to
+`~/.cache/castkms-vm/results/default/`. The fast test includes its KUnit,
+live-grant, and kernel logs. After the product test has stopped its processes,
+closed its files, and unloaded the modules, it saves the complete kernel log as
+`product-dmesg.txt`. It fails if that log contains a kernel warning or bug, a
+report of invalid memory use or undefined behavior, a reference-count failure,
+a report that locks may be taken in an inconsistent order, or a DRM error.
+When that check fails, the matching lines are also saved in
+`product-kernel-errors.txt`. `kernel-debug-features.txt` records which relevant
+instrumentation the running kernel actually enables. The pinned Fedora kernel
+enables UBSAN but not KASAN, KCSAN, or lockdep, so those stronger diagnostics
+require a separately built debug kernel rather than being implied by the log
+pattern gate.
+
 On a host that can load the modules, `make kunit` builds the test module
 directly.
 
