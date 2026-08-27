@@ -500,6 +500,146 @@ static int test_crc_access(int drm_fd, int expected_errno)
 	return ret;
 }
 
+static int find_writeback_connector(int fd, uint32_t *connector_id)
+{
+	uint32_t connector_ids[32];
+	struct drm_set_client_cap atomic_cap = {
+		.capability = DRM_CLIENT_CAP_ATOMIC,
+		.value = 1,
+	};
+	struct drm_set_client_cap client_cap = {
+		.capability = DRM_CLIENT_CAP_WRITEBACK_CONNECTORS,
+		.value = 1,
+	};
+	struct drm_mode_card_res resources = {
+		.count_connectors = 32,
+		.connector_id_ptr = (uint64_t)(uintptr_t)connector_ids,
+	};
+	uint32_t i;
+
+	if (ioctl(fd, DRM_IOCTL_SET_CLIENT_CAP, &atomic_cap) < 0) {
+		perror("enable atomic client capability");
+		return -1;
+	}
+	if (ioctl(fd, DRM_IOCTL_SET_CLIENT_CAP, &client_cap) < 0) {
+		perror("enable writeback connector visibility");
+		return -1;
+	}
+	if (ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &resources) < 0 ||
+	    !resources.count_connectors || resources.count_connectors > 32) {
+		perror("GETRESOURCES for writeback");
+		return -1;
+	}
+	for (i = 0; i < resources.count_connectors; i++) {
+		struct drm_mode_get_connector connector = {
+			.connector_id = connector_ids[i],
+		};
+
+		if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &connector) < 0) {
+			perror("GETCONNECTOR for writeback");
+			return -1;
+		}
+		if (connector.connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
+			*connector_id = connector.connector_id;
+			return 0;
+		}
+	}
+
+	fprintf(stderr, "no writeback connector found\n");
+	return -1;
+}
+
+static int find_connector_property(int fd, uint32_t connector_id,
+				   const char *name, uint32_t *property_id)
+{
+	uint32_t property_ids[64];
+	uint64_t property_values[64];
+	struct drm_mode_get_connector connector = {
+		.connector_id = connector_id,
+	};
+	uint32_t i;
+
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &connector) < 0 ||
+	    !connector.count_props || connector.count_props > 64) {
+		perror("GETCONNECTOR property count");
+		return -1;
+	}
+	connector.count_modes = 0;
+	connector.count_encoders = 0;
+	connector.props_ptr = (uint64_t)(uintptr_t)property_ids;
+	connector.prop_values_ptr = (uint64_t)(uintptr_t)property_values;
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &connector) < 0) {
+		perror("GETCONNECTOR properties");
+		return -1;
+	}
+
+	for (i = 0; i < connector.count_props; i++) {
+		struct drm_mode_get_property property = {
+			.prop_id = property_ids[i],
+		};
+
+		if (ioctl(fd, DRM_IOCTL_MODE_GETPROPERTY, &property) < 0) {
+			perror("GETPROPERTY for writeback");
+			return -1;
+		}
+		if (!strcmp((const char *)property.name, name)) {
+			*property_id = property.prop_id;
+			return 0;
+		}
+	}
+
+	fprintf(stderr, "writeback connector lacks %s\n", name);
+	return -1;
+}
+
+static int expect_foreign_writeback_denied(
+	int fd, const struct test_display *display)
+{
+	struct castkms_test_framebuffer destination = {};
+	uint32_t objects[1];
+	uint32_t property_counts[1] = { 2 };
+	uint32_t properties[2];
+	uint64_t values[2];
+	struct drm_mode_atomic atomic = {
+		.flags = DRM_MODE_ATOMIC_ALLOW_MODESET,
+		.count_objs = 1,
+		.objs_ptr = (uint64_t)(uintptr_t)objects,
+		.count_props_ptr = (uint64_t)(uintptr_t)property_counts,
+		.props_ptr = (uint64_t)(uintptr_t)properties,
+		.prop_values_ptr = (uint64_t)(uintptr_t)values,
+	};
+	uint32_t writeback_connector;
+	int ret = -1;
+
+	if (find_writeback_connector(fd, &writeback_connector) ||
+	    find_connector_property(fd, writeback_connector, "CRTC_ID",
+				    &properties[0]) ||
+	    find_connector_property(fd, writeback_connector, "WRITEBACK_FB_ID",
+				    &properties[1]) ||
+	    create_test_framebuffer(fd, display->mode.hdisplay,
+				    display->mode.vdisplay, &destination))
+		goto out;
+
+	objects[0] = writeback_connector;
+	values[0] = display->crtc_id;
+	values[1] = destination.fb_id;
+	if (ioctl(fd, DRM_IOCTL_MODE_ATOMIC, &atomic) == 0) {
+		fprintf(stderr,
+			"writeback of foreign content unexpectedly succeeded\n");
+		goto out;
+	}
+	if (errno != EACCES) {
+		fprintf(stderr, "foreign writeback returned %s, expected %s\n",
+			strerror(errno), strerror(EACCES));
+		goto out;
+	}
+	ret = 0;
+
+out:
+	destroy_test_framebuffer(fd, &destination);
+	return ret;
+}
+
 static int expect_plain_capture_denied(int fd)
 {
 	struct drm_castkms_get_grant get_grant = {};
@@ -845,7 +985,8 @@ int main(int argc, char **argv)
 	    expect_holder_state(
 		    master_b_grant_fd, master_b_grant_id,
 		    DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT, 0) ||
-	    test_crc_access(master_b, EACCES))
+	    test_crc_access(master_b, EACCES) ||
+	    expect_foreign_writeback_denied(master_b, &display))
 		goto out;
 	printf("grant_foreign_content_blocked=pass\n");
 

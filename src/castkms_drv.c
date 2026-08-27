@@ -237,10 +237,55 @@ static const struct drm_driver castkms_driver = {
 	.minor			= DRIVER_MINOR,
 };
 
+static int
+castkms_atomic_check_writeback_ownership(struct drm_atomic_commit *state)
+{
+	struct drm_master *current_master = NULL;
+	struct drm_connector_state *connector_state;
+	struct drm_connector *connector;
+	int i;
+	int ret = 0;
+
+	for_each_new_connector_in_state(state, connector, connector_state, i) {
+		struct drm_master *capture_owner;
+		struct drm_crtc_state *crtc_state;
+
+		if (connector->connector_type != DRM_MODE_CONNECTOR_WRITEBACK ||
+		    !connector_state->writeback_job ||
+		    !connector_state->writeback_job->fb)
+			continue;
+
+		if (!connector_state->crtc) {
+			ret = -EINVAL;
+			break;
+		}
+		crtc_state = drm_atomic_get_new_crtc_state(
+			state, connector_state->crtc);
+		if (!crtc_state) {
+			ret = -EINVAL;
+			break;
+		}
+		if (!current_master)
+			current_master =
+				castkms_capture_owner_current_master_get(state->dev);
+		capture_owner = to_castkms_crtc_state(crtc_state)->capture_owner;
+		if (!castkms_capture_owner_is_current(capture_owner,
+						      current_master)) {
+			ret = -EACCES;
+			break;
+		}
+	}
+
+	if (current_master)
+		drm_master_put(&current_master);
+	return ret;
+}
+
 static int castkms_atomic_check(struct drm_device *dev, struct drm_atomic_commit *state)
 {
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *new_crtc_state;
+	int ret;
 	int i;
 
 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
@@ -256,7 +301,16 @@ static int castkms_atomic_check(struct drm_device *dev, struct drm_atomic_commit
 			return -EINVAL;
 	}
 
-	return drm_atomic_helper_check(dev, state);
+	ret = drm_atomic_helper_check(dev, state);
+	if (ret)
+		return ret;
+
+	/*
+	 * Writeback is a second pixel-export path. A newly installed DRM master
+	 * must not use a no-op writeback commit to read the previous master's
+	 * residual composition and bypass capture grants' content-owner barrier.
+	 */
+	return castkms_atomic_check_writeback_ownership(state);
 }
 
 static const struct drm_mode_config_funcs castkms_mode_funcs = {
