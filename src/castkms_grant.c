@@ -413,6 +413,26 @@ int castkms_grant_begin_crtc(
 	return 0;
 }
 
+int castkms_grant_begin_owned(
+	struct drm_file *file_priv,
+	struct castkms_capture_authority *owned_authority, u32 rights,
+	struct castkms_capture_authority **authority_out)
+{
+	struct castkms_capture_authority *authority;
+	int ret;
+
+	ret = castkms_grant_begin(file_priv, NULL, rights, &authority);
+	if (ret)
+		return ret;
+	if (authority != owned_authority) {
+		castkms_capture_authority_end(authority);
+		return -EACCES;
+	}
+
+	*authority_out = authority;
+	return 0;
+}
+
 void castkms_grant_end(struct castkms_capture_authority *authority)
 {
 	castkms_capture_authority_end(authority);

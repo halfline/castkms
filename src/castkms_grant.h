@@ -29,6 +29,10 @@ int castkms_grant_begin(struct drm_file *file_priv,
 int castkms_grant_begin_crtc(
 	struct drm_file *file_priv, struct drm_crtc *crtc, u32 rights,
 	struct castkms_capture_authority **authority_out);
+int castkms_grant_begin_owned(
+	struct drm_file *file_priv,
+	struct castkms_capture_authority *owned_authority, u32 rights,
+	struct castkms_capture_authority **authority_out);
 void castkms_grant_end(struct castkms_capture_authority *authority);
 
 void castkms_grant_uapi_file_fini(struct drm_device *dev,

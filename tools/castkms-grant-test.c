@@ -579,7 +579,9 @@ static int expect_create_flag_namespaces(int fd, uint32_t connector_id)
 
 static void usage(const char *program)
 {
-	fprintf(stderr, "usage: %s DRM-DEVICE CONNECTOR-ID\n", program);
+	fprintf(stderr,
+		"usage: %s DRM-DEVICE CONNECTOR-ID [FOREIGN-CONNECTOR-ID]\n",
+		program);
 }
 
 int main(int argc, char **argv)
@@ -595,15 +597,18 @@ int main(int argc, char **argv)
 	uint32_t issuer_close_id = 0;
 	uint32_t detached_delegated_id = 0;
 	uint32_t delegated_id = 0;
+	uint32_t foreign_grant_id = 0;
 	uint32_t master_b_grant_id = 0;
 	uint32_t normal_id = 0;
 	uint32_t admin_id = 0;
+	uint32_t foreign_connector_id = 0;
 	uint32_t connector_id;
 	int masterless_admin_fd = -1;
 	int issuer_close_holder = -1;
 	int detached_delegated_fd = -1;
 	int delegated_creator = -1;
 	int delegated_fd = -1;
+	int foreign_grant_fd = -1;
 	int master_b_grant_fd = -1;
 	int admin_fd = -1;
 	int normal_fd = -1;
@@ -618,7 +623,11 @@ int main(int argc, char **argv)
 		usage(argv[0]);
 		return EXIT_SUCCESS;
 	}
-	if (argc != 3 || parse_connector_id(argv[2], &connector_id)) {
+	if ((argc != 3 && argc != 4) ||
+	    parse_connector_id(argv[2], &connector_id) ||
+	    (argc == 4 &&
+	     (parse_connector_id(argv[3], &foreign_connector_id) ||
+	      foreign_connector_id == connector_id))) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
@@ -656,6 +665,15 @@ int main(int argc, char **argv)
 		goto out;
 	printf("grant_scm_rights=pass\n");
 	printf("grant_syncobj_eventfd=pass\n");
+	if (foreign_connector_id) {
+		if (create_grant(issuer, foreign_connector_id, full_rights, 0,
+				 &foreign_grant_fd, &foreign_grant_id) ||
+		    expect_holder_state(foreign_grant_fd, foreign_grant_id,
+					DRM_CASTKMS_GRANT_STATE_PENDING, 0))
+			goto out;
+		printf("grant_cross_connector_created=pass\n");
+	}
+
 	if (setup_display(issuer, connector_id, &display) ||
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE, 0))
@@ -869,6 +887,18 @@ int main(int argc, char **argv)
 	printf("grant_explicit_revoke=pass\n");
 	close(normal_fd);
 	normal_fd = -1;
+	if (foreign_grant_fd >= 0) {
+		if (revoke_grant(issuer, foreign_grant_id) ||
+		    expect_revoke_event(foreign_grant_fd, foreign_grant_id,
+					-EKEYREVOKED) ||
+		    expect_holder_state(foreign_grant_fd, foreign_grant_id,
+					DRM_CASTKMS_GRANT_STATE_REVOKED, 0))
+			goto out;
+		close(foreign_grant_fd);
+		foreign_grant_fd = -1;
+		printf("grant_cross_connector_independent=pass\n");
+	}
+
 	close(admin_fd);
 	admin_fd = -1;
 	issuer_query = (struct drm_castkms_get_grant) {
@@ -922,6 +952,8 @@ out:
 		close(delegated_fd);
 	if (master_b_grant_fd >= 0)
 		close(master_b_grant_fd);
+	if (foreign_grant_fd >= 0)
+		close(foreign_grant_fd);
 	if (master_b >= 0)
 		destroy_test_framebuffer(master_b, &master_b_source);
 	if (master_b >= 0)

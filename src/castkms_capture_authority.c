@@ -501,11 +501,12 @@ int castkms_capture_authority_begin(
 
 	if (!authority)
 		return -EACCES;
-	(void)connector;
 
 	mutex_lock(&authority->lock);
 	status = castkms_capture_authority_status(authority);
 	if (!status && !castkms_capture_authority_has_rights(authority, rights))
+		status = -EACCES;
+	if (!status && connector && authority->connector != connector)
 		status = -EACCES;
 	if (status)
 		mutex_unlock(&authority->lock);
@@ -544,6 +545,28 @@ void castkms_capture_authority_end(
 	mutex_unlock(&authority->lock);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_authority_end);
+
+static bool castkms_capture_authority_conflicts(
+	struct castkms_device *castkmsdev, struct drm_connector *connector,
+	u32 rights)
+{
+	struct castkms_capture_authority *authority;
+	unsigned long id;
+
+	if (!(rights & CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT))
+		return false;
+
+	xa_for_each(&castkmsdev->authorities, id, authority) {
+		if (authority->connector == connector &&
+		    castkms_capture_authority_has_rights(
+			    authority,
+			    CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT) &&
+		    !castkms_capture_authority_is_revoked(authority))
+			return true;
+	}
+
+	return false;
+}
 
 struct castkms_capture_authority *
 castkms_capture_authority_create(
@@ -594,6 +617,11 @@ castkms_capture_authority_create(
 		ret = -ENODEV;
 		goto out_unlock;
 	}
+	if (castkms_capture_authority_conflicts(castkmsdev, connector, rights)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
+
 	castkms_capture_authority_get(authority);
 	ret = xa_alloc_cyclic(&castkmsdev->authorities,
 				      &authority->registry_id, authority,

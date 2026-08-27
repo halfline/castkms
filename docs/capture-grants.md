@@ -101,8 +101,9 @@ namespace.
 
 ## Rights
 
-Rights are immutable:
+Rights are immutable and connector-scoped:
 
+| Right | Meaning |
 |---|---|
 | `CAPTURE_PIXELS` | Start streams and register or queue capture buffers. |
 | `MANAGE_ATTACHMENT` | Attach a remote monitor. |
@@ -112,6 +113,10 @@ Rights are immutable:
 
 `ATTACH_MONITOR` with an EDID requires both attachment and EDID rights. Unknown
 rights are rejected.
+
+Only one live grant with `MANAGE_ATTACHMENT` may exist per connector. Capture
+is exclusive per output. Additional capture-only grants are structurally
+possible, but attachment ownership is singular.
 
 ## Validity and pixel activation
 
@@ -160,7 +165,7 @@ when an authoritative point-in-time state is required.
 
 The direct operation errors are:
 
-- `-EACCES`: no grant or missing right;
+- `-EACCES`: no grant, wrong connector, or missing right;
 - `-EKEYREVOKED`: terminal revocation;
 - `-EAGAIN`: temporary master suspension or an obsolete capture stream;
 - `-ESTALE`: unsafe content ownership or a stale mode generation;
