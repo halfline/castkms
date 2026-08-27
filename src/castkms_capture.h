@@ -17,6 +17,7 @@ struct castkms_capture_buffer;
 struct castkms_capture_authority;
 struct castkms_capture_stream;
 struct castkms_crtc_state;
+struct castkms_frame_snapshot;
 struct castkms_output;
 struct castkms_output_buffer;
 
@@ -107,6 +108,9 @@ castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
+void castkms_capture_queue_job(struct castkms_output *output,
+			       struct castkms_capture_buffer *buffer,
+			       struct castkms_frame_snapshot *snapshot);
 
 /* The caller must hold @authority through begin_output()/end(). */
 struct castkms_capture_stream *

@@ -24,6 +24,7 @@ struct workqueue_struct;
  * @wb_connector: DRM writeback connector for this output
  * @wb_encoder: DRM encoder used by @wb_connector
  * @dispatch_workq: Ordered frame-consumer dispatch workqueue
+ * @capture_workq: Ordered deferred-capture workqueue
  * @lock: Protects demand, scheduling, state assignment, and capture ownership
  * @dispatch_demand: Consumers keeping frame dispatch active
  * @dispatch_state: Current state assigned to the dispatch worker
@@ -44,6 +45,7 @@ struct castkms_output {
 	struct drm_writeback_connector wb_connector;
 	struct drm_encoder wb_encoder;
 	struct workqueue_struct *dispatch_workq;
+	struct workqueue_struct *capture_workq;
 	spinlock_t lock; /* Protects commit, vblank, and capture-owner state. */
 
 	struct castkms_frame_dispatch_demand dispatch_demand;

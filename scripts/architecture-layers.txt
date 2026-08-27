@@ -18,6 +18,7 @@ capture-core src/castkms_capture.c
 capture-core src/castkms_capture.h
 capture-core src/castkms_capture_buffer.c
 capture-core src/castkms_capture_internal.h
+capture-core src/castkms_capture_job.c
 capture-core src/castkms_capture_output.h
 
 capture-uapi src/castkms_capture_uapi.c

@@ -194,6 +194,7 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream,
 	castkms_capture_deliver_completion(stream->output, &completion);
 	if (in_flight) {
 		flush_workqueue(stream->output->dispatch_workq);
+		flush_workqueue(stream->output->capture_workq);
 	}
 	list_for_each_entry(buffer, &stream->buffers, link)
 		wait_for_completion(&buffer->submit_done);

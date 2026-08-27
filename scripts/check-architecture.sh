@@ -39,6 +39,10 @@ reject 'pixel composer coordinates mutable frame consumers' \
 	'castkms_capture|castkms_capture_owner|castkms_crtc|castkms_frame_dispatch|castkms_snapshot|drm_writeback|drm_crtc_add_crc' \
 	src/castkms_composer.c src/castkms_composer.h
 
+reject 'snapshot layer owns deferred capture execution' \
+	'castkms_capture_queue_job|castkms_capture\.h|castkms_composer\.h|castkms_output\.h' \
+	src/castkms_snapshot.c src/castkms_snapshot.h
+
 reject 'stream scheduler owns buffer synchronization' \
 	'dma_resv|drm_syncobj|dma_fence_chain' \
 	src/castkms_capture.c
@@ -63,6 +67,7 @@ reject 'plane layer owns color-operation snapshots' \
 test -f src/castkms_frame_dispatch.c
 test -f src/castkms_frame_dispatch_demand.h
 test -f src/castkms_crc.h
+test -f src/castkms_capture_job.c
 test -f src/castkms_capture_buffer.c
 test -f src/castkms_capture_internal.h
 test -f src/castkms_grant_core_ioctl_table.inc

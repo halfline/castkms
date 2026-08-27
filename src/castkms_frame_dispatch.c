@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 
+#include <linux/err.h>
 #include <linux/limits.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
@@ -18,6 +19,7 @@
 #include "castkms_crtc.h"
 #include "castkms_frame_dispatch.h"
 #include "castkms_output.h"
+#include "castkms_snapshot.h"
 
 /**
  * castkms_frame_dispatch_worker - service pending frame consumers
@@ -62,6 +64,26 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 
 	if (!crc_pending && !wb_pending && !capture_pending)
 		return;
+
+	if (capture_pending && !crc_pending && !wb_pending) {
+		struct castkms_frame_snapshot *snapshot;
+
+		spin_lock_irq(&out->dispatch_lock);
+		crtc_state->capture_pending = false;
+		crtc_state->active_capture = NULL;
+		spin_unlock_irq(&out->dispatch_lock);
+
+		if (WARN_ON(!active_capture))
+			return;
+
+		snapshot = castkms_frame_snapshot_create(frame);
+		if (IS_ERR(snapshot))
+			castkms_capture_complete_frame(out, active_capture,
+						       PTR_ERR(snapshot));
+		else
+			castkms_capture_queue_job(out, active_capture, snapshot);
+		return;
+	}
 
 	if (capture_pending) {
 		if (WARN_ON(!active_capture))
