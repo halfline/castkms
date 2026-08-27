@@ -179,6 +179,51 @@ struct drm_castkms_get_grant {
 	__u64 reserved2;
 };
 
+/**
+ * DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED:
+ *
+ * Reliable notification that a grant has become permanently inert. This is
+ * intentionally distinct from a mode-generation change, after which the same
+ * grant may start a replacement stream.
+ */
+#define DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED	0x80000003U
+#define DRM_CASTKMS_CAPTURE_EVENT_GRANT_STATE	0x80000004U
+
+/**
+ * struct drm_event_castkms_grant_revoked - grant revocation notification
+ * @base: event header with type DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED
+ * @grant_id: revoked grant identifier
+ * @status: -EKEYREVOKED for policy or lifetime revoke; -ENODEV for teardown
+ * @timestamp_ns: monotonic revocation timestamp
+ */
+struct drm_event_castkms_grant_revoked {
+	struct drm_event base;
+	__u32 grant_id;
+	__s32 status;
+	__u64 timestamp_ns;
+};
+
+/**
+ * struct drm_event_castkms_grant_state - non-terminal grant state change
+ * @base: event header with type DRM_CASTKMS_CAPTURE_EVENT_GRANT_STATE
+ * @grant_id: grant identifier
+ * @state: new DRM_CASTKMS_GRANT_STATE_* value
+ * @status: errno returned by pixel-capture operations in this state
+ * @reserved: zero
+ * @timestamp_ns: monotonic transition timestamp
+ *
+ * State events are advisory. Userspace must use GET_GRANT as the
+ * authoritative state if transitions coalesce or event reservation fails.
+ */
+struct drm_event_castkms_grant_state {
+	struct drm_event base;
+	__u32 grant_id;
+	__u32 state;
+	__s32 status;
+	__u32 reserved;
+	__u64 timestamp_ns;
+};
+
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13

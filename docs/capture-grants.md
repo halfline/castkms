@@ -212,17 +212,27 @@ revoke the grant. A modeset increments `mode_generation`, returns queued work
 with `-ESTALE` and `MODE_CHANGED`, and requires a replacement stream and
 mode-sized buffers on the same grant fd.
 
-## Revocation
+## Revocation and events
 
 Revocation first makes the grant permanently unable to authorize another
 attachment, EDID, capture, cursor, or CEC operation. The authority keeps one
 list of the capture streams and CEC bindings that must be cleaned. It walks
 that list in registration order, so clients must not rely on capture cleanup
-happening before or after CEC cleanup. Cleaning a stream cancels queued and
-in-flight work and places an error on each producer fence. Cleaning a CEC
-binding aborts and unbinds its transport work. A revoked fd remains usable for
-state queries, ordinary DRM resource release, and close, but can never regain
-authority.
+happening before or after CEC cleanup. The complete sequence is:
+
+1. Walk that list. Cleaning a stream cancels queued and in-flight work and
+   places an error on each producer fence. Cleaning a CEC binding aborts and
+   unbinds its transport work.
+2. Send the pre-reserved `GRANT_REVOKED` event.
+
+The first step finishes every registered entry before event delivery begins.
+
+The driver reserves the reliable revoke event when the grant is created, so it
+does not need to allocate memory while cleaning up. `GRANT_STATE` events report
+changes that do not revoke the grant. They are advisory and may be combined or
+may not be sent if event reservation fails; `GET_GRANT` is authoritative. A
+revoked fd remains usable for event reads, state queries, ordinary DRM resource
+release, and close, but can never regain authority.
 
 Temporary foreign-content states leave the stream allocated; queue and vblank
 eligibility checks return or suppress `-ESTALE` work until the composition
@@ -234,8 +244,8 @@ The fd is an adapter around a kernel-native capture authority. The authority
 contains connector scope, rights, and revocation state, and evaluates them
 against snapshots supplied by the DRM/content ownership tracker. The adapter
 contains only UAPI concerns: grant ID, optional close-to-revoke file, holder
-DRM file, and fd lifetime. Capture streams, connector attachments, and CEC
-transports retain the authority rather than the adapter.
+DRM file, fd lifetime, and DRM events. Capture streams, connector attachments,
+and CEC transports retain the authority rather than the adapter.
 
 Trusted code linked into the driver may create an authority directly and use
 the same core lifecycle without fabricating a `drm_file`. The constructor is
@@ -262,7 +272,8 @@ Authority checks are repeated in the vblank path so revocation racing stream
 startup cannot disclose a later frame. Complete attachment transitions are
 serialized through their hotplug, audio, and CEC side effects.
 CEC teardown blocks replacement binding until any transport callback that is
-preparing a request has retired.
+preparing a request has retired. The DRM adapter owns event reservation and
+publication; CEC core owns only the publish-or-cancel decision.
 
 `GET_GRANT` reads connector routing under the interruptible connection mutex
 rather than locking the complete modeset object set. Grant `fdinfo` does not

@@ -4,6 +4,7 @@
 #include <linux/capability.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/ktime.h>
 #include <linux/limits.h>
 #include <linux/slab.h>
 #include <linux/user_namespace.h>
@@ -52,32 +53,48 @@ castkms_grant_registry(struct drm_device *dev)
 /**
  * struct castkms_capture_grant - grant-fd UAPI wrapper
  * @authority: Kernel-native authorization and security state
- * @lock: Protects UAPI file associations and reported state
+ * @lock: Protects UAPI file associations, event state, and reported state
  * @id: Device-unique UAPI grant ID
  * @reported_state: Latest state reported through the grant fd
+ * @published: The UAPI ID and holder event stream are ready for use
  * @revoker_file: Optional close-to-revoke file state, protected by the
  * grant-registry lock
  * @holder_file: Fresh DRM file carrying this grant, valid through cleanup
+ * @revoke_event: Pre-reserved terminal event
  * @delegated: Grant is holder-lived and bound to a master selected by an
  * administrator
  *
  * Capture streams, connector attachments, and CEC transports retain only
- * @authority.  This wrapper translates file descriptors and IDs
+ * @authority.  This wrapper translates file descriptors, IDs, and DRM events
  * without becoming part of the kernel-native capture mechanism.
  */
 struct castkms_capture_grant {
 	struct castkms_capture_authority *authority;
-	struct mutex lock; /* Protects UAPI associations and reported state. */
+	struct mutex lock; /* Protects UAPI associations and event state. */
 	u32 id;
 	enum castkms_capture_authority_state reported_state;
+	bool published;
 	bool delegated;
 	struct castkms_file *revoker_file;
 	struct drm_file *holder_file;
+	struct castkms_grant_pending_event *revoke_event;
+};
+
+struct castkms_grant_pending_event {
+	struct drm_pending_event pending;
+	struct drm_event_castkms_grant_revoked event;
+};
+
+struct castkms_grant_state_pending_event {
+	struct drm_pending_event pending;
+	struct drm_event_castkms_grant_state event;
 };
 
 static_assert(sizeof(struct drm_castkms_create_grant) == 24);
 static_assert(sizeof(struct drm_castkms_revoke_grant) == 16);
 static_assert(sizeof(struct drm_castkms_get_grant) == 32);
+static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24);
+static_assert(sizeof(struct drm_event_castkms_grant_state) == 32);
 
 static u32 castkms_grant_state_to_uapi(
 	enum castkms_capture_authority_state state)
@@ -206,11 +223,71 @@ static void castkms_grant_state_changed(
 	enum castkms_capture_authority_state state, int status, void *data)
 {
 	struct castkms_capture_grant *grant = data;
+	struct castkms_grant_state_pending_event *pending;
+	struct drm_file *holder_file;
+	struct file *active_file = NULL;
+	int ret;
 
 	mutex_lock(&grant->lock);
-	if (!castkms_capture_authority_is_revoked(authority))
-		grant->reported_state = state;
+	if (castkms_capture_authority_is_revoked(authority) ||
+	    grant->reported_state == state) {
+		mutex_unlock(&grant->lock);
+		return;
+	}
+	grant->reported_state = state;
+	if (!grant->published)
+		goto out_unlock;
+	holder_file = grant->holder_file;
+	if (holder_file)
+		active_file = get_file_active(&holder_file->filp);
+	if (!active_file)
+		goto out_unlock;
+
+	pending = kzalloc_obj(*pending);
+	if (!pending)
+		goto out_unlock;
+	pending->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_GRANT_STATE;
+	pending->event.base.length = sizeof(pending->event);
+	pending->event.grant_id = grant->id;
+	pending->event.state = castkms_grant_state_to_uapi(state);
+	pending->event.status = status;
+	pending->event.timestamp_ns = ktime_get_ns();
+	ret = drm_event_reserve_init(holder_file->minor->dev, holder_file,
+				     &pending->pending,
+				     &pending->event.base);
+	if (ret) {
+		kfree(pending);
+		goto out_unlock;
+	}
+
+	drm_send_event(holder_file->minor->dev, &pending->pending);
+
+out_unlock:
 	mutex_unlock(&grant->lock);
+	if (active_file)
+		fput(active_file);
+}
+
+static void castkms_grant_revoked(
+	struct castkms_capture_authority *authority, int status, void *data)
+{
+	struct castkms_capture_grant *grant = data;
+	struct castkms_grant_pending_event *pending;
+	struct drm_device *dev =
+		castkms_capture_authority_connector(authority)->dev;
+
+	mutex_lock(&grant->lock);
+	pending = grant->revoke_event;
+	grant->revoke_event = NULL;
+	if (pending) {
+		pending->event.grant_id = grant->id;
+		pending->event.status = status;
+		pending->event.timestamp_ns = ktime_get_ns();
+	}
+	mutex_unlock(&grant->lock);
+
+	if (pending)
+		drm_send_event(dev, &pending->pending);
 }
 
 static void castkms_grant_release(
@@ -219,12 +296,14 @@ static void castkms_grant_release(
 	struct castkms_capture_grant *grant = data;
 
 	WARN_ON(grant->holder_file);
+	WARN_ON(grant->revoke_event);
 	mutex_destroy(&grant->lock);
 	kfree(grant);
 }
 
 static const struct castkms_capture_authority_ops castkms_grant_authority_ops = {
 	.state_changed = castkms_grant_state_changed,
+	.revoked = castkms_grant_revoked,
 	.release = castkms_grant_release,
 };
 
@@ -374,6 +453,7 @@ static int castkms_grant_register(
 		}
 	}
 	grant->revoker_file = revoker_file;
+	grant->published = true;
 
 out_unlock:
 	mutex_unlock(&grant->lock);
@@ -390,6 +470,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	struct castkms_file *creator_file = file_priv->driver_priv;
 	struct castkms_file *revoker_file;
 	struct castkms_file *holder_file_state = NULL;
+	struct castkms_grant_pending_event *pending = NULL;
 	struct castkms_capture_grant *grant;
 	struct castkms_capture_authority *authority;
 	struct drm_connector *connector;
@@ -474,14 +555,28 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	grant_file->f_flags &= ~O_NONBLOCK;
 	grant_file->f_flags |= args->fd_flags & O_NONBLOCK;
 
+	pending = kzalloc_obj(*pending);
+	if (!pending) {
+		ret = -ENOMEM;
+		goto out_fput;
+	}
+	pending->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED;
+	pending->event.base.length = sizeof(pending->event);
+	ret = drm_event_reserve_init(dev, holder_file, &pending->pending,
+				     &pending->event.base);
+	if (ret)
+		goto out_free_pending;
+
 	holder_file_state = holder_file->driver_priv;
 	if (WARN_ON(!holder_file_state)) {
 		ret = -EINVAL;
-		goto out_fput;
+		goto out_cancel_event;
 	}
 	mutex_lock(&grant->lock);
 	grant->holder_file = holder_file;
+	grant->revoke_event = pending;
 	mutex_unlock(&grant->lock);
+	pending = NULL;
 	castkms_capture_authority_get(authority);
 	holder_ref = true;
 	holder_file_state->holder_grant = grant;
@@ -503,9 +598,18 @@ out_clear_holder:
 	holder_file_state->holder_grant = NULL;
 	mutex_lock(&grant->lock);
 	grant->holder_file = NULL;
+	pending = grant->revoke_event;
+	grant->revoke_event = NULL;
 	mutex_unlock(&grant->lock);
 	if (holder_ref)
 		castkms_capture_authority_put(authority);
+out_cancel_event:
+	if (pending) {
+		drm_event_cancel_free(dev, &pending->pending);
+		pending = NULL;
+	}
+out_free_pending:
+	kfree(pending);
 out_fput:
 	fput(grant_file);
 out_put_fd:

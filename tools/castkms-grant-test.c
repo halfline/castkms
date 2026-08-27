@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -25,6 +26,11 @@ static_assert(sizeof(struct drm_castkms_revoke_grant) == 16,
 	      "revoke-grant ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
+static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
+	      "grant-revoked event ABI size changed");
+static_assert(sizeof(struct drm_event_castkms_grant_state) == 32,
+	      "grant-state event ABI size changed");
+
 struct test_display {
 	struct drm_mode_modeinfo mode;
 	struct castkms_test_framebuffer source;
@@ -381,6 +387,65 @@ out:
 	return received;
 }
 
+static int expect_revoke_event(int grant_fd, uint32_t grant_id, int status)
+{
+	struct pollfd pollfd = {
+		.fd = grant_fd,
+		.events = POLLIN,
+	};
+	unsigned char events[4096];
+	int attempts;
+
+	for (attempts = 0; attempts < 20; attempts++) {
+		ssize_t size;
+		size_t offset;
+		int ret;
+
+		ret = poll(&pollfd, 1, 250);
+		if (ret < 0) {
+			perror("poll grant event");
+			return -1;
+		}
+		if (!ret)
+			continue;
+		size = read(grant_fd, events, sizeof(events));
+		if (size < 0) {
+			if (errno == EAGAIN)
+				continue;
+			perror("read grant event");
+			return -1;
+		}
+		for (offset = 0; offset + sizeof(struct drm_event) <= (size_t)size;) {
+			const struct drm_event *base = (const void *)(events + offset);
+
+			if (base->length < sizeof(*base) ||
+			    offset + base->length > (size_t)size) {
+				fprintf(stderr, "malformed DRM event\n");
+				return -1;
+			}
+			if (base->type == DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED &&
+			    base->length ==
+				sizeof(struct drm_event_castkms_grant_revoked)) {
+				const struct drm_event_castkms_grant_revoked *event =
+					(const void *)base;
+
+				if (event->grant_id != grant_id ||
+				    event->status != status) {
+					fprintf(stderr,
+						"unexpected revoke event id=%u status=%d\n",
+						event->grant_id, event->status);
+					return -1;
+				}
+				return 0;
+			}
+			offset += base->length;
+		}
+	}
+
+	fprintf(stderr, "timed out waiting for grant %u revocation\n", grant_id);
+	return -1;
+}
+
 static int expect_plain_capture_denied(int fd)
 {
 	struct drm_castkms_get_grant get_grant = {};
@@ -691,6 +756,7 @@ int main(int argc, char **argv)
 	printf("grant_delegated_master_revivify=pass\n");
 
 	if (revoke_delegated_as_unprivileged_owner(issuer, delegated_id) ||
+	    expect_revoke_event(delegated_fd, delegated_id, -EKEYREVOKED) ||
 	    expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_REVOKED,
 				DRM_CASTKMS_GRANT_FLAG_DELEGATED))
@@ -729,6 +795,7 @@ int main(int argc, char **argv)
 	printf("grant_delegated_final_holder_close=pass\n");
 
 	if (revoke_grant(issuer, normal_id) ||
+	    expect_revoke_event(normal_fd, normal_id, -EKEYREVOKED) ||
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_REVOKED, 0))
 		goto out;
@@ -762,7 +829,9 @@ int main(int argc, char **argv)
 		goto out;
 	close(issuer2);
 	issuer2 = -1;
-	if (expect_holder_state(issuer_close_holder, issuer_close_id,
+	if (expect_revoke_event(issuer_close_holder, issuer_close_id,
+				-EKEYREVOKED) ||
+	    expect_holder_state(issuer_close_holder, issuer_close_id,
 				DRM_CASTKMS_GRANT_STATE_REVOKED,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN))
 		goto out;
