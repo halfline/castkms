@@ -160,7 +160,8 @@ static int castkms_snapshot_attach_read_fences(
 	struct castkms_frame_snapshot *snapshot)
 {
 	unsigned int capacity =
-		snapshot->frame.num_planes * DRM_FORMAT_MAX_PLANES;
+		(snapshot->frame.num_planes + !!snapshot->frame.cursor.fb) *
+		DRM_FORMAT_MAX_PLANES;
 	struct drm_gem_object **seen;
 	unsigned int n_seen = 0;
 	int i;
@@ -180,6 +181,12 @@ static int castkms_snapshot_attach_read_fences(
 		if (ret)
 			goto out;
 	}
+
+	/* Cursor metadata is copied after composition and needs the same barrier. */
+	if (snapshot->frame.cursor.fb)
+		ret = castkms_snapshot_attach_framebuffer_read_fences(
+			snapshot, snapshot->frame.cursor.fb, seen, &n_seen,
+			capacity);
 
 out:
 	kfree(seen);
@@ -237,6 +244,8 @@ static void castkms_frame_snapshot_release(struct kref *kref)
 	for (i = 0; i < snapshot->num_source_dependencies; i++)
 		dma_fence_put(snapshot->source_dependencies[i]);
 
+	if (snapshot->frame.cursor.fb)
+		drm_framebuffer_put(snapshot->frame.cursor.fb);
 	kfree(snapshot->gamma_lut_data);
 	kfree(snapshot->source_dependencies);
 	kfree(snapshot->frame.planes);
@@ -256,7 +265,6 @@ castkms_frame_snapshot_create(const struct castkms_frame_stage *frame)
 
 	kref_init(&snapshot->refcount);
 	snapshot->frame = *frame;
-	snapshot->frame.cursor = (struct castkms_cursor_snapshot) {};
 	snapshot->frame.num_planes = 0;
 	snapshot->frame.gamma_lut = (struct castkms_color_lut) {};
 
@@ -267,9 +275,10 @@ castkms_frame_snapshot_create(const struct castkms_frame_stage *frame)
 		kfree(snapshot);
 		return ERR_PTR(-ENOMEM);
 	}
-	if (num_planes) {
+	if (num_planes || frame->cursor.fb) {
 		snapshot->source_dependencies = kcalloc(
-			num_planes * DRM_FORMAT_MAX_PLANES,
+			(num_planes + !!frame->cursor.fb) *
+				DRM_FORMAT_MAX_PLANES,
 			sizeof(*snapshot->source_dependencies), GFP_KERNEL);
 		if (!snapshot->source_dependencies) {
 			kfree(snapshot->frame.planes);
@@ -277,6 +286,9 @@ castkms_frame_snapshot_create(const struct castkms_frame_stage *frame)
 			return ERR_PTR(-ENOMEM);
 		}
 	}
+	if (snapshot->frame.cursor.fb)
+		drm_framebuffer_get(snapshot->frame.cursor.fb);
+
 	for (i = 0; i < num_planes; i++) {
 		struct castkms_frame_plane *src = frame->planes[i];
 		struct castkms_snapshot_plane *sp = &snapshot->planes[i];
