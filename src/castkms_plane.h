@@ -10,7 +10,6 @@
 
 #include "castkms_frame.h"
 
-struct castkms_colorop_snapshot;
 struct castkms_config_plane;
 struct castkms_device;
 struct drm_atomic_commit;
@@ -19,8 +18,6 @@ struct drm_atomic_commit;
  * struct castkms_plane_state - Driver-specific atomic plane state
  * @base: DRM shadow-plane state
  * @frame: Renderer-facing state produced by this atomic state
- * @num_colorops: Number of entries in @colorops
- * @colorops: Value-owned color pipeline selected by this plane update
  */
 struct castkms_plane_state {
 	struct drm_shadow_plane_state base;
@@ -34,8 +31,6 @@ struct castkms_plane_state {
 			bool is_cursor;
 		};
 	};
-	size_t num_colorops;
-	struct castkms_colorop_snapshot *colorops;
 };
 
 /**

@@ -19,4 +19,9 @@ reject()
 	fi
 }
 
+rg -q '^castkms_colorop_snapshot_init\(' src/castkms_colorop.c
+reject 'plane layer owns color-operation snapshots' \
+	'^castkms_colorop_snapshot_init\(' \
+	src/castkms_plane.c
+
 printf '%s\n' 'architecture-dependencies=pass'

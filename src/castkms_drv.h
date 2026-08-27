@@ -54,25 +54,6 @@ castkms_composer_demand_is_active(const struct castkms_composer_demand *demand)
 struct castkms_output_buffer;
 
 /**
- * struct castkms_colorop_snapshot - Render state for one color operation
- * @type: Operation selected by the plane's color pipeline
- * @bypass: Whether this operation is disabled
- * @curve_1d_type: Transfer curve selected for a 1D curve operation
- * @has_ctm: Whether @ctm contains matrix data
- * @ctm: Value-owned matrix for a 3x4 CTM operation
- *
- * The composer consumes this value-owned representation instead of following
- * mutable DRM object state after the atomic transaction has been published.
- */
-struct castkms_colorop_snapshot {
-	enum drm_colorop_type type;
-	bool bypass;
-	enum drm_colorop_curve_1d_type curve_1d_type;
-	bool has_ctm;
-	struct drm_color_ctm_3x4 ctm;
-};
-
-/**
  * struct castkms_crtc_state - Driver specific CRTC state
  *
  * @base: base CRTC state
@@ -218,18 +199,9 @@ void castkms_composer_put(struct castkms_output *out,
 /* Writeback */
 int castkms_enable_writeback_connector(struct castkms_device *castkmsdev, struct castkms_output *castkms_out);
 
-/* Colorops */
-int castkms_initialize_colorops(struct drm_plane *plane);
-
 #if IS_ENABLED(CONFIG_KUNIT)
 void castkms_sort_plane_states(struct castkms_plane_state **planes,
 			       size_t count);
-#endif
-
-#if IS_ENABLED(CONFIG_KUNIT)
-int castkms_colorop_snapshot_init(struct castkms_colorop_snapshot *snapshot,
-				  const struct drm_colorop *colorop,
-				  const struct drm_colorop_state *state);
 #endif
 
 #endif /* _CASTKMS_DRV_H_ */

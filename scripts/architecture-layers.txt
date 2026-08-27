@@ -25,6 +25,7 @@ drm-runtime src/castkms_plane.h
 drm-runtime src/castkms_writeback.c
 
 render-core src/castkms_colorop.c
+render-core src/castkms_colorop.h
 render-core src/castkms_composer.c
 render-core src/castkms_composer.h
 render-core src/castkms_formats.c

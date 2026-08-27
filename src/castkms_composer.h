@@ -18,7 +18,7 @@ enum lut_channel {
 };
 
 #if IS_ENABLED(CONFIG_KUNIT)
-void castkms_apply_colorops(const struct castkms_plane_state *plane_state,
+void castkms_apply_colorops(const struct castkms_frame_plane *plane,
 			    struct line_buffer *output_buffer);
 int castkms_composer_demand_get(struct castkms_composer_demand *demand,
 				enum castkms_composer_client client,

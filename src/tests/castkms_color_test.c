@@ -412,7 +412,7 @@ static void castkms_color_pipeline_clamps_curve_input(struct kunit *test)
 			.curve_1d_type = DRM_COLOROP_1D_CURVE_SRGB_EOTF,
 		},
 	};
-	struct castkms_plane_state plane_state = {
+	struct castkms_frame_plane plane_state = {
 		.num_colorops = ARRAY_SIZE(colorops),
 		.colorops = colorops,
 	};
@@ -463,7 +463,7 @@ static void castkms_color_pipeline_owns_queued_values(struct kunit *test)
 	struct drm_colorop *curve;
 	struct drm_colorop *ctm;
 	struct castkms_colorop_snapshot snapshots[2];
-	struct castkms_plane_state *plane_state;
+	struct castkms_frame_plane *plane_state;
 	const struct castkms_color_lut *lut = &castkms_srgb_eotf;
 	struct pixel_argb_u16 pixel = {
 		.a = 0xffff,

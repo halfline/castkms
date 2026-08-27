@@ -199,7 +199,7 @@ static void apply_colorop(struct pixel_argb_s32 *pixel,
 }
 
 VISIBLE_IF_KUNIT void
-castkms_apply_colorops(const struct castkms_plane_state *plane_state,
+castkms_apply_colorops(const struct castkms_frame_plane *plane,
 		       struct line_buffer *output_buffer)
 {
 	struct pixel_argb_s32 pixel;
@@ -221,9 +221,9 @@ castkms_apply_colorops(const struct castkms_plane_state *plane_state,
 		pixel.g = output_buffer->pixels[x].g;
 		pixel.b = output_buffer->pixels[x].b;
 
-		for (size_t i = 0; i < plane_state->num_colorops; i++) {
+		for (size_t i = 0; i < plane->num_colorops; i++) {
 			const struct castkms_colorop_snapshot *colorop =
-				&plane_state->colorops[i];
+				&plane->colorops[i];
 
 			if (!colorop->bypass)
 				apply_colorop(&pixel, colorop);
@@ -456,7 +456,7 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 	plane_buffer.pixels = &stage_buffer->pixels[dst_x_start];
 	current_plane->pixel_read_line(&current_plane->frame, src_x_start, src_y_start,
 				       direction, pixel_count, plane_buffer.pixels);
-	castkms_apply_colorops(current_plane, &plane_buffer);
+	castkms_apply_colorops(&current_plane->frame, &plane_buffer);
 	pre_mul_alpha_blend(&plane_buffer, output_buffer,
 			    dst_x_start, pixel_count);
 }

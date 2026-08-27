@@ -1,12 +1,46 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <drm/drm_colorop.h>
 #include <drm/drm_print.h>
 #include <drm/drm_property.h>
 #include <drm/drm_plane.h>
 
-#include "castkms_drv.h"
+#include <kunit/visibility.h>
+
+#include "castkms_colorop.h"
+
+VISIBLE_IF_KUNIT int
+castkms_colorop_snapshot_init(struct castkms_colorop_snapshot *snapshot,
+			      const struct drm_colorop *colorop,
+			      const struct drm_colorop_state *state)
+{
+	memset(snapshot, 0, sizeof(*snapshot));
+	snapshot->type = colorop->type;
+	snapshot->bypass = state->bypass;
+
+	switch (colorop->type) {
+	case DRM_COLOROP_1D_CURVE:
+		snapshot->curve_1d_type = state->curve_1d_type;
+		break;
+	case DRM_COLOROP_CTM_3X4:
+		if (!state->data)
+			break;
+		if (WARN_ON(state->data->length != sizeof(snapshot->ctm)))
+			return -EINVAL;
+		memcpy(&snapshot->ctm, state->data->data,
+		       sizeof(snapshot->ctm));
+		snapshot->has_ctm = true;
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_colorop_snapshot_init);
 
 static const u64 supported_tfs =
 	BIT(DRM_COLOROP_1D_CURVE_SRGB_EOTF) |

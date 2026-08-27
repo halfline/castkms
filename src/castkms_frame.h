@@ -8,6 +8,8 @@
 #include <drm/drm_colorop.h>
 #include <drm/drm_rect.h>
 
+#include "castkms_colorop.h"
+
 struct drm_framebuffer;
 struct iosys_map;
 
@@ -96,6 +98,8 @@ struct conversion_matrix {
  * @frame_info: Source image and placement
  * @pixel_read_line: Format-specific source conversion function
  * @conversion_matrix: YUV-to-RGB conversion matrix
+ * @num_colorops: Number of entries in @colorops
+ * @colorops: Value-owned color pipeline
  * @zpos: Normalized stacking position
  * @is_cursor: Whether this is the cursor plane
  */
@@ -103,6 +107,8 @@ struct castkms_frame_plane {
 	struct castkms_frame_info *frame_info;
 	pixel_read_line_t pixel_read_line;
 	struct conversion_matrix conversion_matrix;
+	size_t num_colorops;
+	struct castkms_colorop_snapshot *colorops;
 	u32 zpos;
 	bool is_cursor;
 };
