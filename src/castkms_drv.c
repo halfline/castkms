@@ -69,9 +69,13 @@ static bool enable_cursor = true;
 module_param_named(enable_cursor, enable_cursor, bool, 0444);
 MODULE_PARM_DESC(enable_cursor, "Enable/Disable cursor support");
 
-static bool enable_writeback = true;
+static bool enable_writeback;
 module_param_named(enable_writeback, enable_writeback, bool, 0444);
 MODULE_PARM_DESC(enable_writeback, "Enable/Disable writeback connector support");
+
+static bool enable_fbdev;
+module_param_named(enable_fbdev, enable_fbdev, bool, 0444);
+MODULE_PARM_DESC(enable_fbdev, "Enable/Disable the development fbdev client");
 
 #ifdef CASTKMS_HAVE_AUDIO
 static bool enable_audio = true;
@@ -92,6 +96,11 @@ static const bool enable_cec;
 static bool enable_crc;
 module_param_named(enable_crc, enable_crc, bool, 0444);
 MODULE_PARM_DESC(enable_crc, "Enable/Disable development CRTC CRC capture");
+
+static bool enable_configfs;
+module_param_named(enable_configfs, enable_configfs, bool, 0444);
+MODULE_PARM_DESC(enable_configfs,
+		 "Enable/Disable development configfs topology support");
 
 static bool enable_overlay;
 module_param_named(enable_overlay, enable_overlay, bool, 0444);
@@ -461,7 +470,8 @@ int castkms_create(struct castkms_config *config)
 	if (ret)
 		goto out_audio;
 
-	drm_client_setup(&castkms_device->drm, NULL);
+	if (enable_fbdev)
+		drm_client_setup(&castkms_device->drm, NULL);
 
 	return 0;
 
@@ -483,9 +493,11 @@ static int __init castkms_init(void)
 	struct castkms_config *config;
 	unsigned int feature_max_outputs;
 
-	ret = castkms_configfs_register();
-	if (ret)
-		return ret;
+	if (enable_configfs) {
+		ret = castkms_configfs_register();
+		if (ret)
+			return ret;
+	}
 
 	if (!create_default_dev)
 		return 0;
@@ -520,7 +532,8 @@ static int __init castkms_init(void)
 	return 0;
 
 err_configfs:
-	castkms_configfs_unregister();
+	if (enable_configfs)
+		castkms_configfs_unregister();
 	return ret;
 }
 
@@ -551,7 +564,8 @@ EXPORT_SYMBOL_IF_KUNIT(castkms_destroy);
 
 static void __exit castkms_exit(void)
 {
-	castkms_configfs_unregister();
+	if (enable_configfs)
+		castkms_configfs_unregister();
 
 	if (!default_config)
 		return;
