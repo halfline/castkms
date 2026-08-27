@@ -108,6 +108,9 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 		crtc_state->active_capture = NULL;
 		spin_unlock_irq(&out->dispatch_lock);
 		if (active_capture) {
+			castkms_capture_buffer_set_damage(active_capture,
+						  &frame->damage,
+						  frame->full_damage);
 			castkms_capture_complete_frame(out, active_capture,
 						       capture_ret);
 		}

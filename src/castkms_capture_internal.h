@@ -9,6 +9,8 @@
 #include <linux/list.h>
 #include <linux/types.h>
 
+#include <drm/drm_rect.h>
+
 #include "castkms_capture.h"
 #include "castkms_output_buffer.h"
 
@@ -58,6 +60,8 @@ struct castkms_capture_buffer {
 	enum castkms_capture_sync_mode sync_mode;
 	bool reuse_callback_armed;
 	enum castkms_capture_buffer_state state;
+	struct drm_rect damage_clip;
+	bool full_damage;
 };
 
 bool castkms_capture_buffer_state_transition_valid(
@@ -78,7 +82,7 @@ static inline void castkms_capture_buffer_set_state(
 void castkms_capture_buffer_finish(
 	struct castkms_capture_buffer *buffer,
 	struct castkms_capture_completion *completion,
-	int status, bool cancelled, bool mode_changed,
+	int status, bool cancelled, bool mode_changed, bool full_damage,
 	u64 mode_generation, u64 sequence, ktime_t timestamp);
 void castkms_capture_buffer_destroy(struct castkms_capture_buffer *buffer);
 void castkms_capture_buffer_remove_reuse_callback(

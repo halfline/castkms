@@ -474,6 +474,14 @@ struct drm_event_castkms_grant_state {
 };
 
 /**
+ * DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE:
+ *
+ * The successful frame's damage rectangle covers the complete captured
+ * output.
+ */
+#define DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE	(1U << 0)
+
+/**
  * DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED:
  *
  * The queued buffer was returned because its mode generation became stale.
@@ -495,7 +503,14 @@ struct drm_event_castkms_grant_state {
  * @status: zero on success or a negative errno on asynchronous failure
  * @flags: bitmask of DRM_CASTKMS_CAPTURE_FRAME_* values
  * @dropped_frames: frames skipped since this buffer was queued
+ * @damage_x: left edge of the changed rectangle in output coordinates
+ * @damage_y: top edge of the changed rectangle in output coordinates
+ * @damage_width: width of the changed rectangle; zero on failure
+ * @damage_height: height of the changed rectangle; zero on failure
  * @reserved: must be zero
+ *
+ * The damage rectangle is valid only when @status is zero. Its coordinates
+ * describe a bounding box in the captured output, not the source framebuffer.
  */
 struct drm_event_castkms_capture_frame {
 	struct drm_event base;
@@ -508,6 +523,10 @@ struct drm_event_castkms_capture_frame {
 	__s32 status;
 	__u32 flags;
 	__u32 dropped_frames;
+	__s32 damage_x;
+	__s32 damage_y;
+	__u32 damage_width;
+	__u32 damage_height;
 	__u32 reserved;
 };
 

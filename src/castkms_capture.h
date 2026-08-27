@@ -6,6 +6,8 @@
 #include <linux/ktime.h>
 #include <linux/types.h>
 
+#include <drm/drm_rect.h>
+
 #include "castkms_capture_output.h"
 
 struct drm_crtc_state;
@@ -35,8 +37,10 @@ enum castkms_capture_sync_mode {
  * @timestamp: Vblank timestamp, or the cancellation timestamp
  * @mode_generation: Output mode generation at completion
  * @dropped_frames: Frames skipped while this request was queued
+ * @damage: Captured damage; empty when @status is nonzero
  * @cancelled: The request was withdrawn instead of reported as a frame
  * @mode_changed: The request was invalidated by an output mode change
+ * @full_damage: @damage covers the complete captured frame
  */
 struct castkms_capture_result {
 	int status;
@@ -44,8 +48,10 @@ struct castkms_capture_result {
 	ktime_t timestamp;
 	u64 mode_generation;
 	u32 dropped_frames;
+	struct drm_rect damage;
 	bool cancelled;
 	bool mode_changed;
+	bool full_damage;
 };
 
 /**
@@ -105,6 +111,9 @@ bool castkms_capture_prepare_frame(struct castkms_output *output,
 				   u64 sequence, ktime_t timestamp);
 const struct castkms_output_buffer *
 castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
+void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
+				       const struct drm_rect *clip,
+				       bool full_damage);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);

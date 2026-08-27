@@ -11,6 +11,7 @@
 #include <linux/list.h>
 #include <linux/slab.h>
 
+#include <drm/drm_rect.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem.h>
@@ -117,7 +118,7 @@ static void castkms_capture_signal_fence(struct dma_fence *fence, int status)
 void castkms_capture_buffer_finish(
 	struct castkms_capture_buffer *buffer,
 	struct castkms_capture_completion *completion,
-	int status, bool cancelled, bool mode_changed,
+	int status, bool cancelled, bool mode_changed, bool full_damage,
 	u64 mode_generation, u64 sequence, ktime_t timestamp)
 {
 	struct castkms_capture_result *result = &completion->result;
@@ -132,8 +133,10 @@ void castkms_capture_buffer_finish(
 	result->timestamp = timestamp;
 	result->mode_generation = mode_generation;
 	result->dropped_frames = buffer->dropped_frames;
+	result->damage = status ? (struct drm_rect) {} : buffer->damage_clip;
 	result->cancelled = cancelled;
 	result->mode_changed = mode_changed;
+	result->full_damage = !status && full_damage;
 
 	completion->request = buffer->request;
 	completion->fence = buffer->completion_fence;
@@ -449,6 +452,14 @@ castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer)
 	return &buffer->output;
 }
 
+void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
+				       const struct drm_rect *clip,
+				       bool full_damage)
+{
+	buffer->damage_clip = *clip;
+	buffer->full_damage = full_damage;
+}
+
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status)
@@ -483,7 +494,8 @@ void castkms_capture_complete_frame(struct castkms_output *output,
 	capture->in_flight_buffer = NULL;
 	castkms_capture_buffer_finish(
 		buffer, &completion, status, false, mode_changed,
-		capture->mode_generation, buffer->sequence, buffer->timestamp);
+		buffer->full_damage, capture->mode_generation,
+		buffer->sequence, buffer->timestamp);
 	spin_unlock_irqrestore(&capture->state_lock, flags);
 
 	castkms_frame_dispatch_put(output, CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE);
@@ -738,7 +750,7 @@ castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 			buffer->reuse_callback_armed = false;
 			castkms_capture_buffer_finish(
 				buffer, &failed_completion, ret, false, false,
-				capture->mode_generation, 0, ktime_get());
+				false, capture->mode_generation, 0, ktime_get());
 			spin_unlock_irqrestore(&capture->state_lock, flags);
 		}
 	}
@@ -772,7 +784,7 @@ castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 		remove_callback = buffer->reuse_callback_armed;
 		buffer->reuse_callback_armed = false;
 		castkms_capture_buffer_finish(
-			buffer, &failed_completion, ret, false, false,
+			buffer, &failed_completion, ret, false, false, false,
 			capture->mode_generation, 0, ktime_get());
 	}
 	spin_unlock(&capture->state_lock);

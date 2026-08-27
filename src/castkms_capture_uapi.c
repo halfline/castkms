@@ -74,8 +74,8 @@ static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32);
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
-static_assert(sizeof(struct drm_event_castkms_capture_frame) == 64);
-static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 60);
+static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80);
+static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76);
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -587,7 +587,13 @@ static void castkms_capture_uapi_request_complete(
 	event->status = result->status;
 	if (result->mode_changed)
 		event->flags |= DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED;
+	if (result->full_damage)
+		event->flags |= DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE;
 	event->dropped_frames = result->dropped_frames;
+	event->damage_x = result->damage.x1;
+	event->damage_y = result->damage.y1;
+	event->damage_width = drm_rect_width(&result->damage);
+	event->damage_height = drm_rect_height(&result->damage);
 
 	/* drm_send_event() takes ownership of the adapter allocation. */
 	drm_send_event(uapi_request->dev, &uapi_request->pending);

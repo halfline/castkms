@@ -36,9 +36,9 @@ static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
 	      "capture unregister ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48,
 	      "capture queue ABI size changed");
-static_assert(sizeof(struct drm_event_castkms_capture_frame) == 64,
+static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80,
 	      "capture event ABI size changed");
-static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 60,
+static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76,
 	      "capture event ABI layout changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
@@ -432,24 +432,67 @@ static int
 validate_capture_event(const struct drm_event_castkms_capture_frame *event,
 		       uint32_t stream_id, uint32_t buffer_id,
 		       uint64_t user_data, uint64_t mode_generation,
-		       uint64_t after_sequence,
+		       uint32_t width, uint32_t height, uint64_t after_sequence,
 		       bool may_have_dropped_frames)
 {
 	if (event->base.type != DRM_CASTKMS_CAPTURE_EVENT_FRAME ||
 	    event->base.length != sizeof(*event) ||
 	    event->user_data != user_data || event->stream_id != stream_id ||
 	    event->buffer_id != buffer_id || event->status ||
-	    event->flags ||
+	    event->flags & ~(uint32_t)DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE ||
 	    event->sequence <= after_sequence ||
 	    ((!may_have_dropped_frames && event->dropped_frames) ||
 	     (may_have_dropped_frames &&
 	      event->dropped_frames > event->sequence - after_sequence - 1)) ||
 	    event->timestamp_ns <= 0 ||
 	    event->mode_generation != mode_generation ||
+	    event->damage_x < 0 || event->damage_y < 0 ||
+	    !event->damage_width || !event->damage_height ||
+	    (uint32_t)event->damage_x + event->damage_width > width ||
+	    (uint32_t)event->damage_y + event->damage_height > height ||
 	    event->reserved) {
 		fprintf(stderr, "unexpected capture completion event\n");
 		return -1;
 	}
+	return 0;
+}
+
+static int
+validate_capture_damage(const struct drm_event_castkms_capture_frame *event,
+			uint32_t width, uint32_t height)
+{
+	bool full_damage = !!(event->flags & DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE);
+
+	if (event->damage_x < 0 || event->damage_y < 0 ||
+	    !event->damage_width || !event->damage_height) {
+		fprintf(stderr, "damage rect is empty or has negative origin\n");
+		return -1;
+	}
+
+	if ((uint32_t)event->damage_x + event->damage_width > width ||
+	    (uint32_t)event->damage_y + event->damage_height > height) {
+		fprintf(stderr,
+			"damage rect exceeds frame bounds: (%d,%d)+%ux%u in %ux%u\n",
+			event->damage_x, event->damage_y,
+			event->damage_width, event->damage_height,
+			width, height);
+		return -1;
+	}
+
+	if (full_damage) {
+		if (event->damage_x != 0 || event->damage_y != 0 ||
+		    event->damage_width != width ||
+		    event->damage_height != height) {
+			fprintf(stderr,
+				"FULL_DAMAGE flag set but rect is not full frame: "
+				"(%d,%d)+%ux%u vs %ux%u\n",
+				event->damage_x, event->damage_y,
+				event->damage_width, event->damage_height,
+				width, height);
+			return -1;
+		}
+	}
+
 	return 0;
 }
 
@@ -1039,8 +1082,10 @@ static int run_deliver_one(int inherited_fd, uint32_t crtc_id)
 	if (wait_for_capture_fence_timeout(fence_fd, 8000))
 		goto out_close;
 	if (validate_capture_event(&event, stream.stream_id, buffer_id,
-				   user_data, stream.mode_generation,
-				   0, true))
+				   user_data, stream.mode_generation, width,
+				   height, 0, true))
+		goto out_close;
+	if (validate_capture_damage(&event, width, height))
 		goto out_close;
 	if (sync_dmabuf_cpu_access(dmabuf_fd,
 				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
@@ -1490,9 +1535,16 @@ int main(int argc, char **argv)
 	capture_fence_fd = -1;
 	if (validate_capture_event(&capture_event, first_stream.stream_id,
 				   buffer_id, capture_user_data,
-				   first_stream.mode_generation,
+				   first_stream.mode_generation, width, height,
 				   0, false))
 		goto out_close;
+	if (validate_capture_damage(&capture_event, width, height))
+		goto out_close;
+	if (!(capture_event.flags & DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE)) {
+		fprintf(stderr,
+			"initial capture expected full damage from legacy modeset\n");
+		goto out_close;
+	}
 	if (sync_dmabuf_cpu_access(dmabuf_fd,
 				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
 		goto out_close;
@@ -1519,7 +1571,7 @@ int main(int argc, char **argv)
 		goto out_close;
 	if (validate_capture_event(&capture_event, first_stream.stream_id,
 				   second_buffer_id, capture_user_data + 1,
-				   first_stream.mode_generation,
+				   first_stream.mode_generation, width, height,
 				   first_sequence, true))
 		goto out_close;
 	close(second_fence_fd);
@@ -1541,6 +1593,7 @@ int main(int argc, char **argv)
 	       implicit_wait_observed ? "observed" : "not-observed");
 	printf("capture_implicit_fence=pass\n");
 	printf("capture_frame_delivery=pass\n");
+	printf("capture_damage_validation=pass\n");
 	printf("capture_fence_ownership=pass\n");
 	printf("capture_buffer_implicit=pass\n");
 
@@ -1668,7 +1721,7 @@ int main(int argc, char **argv)
 		    wait_for_signaled_syncobj_point(fd, ready_syncobj, 1) ||
 	    validate_capture_event(&capture_event, first_stream.stream_id,
 				   buffer_id, capture_user_data + 2,
-				   first_stream.mode_generation,
+				   first_stream.mode_generation, width, height,
 				   first_sequence, false))
 		goto out_close;
 	explicit_sequence = capture_event.sequence;
@@ -1735,7 +1788,7 @@ int main(int argc, char **argv)
 	    wait_for_signaled_syncobj_point(fd, second_ready_syncobj, 1) ||
 	    validate_capture_event(&capture_event, first_stream.stream_id,
 				   second_buffer_id, capture_user_data + 3,
-				   first_stream.mode_generation,
+				   first_stream.mode_generation, width, height,
 				   explicit_sequence, false))
 		goto out_close;
 	explicit_sequence = capture_event.sequence;
@@ -1743,7 +1796,7 @@ int main(int argc, char **argv)
 	    wait_for_signaled_syncobj_point(fd, ready_syncobj, 2) ||
 	    validate_capture_event(&capture_event, first_stream.stream_id,
 				   buffer_id, capture_user_data + 4,
-				   first_stream.mode_generation,
+				   first_stream.mode_generation, width, height,
 				   explicit_sequence, true))
 		goto out_close;
 	if (sync_dmabuf_cpu_access(second_dmabuf_fd,

@@ -175,7 +175,7 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream,
 		buffer->reuse_callback_armed = false;
 		castkms_capture_buffer_finish(
 			buffer, &completion, status, status == -ECANCELED,
-			false, capture->mode_generation, 0, ktime_get());
+			false, false, capture->mode_generation, 0, ktime_get());
 		put_dispatch = true;
 	}
 
@@ -258,7 +258,7 @@ bool castkms_capture_mode_changed(struct castkms_output *output,
 		remove_callback = buffer->reuse_callback_armed;
 		buffer->reuse_callback_armed = false;
 		castkms_capture_buffer_finish(
-			buffer, completion, -ESTALE, false, true,
+			buffer, completion, -ESTALE, false, true, false,
 			capture->mode_generation, 0, ktime_get());
 		cancelled = true;
 	}
