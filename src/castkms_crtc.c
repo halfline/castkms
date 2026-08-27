@@ -2,11 +2,13 @@
 
 #include <linux/dma-fence.h>
 #include <linux/sort.h>
+#include <linux/string.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_auth.h>
 #include <drm/drm_blend.h>
+#include <drm/drm_damage_helper.h>
 #include <drm/drm_fixed.h>
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_managed.h>
@@ -44,6 +46,27 @@ castkms_sort_frame_planes(struct castkms_frame_plane **planes, size_t count)
 	     NULL);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_sort_frame_planes);
+
+static bool castkms_plane_colorops_equal(
+	const struct castkms_plane_state *old_state,
+	const struct castkms_plane_state *new_state)
+{
+	size_t size;
+
+	if (old_state->frame.num_colorops != new_state->frame.num_colorops)
+		return false;
+
+	size = new_state->frame.num_colorops *
+	       sizeof(*new_state->frame.colorops);
+	if (!size)
+		return true;
+
+	if (!old_state->frame.colorops || !new_state->frame.colorops)
+		return false;
+
+	return !memcmp(old_state->frame.colorops, new_state->frame.colorops,
+		       size);
+}
 
 static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 {
@@ -170,6 +193,112 @@ static const struct drm_crtc_funcs castkms_crtc_crc_funcs = {
 	.set_crc_source		= castkms_set_crc_source,
 	.verify_crc_source	= castkms_verify_crc_source,
 };
+
+static void castkms_compute_frame_damage(struct castkms_crtc_state *castkms_state,
+					 struct drm_atomic_commit *state,
+					 struct drm_crtc *crtc)
+{
+	struct drm_crtc_state *old_crtc_state =
+		drm_atomic_get_old_crtc_state(state, crtc);
+	struct drm_crtc_state *new_crtc_state = &castkms_state->base;
+	int hdisplay = new_crtc_state->mode.hdisplay;
+	int vdisplay = new_crtc_state->mode.vdisplay;
+	struct drm_rect merged = {};
+	struct drm_plane *plane;
+	bool has_clips = false;
+	int i;
+
+	castkms_state->frame.damage = (struct drm_rect){
+		.x1 = 0, .y1 = 0,
+		.x2 = hdisplay, .y2 = vdisplay,
+	};
+	castkms_state->frame.full_damage = true;
+
+	if (!old_crtc_state ||
+	    old_crtc_state->plane_mask != new_crtc_state->plane_mask ||
+	    new_crtc_state->mode_changed || new_crtc_state->active_changed ||
+	    old_crtc_state->background_color != new_crtc_state->background_color ||
+	    old_crtc_state->gamma_lut != new_crtc_state->gamma_lut ||
+	    old_crtc_state->degamma_lut != new_crtc_state->degamma_lut)
+		return;
+
+	drm_for_each_plane_mask(plane, crtc->dev, new_crtc_state->plane_mask) {
+		struct drm_plane_state *old_ps =
+			drm_atomic_get_old_plane_state(state, plane);
+		struct drm_plane_state *new_ps =
+			drm_atomic_get_new_plane_state(state, plane);
+
+		if (!old_ps || !new_ps || old_ps->visible != new_ps->visible)
+			return;
+	}
+
+	for (i = 0; i < castkms_state->frame.num_planes; i++) {
+		struct castkms_plane_state *ps = container_of(
+			castkms_state->frame.planes[i],
+			struct castkms_plane_state, frame);
+		struct drm_plane_state *new_ps = &ps->base.base;
+		struct drm_plane_state *old_ps =
+			drm_atomic_get_old_plane_state(state, new_ps->plane);
+		struct castkms_plane_state *old_castkms_ps;
+		struct drm_rect clip;
+		int off_x, off_y;
+
+		if (!old_ps)
+			return;
+		old_castkms_ps = to_castkms_plane_state(old_ps);
+
+		if (old_ps->rotation != DRM_MODE_ROTATE_0 ||
+		    new_ps->rotation != DRM_MODE_ROTATE_0)
+			return;
+
+		if (old_ps->fb != new_ps->fb ||
+		    !drm_rect_equals(&old_ps->src, &new_ps->src) ||
+		    !drm_rect_equals(&old_ps->dst, &new_ps->dst) ||
+		    old_ps->normalized_zpos != new_ps->normalized_zpos ||
+		    old_ps->alpha != new_ps->alpha ||
+		    old_ps->pixel_blend_mode != new_ps->pixel_blend_mode ||
+		    old_ps->color_encoding != new_ps->color_encoding ||
+		    old_ps->color_range != new_ps->color_range ||
+		    old_ps->color_pipeline != new_ps->color_pipeline ||
+		    !castkms_plane_colorops_equal(old_castkms_ps, ps))
+			return;
+
+		if (!drm_atomic_helper_damage_merged(old_ps, new_ps, &clip))
+			continue;
+
+		off_x = new_ps->dst.x1 - (new_ps->src.x1 >> 16);
+		off_y = new_ps->dst.y1 - (new_ps->src.y1 >> 16);
+		clip.x1 += off_x;
+		clip.y1 += off_y;
+		clip.x2 += off_x;
+		clip.y2 += off_y;
+
+		if (!has_clips) {
+			merged = clip;
+			has_clips = true;
+		} else {
+			merged.x1 = min(merged.x1, clip.x1);
+			merged.y1 = min(merged.y1, clip.y1);
+			merged.x2 = max(merged.x2, clip.x2);
+			merged.y2 = max(merged.y2, clip.y2);
+		}
+	}
+
+	if (!has_clips)
+		return;
+
+	merged.x1 = clamp(merged.x1, 0, hdisplay);
+	merged.y1 = clamp(merged.y1, 0, vdisplay);
+	merged.x2 = clamp(merged.x2, 0, hdisplay);
+	merged.y2 = clamp(merged.y2, 0, vdisplay);
+
+	if (merged.x1 == 0 && merged.y1 == 0 &&
+	    merged.x2 == hdisplay && merged.y2 == vdisplay)
+		return;
+
+	castkms_state->frame.damage = merged;
+	castkms_state->frame.full_damage = false;
+}
 
 static void castkms_frame_stage_init_crtc(
 	struct castkms_frame_stage *frame,
@@ -308,6 +437,7 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 	}
 
 	castkms_frame_stage_init_crtc(frame, crtc_state);
+	castkms_compute_frame_damage(castkms_state, state, crtc);
 
 	return 0;
 

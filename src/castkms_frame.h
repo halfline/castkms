@@ -127,6 +127,8 @@ struct castkms_color_lut {
  * @width: Output width in pixels
  * @height: Output height in pixels
  * @background_color: Background fill color
+ * @damage: Bounding box of frame damage in output coordinates
+ * @full_damage: Whether @damage covers the complete output
  *
  * A frame stage contains no DRM atomic state. Live commits and owned capture
  * snapshots both produce it, and the renderer consumes only this interface.
@@ -138,6 +140,8 @@ struct castkms_frame_stage {
 	u32 width;
 	u32 height;
 	u64 background_color;
+	struct drm_rect damage;
+	bool full_damage;
 };
 
 #endif /* _CASTKMS_FRAME_H_ */
