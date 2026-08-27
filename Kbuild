@@ -4,9 +4,14 @@ obj-m += castkms.o
 obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += src/tests/
 
 CASTKMS_BUILD_AUDIO ?= y
+CASTKMS_BUILD_CEC ?= y
 
 ifeq ($(filter y n,$(CASTKMS_BUILD_AUDIO)),)
 $(error CASTKMS_BUILD_AUDIO must be y or n)
+endif
+
+ifeq ($(filter y n,$(CASTKMS_BUILD_CEC)),)
+$(error CASTKMS_BUILD_CEC must be y or n)
 endif
 
 castkms-y := \
@@ -44,7 +49,13 @@ castkms-y += src/castkms_audio.o
 ccflags-y += -DCASTKMS_HAVE_AUDIO=1
 endif
 endif
+ifeq ($(CASTKMS_BUILD_CEC),y)
+ifneq ($(wildcard $(srctree)/include/drm/display/drm_hdmi_cec_helper.h),)
+ifneq ($(filter y m,$(CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER)),)
 castkms-y += src/castkms_cec_core.o src/castkms_cec_uapi.o
 ccflags-y += -DCASTKMS_HAVE_CEC=1
+endif
+endif
+endif
 
 ccflags-y += -I$(src)/src -I$(src)/include/uapi

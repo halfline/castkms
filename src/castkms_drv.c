@@ -76,9 +76,11 @@ MODULE_PARM_DESC(enable_audio, "Enable/Disable HDMI audio output support");
 static const bool enable_audio;
 #endif
 
-static bool enable_cec;
+#ifdef CASTKMS_HAVE_CEC
+static bool enable_cec = true;
 module_param_named(enable_cec, enable_cec, bool, 0444);
 MODULE_PARM_DESC(enable_cec, "Enable/Disable CEC adapter support");
+#endif
 
 static bool enable_crc;
 module_param_named(enable_crc, enable_crc, bool, 0444);
@@ -561,4 +563,6 @@ MODULE_LICENSE("GPL");
 #ifdef CASTKMS_HAVE_AUDIO
 MODULE_SOFTDEP("pre: snd snd-pcm");
 #endif
+#ifdef CASTKMS_HAVE_CEC
 MODULE_SOFTDEP("pre: cec drm_display_helper");
+#endif

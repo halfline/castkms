@@ -59,6 +59,9 @@ without ending its authority.
 `castkms_cec_uapi` performs DRM object lookup, checks grant rights,
 and translates the core snapshot into the public CEC structures.
 
+The audio/CEC build matrix also checks CEC's undefined-symbol set so a grant,
+DRM-file, or event dependency cannot appear in the core object.
+
 ## HDMI audio
 
 The optional ALSA device is a single device-global card with one playback-only

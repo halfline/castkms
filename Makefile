@@ -2,8 +2,11 @@
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 CASTKMS_BUILD_AUDIO ?= y
+CASTKMS_BUILD_CEC ?= y
 
-CASTKMS_KBUILD_OPTIONS := CASTKMS_BUILD_AUDIO=$(CASTKMS_BUILD_AUDIO)
+CASTKMS_KBUILD_OPTIONS := \
+	CASTKMS_BUILD_AUDIO=$(CASTKMS_BUILD_AUDIO) \
+	CASTKMS_BUILD_CEC=$(CASTKMS_BUILD_CEC)
 
 .PHONY: all build-matrix check check-architecture check-ioctls \
 	check-shell clean install kunit module-clean tools
@@ -34,13 +37,24 @@ build-matrix:
 	case "$$(modinfo -F depends ./castkms.ko)" in *snd*) false;; esac
 	case "$$(modinfo -F softdep ./castkms.ko)" in *snd*) false;; esac
 	$(MAKE) module-clean
-	$(MAKE) all CASTKMS_BUILD_AUDIO=n
+	$(MAKE) all CASTKMS_BUILD_AUDIO=n CASTKMS_BUILD_CEC=y
 	test ! -e src/castkms_audio.o
+	test -e src/castkms_cec_core.o
+	test -e src/castkms_cec_uapi.o
 	case "$$(modinfo -F depends ./castkms.ko)" in *snd*) false;; esac
 	case "$$(modinfo -F softdep ./castkms.ko)" in *snd*) false;; esac
 	$(MAKE) module-clean
-	$(MAKE) all CASTKMS_BUILD_AUDIO=y
+	$(MAKE) all CASTKMS_BUILD_AUDIO=y CASTKMS_BUILD_CEC=y
 	test -e src/castkms_audio.o
+	test -e src/castkms_cec_core.o
+	test -e src/castkms_cec_uapi.o
+	! grep -Eq 'castkms_grant|drm_file|drm_pending_event|drm_castkms|castkms_drm' \
+		src/castkms_cec_core.c src/castkms_cec_core.h
+	case "$$(nm -u src/castkms_cec_core.o)" in \
+		*castkms_grant*|*drm_event*|*drm_send_event*|*get_file_active*|*fput*) false;; \
+	esac
+	nm -u src/castkms_cec_uapi.o | grep -q castkms_grant_begin
+	nm -u src/castkms_cec_uapi.o | grep -q drm_event_reserve_init
 
 check: check-architecture check-ioctls check-shell
 	$(MAKE) -C tools check
