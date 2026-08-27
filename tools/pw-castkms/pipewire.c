@@ -142,6 +142,15 @@ static void on_stream_param_changed(void *data, uint32_t id,
 		SPA_PARAM_META_size,
 			SPA_POD_Int(sizeof(struct spa_meta_header)));
 
+	params[param_count++] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_VideoDamage),
+		SPA_PARAM_META_size,
+			SPA_POD_CHOICE_RANGE_Int(
+				sizeof(struct spa_meta_region),
+				sizeof(struct spa_meta_region),
+				sizeof(struct spa_meta_region) * 16));
+
 	status = pw_stream_update_params(bridge->stream, params, param_count);
 	if (status < 0)
 		pw_castkms_fail(bridge, "pw_stream_update_params failed", status);
@@ -271,6 +280,7 @@ static int set_frame_metadata(struct pw_castkms *bridge,
 {
 	const struct captured_frame *frame = &buffer->frame;
 	struct spa_meta_header *header;
+	struct spa_meta *damage_meta;
 
 	(void)bridge;
 
@@ -281,6 +291,24 @@ static int set_frame_metadata(struct pw_castkms *bridge,
 		header->dts_offset = 0;
 		header->seq = frame->sequence;
 		header->flags = 0;
+	}
+
+	damage_meta = spa_buffer_find_meta(spa_buffer, SPA_META_VideoDamage);
+	if (damage_meta) {
+		struct spa_meta_region *region;
+		uint32_t index = 0;
+
+		spa_meta_for_each(region, damage_meta) {
+			if (!index && frame->damage.width && frame->damage.height) {
+				region->region.position.x = frame->damage.x;
+				region->region.position.y = frame->damage.y;
+				region->region.size.width = frame->damage.width;
+				region->region.size.height = frame->damage.height;
+			} else {
+				region->region = SPA_REGION(0, 0, 0, 0);
+			}
+			index++;
+		}
 	}
 
 	return 0;

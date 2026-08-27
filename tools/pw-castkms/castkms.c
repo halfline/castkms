@@ -652,6 +652,12 @@ static bool handle_frame_event(
 		.timestamp_ns = event->timestamp_ns,
 		.flags = event->flags,
 		.dropped_frames = event->dropped_frames,
+		.damage = {
+			.x = event->damage_x,
+			.y = event->damage_y,
+			.width = event->damage_width,
+			.height = event->damage_height,
+		},
 	};
 	buffer->state = CAPTURE_BUFFER_READY;
 	*frame_ready = true;

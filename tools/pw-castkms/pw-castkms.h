@@ -29,11 +29,19 @@ enum capture_buffer_state {
 	CAPTURE_BUFFER_READY,
 };
 
+struct capture_damage {
+	int32_t x;
+	int32_t y;
+	uint32_t width;
+	uint32_t height;
+};
+
 struct captured_frame {
 	uint64_t sequence;
 	int64_t timestamp_ns;
 	uint32_t flags;
 	uint32_t dropped_frames;
+	struct capture_damage damage;
 };
 
 struct capture_buffer {
