@@ -13,6 +13,9 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_writeback.h>
 
+#include "castkms_frame.h"
+#include "castkms_plane.h"
+
 #define DEFAULT_DEVICE_NAME "castkms"
 
 #define XRES_MIN    10
@@ -26,68 +29,6 @@
 
 #define NUM_OVERLAY_PLANES 8
 #define CASTKMS_MAX_OUTPUT_OBJECTS 31
-
-#define CASTKMS_LUT_SIZE 256
-
-/**
- * struct castkms_frame_info - Structure to store the state of a frame
- *
- * @fb: backing drm framebuffer
- * @src: source rectangle of this frame in the source framebuffer, stored in 16.16 fixed-point form
- * @dst: destination rectangle in the crtc buffer, stored in whole pixel units
- * @map: Borrowed view of raw per-plane buffer-object mappings. Framebuffer
- *       offsets have not been applied, and the mapping owner must outlive this
- *       frame description.
- * @rotation: rotation applied to the source.
- *
- * @src and @dst should have the same size modulo the rotation.
- */
-struct castkms_frame_info {
-	struct drm_framebuffer *fb;
-	struct drm_rect src, dst;
-	const struct iosys_map *map;
-	unsigned int rotation;
-};
-
-struct pixel_argb_s32 {
-	s32 a, r, g, b;
-};
-
-/**
- * struct pixel_argb_u16 - Internal representation of a pixel color.
- * @a: Alpha component value, stored in 16 bits, without padding, using
- *     machine endianness
- * @r: Red component value, stored in 16 bits, without padding, using
- *     machine endianness
- * @g: Green component value, stored in 16 bits, without padding, using
- *     machine endianness
- * @b: Blue component value, stored in 16 bits, without padding, using
- *     machine endianness
- *
- * The goal of this structure is to keep enough precision to ensure
- * correct composition results in CASTKMS and simplifying color
- * manipulation by splitting each component into its own field.
- * Caution: the byte ordering of this structure is machine-dependent,
- * you can't cast it directly to AR48 or xR48.
- */
-struct pixel_argb_u16 {
-	u16 a, r, g, b;
-};
-
-struct line_buffer {
-	size_t n_pixels;
-	struct pixel_argb_u16 *pixels;
-};
-
-/**
- * typedef pixel_write_t - These functions are used to read a pixel from a
- * &struct pixel_argb_u16, convert it in a specific format and write it in the @out_pixel
- * buffer.
- *
- * @out_pixel: destination address to write the pixel
- * @in_pixel: pixel to write
- */
-typedef void (*pixel_write_t)(u8 *out_pixel, const struct pixel_argb_u16 *in_pixel);
 
 enum castkms_composer_client {
 	CASTKMS_COMPOSER_CLIENT_CRC,
@@ -110,54 +51,7 @@ castkms_composer_demand_is_active(const struct castkms_composer_demand *demand)
 	return demand->crc_enabled || demand->writeback_count;
 }
 
-/**
- * enum pixel_read_direction - Enum used internally by CASTKMS to represent a reading direction in a
- * plane.
- */
-enum pixel_read_direction {
-	READ_BOTTOM_TO_TOP,
-	READ_TOP_TO_BOTTOM,
-	READ_RIGHT_TO_LEFT,
-	READ_LEFT_TO_RIGHT
-};
-
-struct castkms_plane_state;
 struct castkms_output_buffer;
-
-/**
- * typedef pixel_read_line_t - These functions are used to read a pixel line in the source frame,
- * convert it to `struct pixel_argb_u16` and write it to @out_pixel.
- *
- * @plane: plane used as source for the pixel value
- * @x_start: X (width) coordinate of the first pixel to copy. The caller must ensure that x_start
- * is non-negative and smaller than @plane->frame_info->fb->width.
- * @y_start: Y (height) coordinate of the first pixel to copy. The caller must ensure that y_start
- * is non-negative and smaller than @plane->frame_info->fb->height.
- * @direction: direction to use for the copy, starting at @x_start/@y_start
- * @count: number of pixels to copy
- * @out_pixel: pointer where to write the pixel values. They will be written from @out_pixel[0]
- * (included) to @out_pixel[@count] (excluded). The caller must ensure that out_pixel have a
- * length of at least @count.
- */
-typedef void (*pixel_read_line_t)(const struct castkms_plane_state *plane, int x_start,
-				  int y_start, enum pixel_read_direction direction, int count,
-				  struct pixel_argb_u16 out_pixel[]);
-
-/**
- * struct conversion_matrix - Matrix to use for a specific encoding and range
- *
- * @matrix: Conversion matrix from yuv to rgb. The matrix is stored in a row-major manner and is
- * used to compute rgb values from yuv values:
- *     [[r],[g],[b]] = @matrix * [[y],[u],[v]]
- *   OR for yvu formats:
- *     [[r],[g],[b]] = @matrix * [[y],[v],[u]]
- *  The values of the matrix are signed fixed-point values with 32 bits fractional part.
- * @y_offset: Offset to apply on the y value.
- */
-struct conversion_matrix {
-	s64 matrix[3][3];
-	int y_offset;
-};
 
 /**
  * struct castkms_colorop_snapshot - Render state for one color operation
@@ -176,35 +70,6 @@ struct castkms_colorop_snapshot {
 	enum drm_colorop_curve_1d_type curve_1d_type;
 	bool has_ctm;
 	struct drm_color_ctm_3x4 ctm;
-};
-
-/**
- * struct castkms_plane_state - Driver specific plane state
- * @base: base plane state
- * @frame_info: data required for composing computation
- * @pixel_read_line: function to read a pixel line in this plane. The creator of a
- *		     struct castkms_plane_state must ensure that this pointer is valid
- * @conversion_matrix: matrix used for yuv formats to convert to rgb
- * @num_colorops: Number of entries in @colorops
- * @colorops: Value-owned color pipeline selected by this plane update
- */
-struct castkms_plane_state {
-	struct drm_shadow_plane_state base;
-	struct castkms_frame_info *frame_info;
-	pixel_read_line_t pixel_read_line;
-	struct conversion_matrix conversion_matrix;
-	size_t num_colorops;
-	struct castkms_colorop_snapshot *colorops;
-};
-
-struct castkms_plane {
-	struct drm_plane base;
-};
-
-struct castkms_color_lut {
-	const struct drm_color_lut *base;
-	size_t lut_length;
-	s64 channel_value2index_ratio;
 };
 
 /**
@@ -298,9 +163,6 @@ struct castkms_device {
 #define to_castkms_crtc_state(target)\
 	container_of(target, struct castkms_crtc_state, base)
 
-#define to_castkms_plane_state(target)\
-	container_of(target, struct castkms_plane_state, base.base)
-
 /**
  * castkms_create() - Create a device from a configuration
  * @config: Config used to configure the new device
@@ -338,17 +200,6 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev,
  * @castkmsdev: CASTKMS device to initialize
  */
 int castkms_output_init(struct castkms_device *castkmsdev);
-
-/**
- * castkms_plane_init() - Initialize a plane
- *
- * @castkmsdev: CASTKMS device containing the plane
- * @plane_cfg: plane configuration
- */
-struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
-				   struct castkms_config_plane *plane_cfg);
-int castkms_plane_snapshot_colorops(struct castkms_plane_state *plane_state,
-				    struct drm_atomic_state *state);
 
 /* CRC Support */
 const char *const *castkms_get_crc_sources(struct drm_crtc *crtc,

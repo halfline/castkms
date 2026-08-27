@@ -454,7 +454,7 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 	 */
 	plane_buffer.n_pixels = pixel_count;
 	plane_buffer.pixels = &stage_buffer->pixels[dst_x_start];
-	current_plane->pixel_read_line(current_plane, src_x_start, src_y_start,
+	current_plane->pixel_read_line(&current_plane->frame, src_x_start, src_y_start,
 				       direction, pixel_count, plane_buffer.pixels);
 	castkms_apply_colorops(current_plane, &plane_buffer);
 	pre_mul_alpha_blend(&plane_buffer, output_buffer,

@@ -349,7 +349,7 @@ EXPORT_SYMBOL_IF_KUNIT(castkms_argb_u16_from_yuv161616);
  *  pixel.
  */
 #define READ_LINE(function_name, pixel_name, pixel_type, callback, ...)				\
-static void function_name(const struct castkms_plane_state *plane, int x_start,			\
+static void function_name(const struct castkms_frame_plane *plane, int x_start,			\
 			      int y_start, enum pixel_read_direction direction, int count,	\
 			      struct pixel_argb_u16 out_pixel[])				\
 {												\
@@ -394,7 +394,7 @@ static void function_name(const struct castkms_plane_state *plane, int x_start,	
  * [1]: https://lore.kernel.org/dri-devel/d258c8dc-78e9-4509-9037-a98f7f33b3a3@riseup.net/
  */
 
-static void Rx_read_line(const struct castkms_plane_state *plane, int x_start,
+static void Rx_read_line(const struct castkms_frame_plane *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
@@ -448,21 +448,21 @@ static void Rx_read_line(const struct castkms_plane_state *plane, int x_start,
 	}
 }
 
-static void R1_read_line(const struct castkms_plane_state *plane, int x_start,
+static void R1_read_line(const struct castkms_frame_plane *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
 	Rx_read_line(plane, x_start, y_start, direction, count, out_pixel);
 }
 
-static void R2_read_line(const struct castkms_plane_state *plane, int x_start,
+static void R2_read_line(const struct castkms_frame_plane *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
 	Rx_read_line(plane, x_start, y_start, direction, count, out_pixel);
 }
 
-static void R4_read_line(const struct castkms_plane_state *plane, int x_start,
+static void R4_read_line(const struct castkms_frame_plane *plane, int x_start,
 			 int y_start, enum pixel_read_direction direction, int count,
 			 struct pixel_argb_u16 out_pixel[])
 {
@@ -528,7 +528,7 @@ READ_LINE(R8_read_line, px, u8, argb_u16_from_gray8, *px)
  */
 #define READ_LINE_YUV_SEMIPLANAR(function_name, pixel_1_name, pixel_2_name, pixel_1_type,	\
 				 pixel_2_type, callback, ...)					\
-static void function_name(const struct castkms_plane_state *plane, int x_start,			\
+static void function_name(const struct castkms_frame_plane *plane, int x_start,			\
 		 int y_start, enum pixel_read_direction direction, int count,			\
 		 struct pixel_argb_u16 out_pixel[])						\
 {												\
@@ -579,7 +579,7 @@ static u16 yuv16_sample_mask(u32 format)
 }
 
 static void
-P0XX_read_line(const struct castkms_plane_state *plane, int x_start,
+P0XX_read_line(const struct castkms_frame_plane *plane, int x_start,
 	       int y_start, enum pixel_read_direction direction, int count,
 	       struct pixel_argb_u16 out_pixel[])
 {
@@ -627,7 +627,7 @@ P0XX_read_line(const struct castkms_plane_state *plane, int x_start,
  * - Convert YUV and YVU with the same function (a column swap is needed when setting up
  * plane->conversion_matrix)
  */
-static void planar_yuv_read_line(const struct castkms_plane_state *plane, int x_start,
+static void planar_yuv_read_line(const struct castkms_frame_plane *plane, int x_start,
 				 int y_start, enum pixel_read_direction direction, int count,
 				 struct pixel_argb_u16 out_pixel[])
 {
@@ -986,7 +986,7 @@ void castkms_get_conversion_matrix_to_argb_u16(u32 format,
 		break;
 	}
 }
-EXPORT_SYMBOL(castkms_get_conversion_matrix_to_argb_u16);
+EXPORT_SYMBOL_IF_KUNIT(castkms_get_conversion_matrix_to_argb_u16);
 
 struct castkms_writeback_format {
 	u32 format;

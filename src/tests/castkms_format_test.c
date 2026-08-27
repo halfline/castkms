@@ -210,7 +210,7 @@ static struct yuv_u16_to_argb_u16_case yuv_u16_to_argb_u16_cases[] = {
 	},
 };
 
-static void castkms_format_test_init_plane(struct castkms_plane_state *plane,
+static void castkms_format_test_init_plane(struct castkms_frame_plane *plane,
 					   struct castkms_frame_info *frame_info,
 					   struct iosys_map *map,
 					   struct drm_framebuffer *fb, u32 format)
@@ -228,7 +228,7 @@ static void castkms_format_test_init_plane(struct castkms_plane_state *plane,
 
 static void castkms_format_test_framebuffer_offset(struct kunit *test)
 {
-	struct castkms_plane_state plane;
+	struct castkms_frame_plane plane;
 	struct castkms_frame_info frame_info;
 	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 	struct drm_framebuffer fb;
@@ -254,7 +254,7 @@ static void castkms_format_test_framebuffer_offset(struct kunit *test)
 
 static void castkms_format_test_distinct_multiplane_maps(struct kunit *test)
 {
-	struct castkms_plane_state plane;
+	struct castkms_frame_plane plane;
 	struct castkms_frame_info frame_info;
 	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 	struct drm_framebuffer fb;
@@ -291,7 +291,7 @@ static void castkms_format_test_distinct_multiplane_maps(struct kunit *test)
 
 static void castkms_format_test_wide_framebuffer_offset(struct kunit *test)
 {
-	struct castkms_plane_state plane;
+	struct castkms_frame_plane plane;
 	struct castkms_frame_info frame_info;
 	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 	struct drm_framebuffer fb;
@@ -358,7 +358,7 @@ static void castkms_format_test_packed_vertical_step(struct kunit *test)
 	};
 
 	for (size_t i = 0; i < ARRAY_SIZE(cases); i++) {
-		struct castkms_plane_state plane;
+		struct castkms_frame_plane plane;
 		struct castkms_frame_info frame_info;
 		struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 		struct drm_framebuffer fb;
@@ -406,7 +406,7 @@ static void castkms_format_test_unaligned_rgb565_read(struct kunit *test)
 		{ DRM_FORMAT_RGB565, 0xffff, 0 },
 		{ DRM_FORMAT_BGR565, 0, 0xffff },
 	};
-	struct castkms_plane_state plane;
+	struct castkms_frame_plane plane;
 	struct castkms_frame_info frame_info;
 	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 	struct drm_framebuffer fb;
@@ -445,7 +445,7 @@ static void castkms_format_test_unaligned_rgb64_read(struct kunit *test)
 		{ DRM_FORMAT_XBGR16161616,
 		  { 0xffff, 0x1234, 0x5678, 0x9abc } },
 	};
-	struct castkms_plane_state plane;
+	struct castkms_frame_plane plane;
 	struct castkms_frame_info frame_info;
 	struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 	struct drm_framebuffer fb;
@@ -586,7 +586,7 @@ static void castkms_format_test_unaligned_le16_yuv(struct kunit *test)
 	u8 chroma[] = { 0xa5, 0x78, 0x56, 0xbc, 0x9a };
 
 	for (size_t i = 0; i < ARRAY_SIZE(formats); i++) {
-		struct castkms_plane_state plane;
+		struct castkms_frame_plane plane;
 		struct castkms_frame_info frame_info;
 		struct iosys_map map[DRM_FORMAT_MAX_PLANES];
 		struct drm_framebuffer fb;

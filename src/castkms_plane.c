@@ -24,8 +24,9 @@ static struct castkms_plane_state *castkms_plane_state_alloc(void)
 	if (!castkms_state)
 		return NULL;
 
-	castkms_state->frame_info = kzalloc_obj(*castkms_state->frame_info);
-	if (!castkms_state->frame_info) {
+	castkms_state->frame.frame_info =
+		kzalloc_obj(*castkms_state->frame.frame_info);
+	if (!castkms_state->frame.frame_info) {
 		kfree(castkms_state);
 		return NULL;
 	}
@@ -52,16 +53,17 @@ static void castkms_plane_destroy_state(struct drm_plane *plane,
 {
 	struct castkms_plane_state *castkms_state = to_castkms_plane_state(old_state);
 
-	if (castkms_state->frame_info && castkms_state->frame_info->fb) {
+	if (castkms_state->frame.frame_info &&
+	    castkms_state->frame.frame_info->fb) {
 		/* dropping the reference we acquired in
 		 * castkms_plane_atomic_update()
 		 */
-		drm_framebuffer_put(castkms_state->frame_info->fb);
+		drm_framebuffer_put(castkms_state->frame.frame_info->fb);
 	}
 
 	kfree(castkms_state->colorops);
-	kfree(castkms_state->frame_info);
-	castkms_state->frame_info = NULL;
+	kfree(castkms_state->frame.frame_info);
+	castkms_state->frame.frame_info = NULL;
 
 	__drm_gem_destroy_shadow_plane_state(&castkms_state->base);
 	kfree(castkms_state);
@@ -196,7 +198,7 @@ static void castkms_plane_atomic_update(struct drm_plane *plane,
 	castkms_plane_state = to_castkms_plane_state(new_state);
 	shadow_plane_state = &castkms_plane_state->base;
 
-	frame_info = castkms_plane_state->frame_info;
+	frame_info = castkms_plane_state->frame.frame_info;
 	memcpy(&frame_info->src, &new_state->src, sizeof(struct drm_rect));
 	memcpy(&frame_info->dst, &new_state->dst, sizeof(struct drm_rect));
 	frame_info->fb = fb;
@@ -204,9 +206,10 @@ static void castkms_plane_atomic_update(struct drm_plane *plane,
 	drm_framebuffer_get(frame_info->fb);
 	frame_info->rotation = new_state->rotation;
 
-	castkms_plane_state->pixel_read_line = castkms_get_pixel_read_line_function(fmt);
+	castkms_plane_state->frame.pixel_read_line =
+		castkms_get_pixel_read_line_function(fmt);
 	castkms_get_conversion_matrix_to_argb_u16(fmt, new_state->color_encoding, new_state->color_range,
-					  &castkms_plane_state->conversion_matrix);
+					  &castkms_plane_state->frame.conversion_matrix);
 }
 
 static int castkms_plane_atomic_check(struct drm_plane *plane,
