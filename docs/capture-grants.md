@@ -258,6 +258,14 @@ Temporary foreign-content states leave the stream allocated; queue and vblank
 eligibility checks return or suppress `-ESTALE` work until the composition
 becomes safe again.
 
+## PipeWire
+
+The kernel grant controls access to CastKMS pixels, not access to a PipeWire
+node containing those pixels. The preferred session daemon consumes the grant
+directly without publishing a generally visible source. If a separate producer
+is retained, WirePlumber must restrict both video and matching audio nodes to
+the intended client and destroy or revoke them with the grant.
+
 ## Kernel implementation
 
 The fd is an adapter around a kernel-native capture authority. The authority

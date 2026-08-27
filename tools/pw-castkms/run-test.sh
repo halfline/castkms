@@ -7,6 +7,7 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 drm_device=${1:?usage: $0 /dev/dri/cardN [crtc-id]}
 crtc_id=${2:-}
 result_dir=${3:-$script_dir/../../test-results/pw-castkms}
+grant_launcher=$script_dir/../castkms-grant-launch
 bridge_pid=
 pipewire_started=0
 pipewire_pid=
@@ -30,6 +31,25 @@ if ! test -x "$script_dir/pw-castkms" ||
 	! test -x "$script_dir/pw-castkms-test"; then
 	printf 'build pw-castkms and pw-castkms-test first\n' >&2
 	exit 1
+fi
+
+if test -z "${CASTKMS_GRANT_FD:-}"; then
+	if test "$EUID" -ne 0; then
+		printf '%s\n' \
+			'CASTKMS_GRANT_FD is required (or run this isolated lab test as root)' >&2
+		exit 1
+	fi
+	if ! test -x "$grant_launcher"; then
+		printf 'build castkms-grant-launch first\n' >&2
+		exit 1
+	fi
+	connector_id=$(modetest -a -M castkms -c 2>/dev/null | awk '
+		$1 ~ /^[0-9]+$/ && $4 ~ /^Virtual-/ { print $1; exit }
+	')
+	if test -z "$connector_id"; then
+		printf 'could not find a CastKMS virtual connector\n' >&2
+		exit 1
+	fi
 fi
 
 if ! pw-cli info 0 >/dev/null 2>&1; then
@@ -56,9 +76,16 @@ if ! pw-cli info 0 >/dev/null 2>&1; then
 fi
 printf '%s\n' 'pipewire=running' | tee "$result_dir/summary.txt"
 
-"$script_dir/pw-castkms" -d "$drm_device" \
-	${crtc_id:+-c "$crtc_id"} \
-	> "$result_dir/pw-castkms.log" 2>&1 &
+if test -n "${CASTKMS_GRANT_FD:-}"; then
+	"$script_dir/pw-castkms" -g "$CASTKMS_GRANT_FD" -U -d "$drm_device" \
+		${crtc_id:+-c "$crtc_id"} \
+		> "$result_dir/pw-castkms.log" 2>&1 &
+else
+	"$grant_launcher" "$drm_device" "$connector_id" -- \
+		"$script_dir/pw-castkms" -U -d "$drm_device" \
+		${crtc_id:+-c "$crtc_id"} \
+		> "$result_dir/pw-castkms.log" 2>&1 &
+fi
 bridge_pid=$!
 for _ in $(seq 1 20); do
 	if ! kill -0 "$bridge_pid" 2>/dev/null; then

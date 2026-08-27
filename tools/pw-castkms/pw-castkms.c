@@ -3,7 +3,9 @@
 #include "pw-castkms.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,7 +18,10 @@
 #define INPUT_EDID_MAX_SIZE (4 * CASTKMS_EDID_BLOCK)
 
 struct options {
-	const char *device_path;
+	int grant_fd;
+	int pipewire_fd;
+	bool allow_unrestricted_pipewire;
+	const char *card_label;
 	uint32_t preferred_crtc;
 	const char *edid_path;
 	const char *monitor_name;
@@ -40,6 +45,22 @@ void pw_castkms_fail(struct pw_castkms *bridge, const char *operation,
 		pw_main_loop_quit(bridge->loop);
 }
 
+static int parse_fd(const char *value, int *fd)
+{
+	char *end = NULL;
+	long parsed;
+
+	if (!value || !*value)
+		return -EINVAL;
+	errno = 0;
+	parsed = strtol(value, &end, 10);
+	if (errno || end == value || *end || parsed < 0 || parsed > INT_MAX)
+		return -EINVAL;
+
+	*fd = (int)parsed;
+	return 0;
+}
+
 static int parse_object_id(const char *value, uint32_t *id)
 {
 	char *end = NULL;
@@ -59,9 +80,15 @@ static int parse_object_id(const char *value, uint32_t *id)
 static void usage(const char *program)
 {
 	fprintf(stderr,
-		"Usage: %s [-d /dev/dri/cardN] [OPTIONS]\n"
+		"Usage: %s -g GRANT-FD [-p PIPEWIRE-FD | -U] [OPTIONS]\n"
 		"\n"
-		"  -d, --device PATH     CastKMS primary node\n"
+		"  -g, --grant-fd FD     inherited CastKMS 0.9 grant fd\n"
+		"                         (or CASTKMS_GRANT_FD)\n"
+		"  -p, --pipewire-fd FD  restricted PipeWire socket fd\n"
+		"                         (or PIPEWIRE_REMOTE_FD)\n"
+		"  -U, --allow-unrestricted-pipewire\n"
+		"                         use the global development daemon\n"
+		"  -d, --device PATH     issuer-provided primary-node label\n"
 		"  -c, --crtc ID         require this compatible CRTC\n"
 		"  -e, --edid FILE       attach with a binary EDID\n"
 		"  -n, --name NAME       generate an EDID with this monitor name\n"
@@ -73,6 +100,9 @@ static void usage(const char *program)
 static int parse_options(int argc, char **argv, struct options *options)
 {
 	static const struct option long_options[] = {
+		{ "grant-fd", required_argument, NULL, 'g' },
+		{ "pipewire-fd", required_argument, NULL, 'p' },
+		{ "allow-unrestricted-pipewire", no_argument, NULL, 'U' },
 		{ "device", required_argument, NULL, 'd' },
 		{ "crtc", required_argument, NULL, 'c' },
 		{ "edid", required_argument, NULL, 'e' },
@@ -80,15 +110,34 @@ static int parse_options(int argc, char **argv, struct options *options)
 		{ "help", no_argument, NULL, 'h' },
 		{},
 	};
+	const char *environment_fd;
 	int option;
 
-	*options = (struct options) {};
+	*options = (struct options) {
+		.grant_fd = -1,
+		.pipewire_fd = -1,
+	};
 
-	while ((option = getopt_long(argc, argv, "d:c:e:n:h",
+	while ((option = getopt_long(argc, argv, "g:p:Ud:c:e:n:h",
 				     long_options, NULL)) != -1) {
 		switch (option) {
+		case 'g':
+			if (parse_fd(optarg, &options->grant_fd)) {
+				fprintf(stderr, "invalid grant fd: %s\n", optarg);
+				return -EINVAL;
+			}
+			break;
+		case 'p':
+			if (parse_fd(optarg, &options->pipewire_fd)) {
+				fprintf(stderr, "invalid PipeWire fd: %s\n", optarg);
+				return -EINVAL;
+			}
+			break;
+		case 'U':
+			options->allow_unrestricted_pipewire = true;
+			break;
 		case 'd':
-			options->device_path = optarg;
+			options->card_label = optarg;
 			break;
 		case 'c':
 			if (parse_object_id(optarg, &options->preferred_crtc)) {
@@ -116,6 +165,34 @@ static int parse_options(int argc, char **argv, struct options *options)
 		return -EINVAL;
 	}
 
+	if (options->grant_fd < 0) {
+		environment_fd = getenv("CASTKMS_GRANT_FD");
+		if (environment_fd &&
+		    parse_fd(environment_fd, &options->grant_fd)) {
+			fprintf(stderr, "invalid CASTKMS_GRANT_FD\n");
+			return -EINVAL;
+		}
+	}
+	if (options->pipewire_fd < 0) {
+		environment_fd = getenv("PIPEWIRE_REMOTE_FD");
+		if (environment_fd &&
+		    parse_fd(environment_fd, &options->pipewire_fd)) {
+			fprintf(stderr, "invalid PIPEWIRE_REMOTE_FD\n");
+			return -EINVAL;
+		}
+	}
+
+	if (options->grant_fd < 0) {
+		fprintf(stderr,
+			"a CastKMS grant fd is required; ordinary card fds are not authorized\n");
+		return -EACCES;
+	}
+	if (options->pipewire_fd < 0 &&
+	    !options->allow_unrestricted_pipewire) {
+		fprintf(stderr,
+			"a restricted PipeWire fd is required (use -U only for isolated development)\n");
+		return -EACCES;
+	}
 	if (options->edid_path && options->monitor_name) {
 		fprintf(stderr, "-e and -n are mutually exclusive\n");
 		return -EINVAL;
@@ -204,10 +281,28 @@ static int build_output_edid(const struct options *options,
 	return 0;
 }
 
+static int duplicate_pipewire_fd(struct pw_castkms *bridge, int inherited_fd)
+{
+	if (inherited_fd < 0) {
+		fprintf(stderr,
+			"warning: publishing to unrestricted PipeWire (development only)\n");
+		return 0;
+	}
+
+	bridge->pipewire_fd = fcntl(inherited_fd, F_DUPFD_CLOEXEC, 3);
+	if (bridge->pipewire_fd < 0) {
+		perror("duplicate PipeWire fd");
+		return -errno;
+	}
+
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	struct pw_castkms bridge = {
-		.drm_fd = -1,
+		.grant_fd = -1,
+		.pipewire_fd = -1,
 		.exit_status = EXIT_FAILURE,
 	};
 	struct options options;
@@ -219,12 +314,19 @@ int main(int argc, char **argv)
 	status = parse_options(argc, argv, &options);
 	if (status)
 		return status > 0 ? EXIT_SUCCESS : EXIT_FAILURE;
-	/* 1. Open and validate the selected CastKMS primary node. */
-	status = castkms_open_device(&bridge, options.device_path);
+	bridge.allow_unrestricted_pipewire =
+		options.allow_unrestricted_pipewire;
+
+	/* 1. Adopt and validate the issuer-provided holder fd. */
+	status = castkms_open_grant(&bridge, options.grant_fd,
+				    options.card_label);
+	if (status)
+		goto out;
+	status = duplicate_pipewire_fd(&bridge, options.pipewire_fd);
 	if (status)
 		goto out;
 
-	/* 2. Attach an output and wait for the compositor's mode. */
+	/* 2. Attach the granted output and wait for the compositor's mode. */
 	status = build_output_edid(&options, &edid, &edid_size);
 	if (status)
 		goto out;
@@ -238,7 +340,7 @@ int main(int argc, char **argv)
 	if (status)
 		goto out;
 
-	/* 4. Publish DRM-allocated DMA-BUFs and drive the event loop. */
+	/* 4. Publish holder-allocated DMA-BUFs and drive the event loop. */
 	pw_init(&argc, &argv);
 	pipewire_initialized = true;
 	status = pipewire_open(&bridge);

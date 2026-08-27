@@ -20,14 +20,22 @@
 #include <xf86drmMode.h>
 
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
-		      "capture-query ABI size changed");
+	      "capture-query ABI size changed");
+static_assert(sizeof(struct drm_castkms_get_grant) == 32,
+	      "get-grant ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
-		      "capture-event ABI size changed");
+	      "capture-event ABI size changed");
+
+static const uint32_t required_grant_rights =
+	DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+	DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT |
+	DRM_CASTKMS_GRANT_UPDATE_EDID |
+	DRM_CASTKMS_GRANT_READ_CURSOR;
 
 static int drain_stopped_stream_events(struct pw_castkms *bridge,
 				       uint32_t stream_id);
 
-/* ---- Device validation ------------------------------------------------- */
+/* ---- Grant validation -------------------------------------------------- */
 
 static int check_castkms_driver(int fd)
 {
@@ -49,12 +57,15 @@ static int check_castkms_driver(int fd)
 
 static int set_card_label(const char *requested, char *label, size_t size)
 {
-	struct stat node;
+	if (requested && *requested) {
+		struct stat node;
 
-	if (!requested || !*requested || stat(requested, &node) ||
-	    !S_ISCHR(node.st_mode) ||
-	    drmGetNodeTypeFromDevId(node.st_rdev) != DRM_NODE_PRIMARY)
-		return -EINVAL;
+		if (stat(requested, &node) || !S_ISCHR(node.st_mode) ||
+		    drmGetNodeTypeFromDevId(node.st_rdev) != DRM_NODE_PRIMARY)
+			return -EINVAL;
+	} else {
+		requested = "grant-fd";
+	}
 
 	if (snprintf(label, size, "%s", requested) >= (int)size)
 		return -ENAMETOOLONG;
@@ -62,58 +73,72 @@ static int set_card_label(const char *requested, char *label, size_t size)
 	return 0;
 }
 
-static int find_castkms_card(char *path, size_t size)
+static int query_grant(struct pw_castkms *bridge)
 {
-	int i;
+	struct drm_castkms_get_grant grant = {};
 
-	for (i = 0; i < 16; i++) {
-		int fd;
-		int status;
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_CASTKMS_GET_GRANT, &grant) < 0)
+		return -errno;
 
-		if (snprintf(path, size, "/dev/dri/card%d", i) >= (int)size)
-			return -ENAMETOOLONG;
-		fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
-		if (fd < 0)
-			continue;
-		status = check_castkms_driver(fd);
-		close(fd);
-		if (!status)
-			return 0;
-	}
+	if (!grant.grant_id || !grant.connector_id ||
+	    (grant.rights & ~DRM_CASTKMS_GRANT_RIGHTS_MASK) ||
+	    (grant.rights & required_grant_rights) != required_grant_rights ||
+	    (grant.flags & ~DRM_CASTKMS_GRANT_FLAGS_MASK) ||
+	    grant.state > DRM_CASTKMS_GRANT_STATE_REVOKED ||
+	    grant.reserved || grant.reserved2)
+		return -EPROTO;
+	if (grant.state == DRM_CASTKMS_GRANT_STATE_REVOKED)
+		return -EKEYREVOKED;
 
-	fprintf(stderr, "no CastKMS primary node found\n");
-	return -ENODEV;
+	bridge->grant_id = grant.grant_id;
+	bridge->connector_id = grant.connector_id;
+	bridge->grant_rights = grant.rights;
+	bridge->grant_state = grant.state;
+	return 0;
 }
 
-int castkms_open_device(struct pw_castkms *bridge, const char *device_path)
+int castkms_open_grant(struct pw_castkms *bridge, int inherited_fd,
+		       const char *card_label)
 {
-	char discovered_path[256];
-	const char *path = device_path;
+	int flags;
 	int status;
 
-	if (!path || !*path) {
-		status = find_castkms_card(discovered_path, sizeof(discovered_path));
-		if (status)
-			return status;
-		path = discovered_path;
-	}
-
-	status = set_card_label(path, bridge->card_label,
-				sizeof(bridge->card_label));
-	if (status) {
-		fprintf(stderr, "-d does not name a DRM primary node\n");
-		return status;
-	}
-
-	bridge->drm_fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
-	if (bridge->drm_fd < 0) {
-		perror(path);
+	bridge->grant_fd = fcntl(inherited_fd, F_DUPFD_CLOEXEC, 3);
+	if (bridge->grant_fd < 0) {
+		perror("duplicate grant fd");
 		return -errno;
 	}
 
-	status = check_castkms_driver(bridge->drm_fd);
+	status = check_castkms_driver(bridge->grant_fd);
 	if (status) {
-		fprintf(stderr, "%s is not a CastKMS primary node\n", path);
+		fprintf(stderr, "grant fd is not a CastKMS file\n");
+		return status;
+	}
+
+	flags = fcntl(bridge->grant_fd, F_GETFL);
+	if (flags < 0) {
+		perror("inspect grant fd");
+		return -errno;
+	}
+	if (!(flags & O_NONBLOCK)) {
+		fprintf(stderr,
+			"grant fd must be created with fd_flags=O_NONBLOCK\n");
+		return -EINVAL;
+	}
+
+	status = query_grant(bridge);
+	if (status) {
+		fprintf(stderr, "inherited fd is not a usable display grant: %s\n",
+			strerror(-status));
+		return status;
+	}
+
+	status = set_card_label(card_label, bridge->card_label,
+				sizeof(bridge->card_label));
+	if (status) {
+		fprintf(stderr, "%s\n", card_label && *card_label ?
+			"-d does not name a DRM primary node" :
+			"cannot label the grant's CastKMS device");
 		return status;
 	}
 
@@ -211,15 +236,13 @@ static int connector_output_index(int fd, uint32_t connector_id,
 	return status;
 }
 
-static int describe_device_connector(struct pw_castkms *bridge,
-				     uint32_t preferred_crtc,
-				     uint32_t *candidate_crtc)
+static int describe_grant_connector(struct pw_castkms *bridge,
+				    uint32_t preferred_crtc,
+				    uint32_t *candidate_crtc)
 {
-	drmModeRes *resources = drmModeGetResources(bridge->drm_fd);
-	drmModeConnector *selected = NULL;
-	uint32_t selected_crtc = 0;
+	drmModeRes *resources = drmModeGetResources(bridge->grant_fd);
 	uint32_t output_index;
-	int status;
+	int status = -ENOENT;
 	int i;
 
 	if (!resources) {
@@ -229,8 +252,7 @@ static int describe_device_connector(struct pw_castkms *bridge,
 
 	for (i = 0; i < resources->count_connectors; i++) {
 		drmModeConnector *connector = drmModeGetConnector(
-			bridge->drm_fd, resources->connectors[i]);
-		uint32_t crtc;
+			bridge->grant_fd, resources->connectors[i]);
 
 		if (!connector)
 			continue;
@@ -238,50 +260,57 @@ static int describe_device_connector(struct pw_castkms *bridge,
 			drmModeFreeConnector(connector);
 			continue;
 		}
-		crtc = preferred_crtc ? preferred_crtc :
-			first_compatible_crtc(bridge->drm_fd, resources, connector);
-		if (!crtc || (preferred_crtc && !connector_can_drive_crtc(
-					bridge->drm_fd, resources, connector,
-					preferred_crtc))) {
+		if (connector->connector_id != bridge->connector_id) {
 			drmModeFreeConnector(connector);
 			continue;
 		}
 
-		if (!selected || connector->connection == DRM_MODE_DISCONNECTED) {
-			drmModeFreeConnector(selected);
-			selected = connector;
-			selected_crtc = crtc;
-			if (connector->connection == DRM_MODE_DISCONNECTED)
-				break;
-		} else {
-			drmModeFreeConnector(connector);
+		if (preferred_crtc && !connector_can_drive_crtc(
+					bridge->grant_fd, resources, connector,
+					preferred_crtc)) {
+			fprintf(stderr,
+				"grant connector cannot drive requested CRTC %u\n",
+				preferred_crtc);
+			status = -EINVAL;
+			goto out_connector;
 		}
+
+		*candidate_crtc = preferred_crtc ? preferred_crtc :
+			first_compatible_crtc(bridge->grant_fd, resources,
+					      connector);
+		if (!*candidate_crtc) {
+			fprintf(stderr, "grant connector has no possible CRTC\n");
+			status = -ENOLINK;
+			goto out_connector;
+		}
+
+		status = connector_output_index(bridge->grant_fd,
+					connector->connector_id, &output_index);
+		if (status) {
+			fprintf(stderr,
+				"grant connector has no valid CastKMS output index\n");
+			goto out_connector;
+		}
+
+		bridge->output_index = output_index;
+		(void)snprintf(
+			bridge->connector_name, sizeof(bridge->connector_name),
+			"%s-%u",
+			drmModeGetConnectorTypeName(connector->connector_type),
+			connector->connector_type_id);
+		status = 0;
+
+out_connector:
+		drmModeFreeConnector(connector);
+		break;
 	}
 
 	drmModeFreeResources(resources);
-	if (!selected) {
-		fprintf(stderr, "no display connector found\n");
-		return -ENOENT;
+	if (status == -ENOENT) {
+		fprintf(stderr, "grant connector %u is not present\n",
+			bridge->connector_id);
 	}
-
-	(void)snprintf(bridge->connector_name, sizeof(bridge->connector_name),
-		       "%s-%u",
-		       drmModeGetConnectorTypeName(selected->connector_type),
-		       selected->connector_type_id);
-	status = connector_output_index(bridge->drm_fd,
-					selected->connector_id, &output_index);
-	if (status) {
-		fprintf(stderr, "%s has no valid CastKMS output index\n",
-			bridge->connector_name);
-		drmModeFreeConnector(selected);
-		return status;
-	}
-
-	bridge->connector_id = selected->connector_id;
-	bridge->output_index = output_index;
-	*candidate_crtc = selected_crtc;
-	drmModeFreeConnector(selected);
-	return 0;
+	return status;
 }
 
 static int query_capture_caps(struct pw_castkms *bridge, uint32_t crtc_id)
@@ -297,18 +326,19 @@ static int query_capture_caps(struct pw_castkms *bridge, uint32_t crtc_id)
 	uint32_t i;
 	int status = -EPROTO;
 
-	if (ioctl(bridge->drm_fd, DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS,
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS,
 		  &query) < 0) {
 		perror("DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS");
 		return -errno;
 	}
 	if (query.uapi_major != DRM_CASTKMS_CAPTURE_UAPI_MAJOR ||
 	    query.uapi_minor < DRM_CASTKMS_CAPTURE_UAPI_MINOR ||
+	    !(query.flags & DRM_CASTKMS_CAPTURE_CAP_GRANT_FD) ||
 	    !(query.flags & DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC) ||
 	    !query.format_count || query.format_count > 256 ||
 	    query.max_registered_buffers < 2 || query.reserved) {
 		fprintf(stderr,
-			"CastKMS capture UAPI 0.9 with implicit sync is required\n");
+			"CastKMS capture UAPI 0.9 with GRANT_FD and implicit sync is required\n");
 		return -EPROTO;
 	}
 
@@ -321,7 +351,7 @@ static int query_capture_caps(struct pw_castkms *bridge, uint32_t crtc_id)
 
 	query.formats_ptr = (uint64_t)(uintptr_t)formats;
 	query.format_count = capacity;
-	if (ioctl(bridge->drm_fd, DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS,
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS,
 		  &query) < 0) {
 		status = -errno;
 		perror("DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS formats");
@@ -403,7 +433,7 @@ static int read_active_mode(struct pw_castkms *bridge,
 			    uint32_t preferred_crtc)
 {
 	drmModeConnector *connector =
-		drmModeGetConnector(bridge->drm_fd, bridge->connector_id);
+		drmModeGetConnector(bridge->grant_fd, bridge->connector_id);
 	drmModeEncoder *encoder;
 	drmModeCrtc *crtc;
 	uint32_t crtc_id;
@@ -416,7 +446,7 @@ static int read_active_mode(struct pw_castkms *bridge,
 		return -ENOTCONN;
 	}
 
-	encoder = drmModeGetEncoder(bridge->drm_fd, connector->encoder_id);
+	encoder = drmModeGetEncoder(bridge->grant_fd, connector->encoder_id);
 	drmModeFreeConnector(connector);
 	if (!encoder)
 		return errno ? -errno : -EIO;
@@ -430,7 +460,7 @@ static int read_active_mode(struct pw_castkms *bridge,
 	if (preferred_crtc && crtc_id != preferred_crtc)
 		return -ENOLINK;
 
-	crtc = drmModeGetCrtc(bridge->drm_fd, crtc_id);
+	crtc = drmModeGetCrtc(bridge->grant_fd, crtc_id);
 	if (!crtc)
 		return errno ? -errno : -EIO;
 	if (!crtc->mode_valid || !crtc->mode.hdisplay ||
@@ -467,21 +497,23 @@ int castkms_configure_output(struct pw_castkms *bridge,
 			     const void *edid, uint32_t edid_size)
 {
 	uint32_t candidate_crtc = 0;
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
 	uint64_t syncobj_cap = 0;
+#endif
 	int status;
 
-	status = describe_device_connector(bridge, preferred_crtc,
-					     &candidate_crtc);
+	status = describe_grant_connector(bridge, preferred_crtc,
+					    &candidate_crtc);
 	if (status)
 		return status;
 	status = query_capture_caps(bridge, candidate_crtc);
 	if (status)
 		return status;
 
-	status = attach_monitor(bridge->drm_fd, bridge->connector_id,
+	status = attach_monitor(bridge->grant_fd, bridge->connector_id,
 				edid, edid_size);
 	if (status == -EBUSY) {
-		status = update_output_edid(bridge->drm_fd,
+		status = update_output_edid(bridge->grant_fd,
 					    bridge->connector_id,
 					    edid, edid_size);
 		if (status) {
@@ -517,16 +549,22 @@ int castkms_configure_output(struct pw_castkms *bridge,
 
 	/* Attachment can activate a different route; validate the final CRTC. */
 	status = query_capture_caps(bridge, bridge->crtc_id);
-	if (status)
-		return status;
+	if (!status)
+		status = query_grant(bridge);
+	if (status || bridge->grant_state != DRM_CASTKMS_GRANT_STATE_ACTIVE) {
+		fprintf(stderr, "grant did not become capture-active\n");
+		return status ? status : -EAGAIN;
+	}
 
-	if (!drmGetCap(bridge->drm_fd, DRM_CAP_SYNCOBJ_TIMELINE,
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	if (!drmGetCap(bridge->grant_fd, DRM_CAP_SYNCOBJ_TIMELINE,
 		       &syncobj_cap) && syncobj_cap &&
 	    (bridge->capture_caps &
 	     DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE)) {
 		bridge->supports_explicit_sync = true;
 		fprintf(stderr, "explicit sync enabled\n");
 	}
+#endif
 
 	return 0;
 }
@@ -541,7 +579,7 @@ int castkms_start_capture(struct pw_castkms *bridge)
 			 DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR,
 	};
 
-	if (ioctl(bridge->drm_fd, DRM_IOCTL_CASTKMS_CAPTURE_START, &args) < 0) {
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_START, &args) < 0) {
 		int status = -errno;
 
 		fprintf(stderr, "START_CAPTURE: %s\n", strerror(-status));
@@ -571,9 +609,9 @@ int castkms_stop_capture(struct pw_castkms *bridge)
 	args = (struct drm_castkms_capture_stop) {
 		.stream_id = stopped_stream_id,
 	};
-	status = ioctl(bridge->drm_fd, DRM_IOCTL_CASTKMS_CAPTURE_STOP, &args) < 0 ?
+	status = ioctl(bridge->grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_STOP, &args) < 0 ?
 		-errno : 0;
-	if (status && status != -ENODEV)
+	if (status && status != -EKEYREVOKED && status != -ENODEV)
 		fprintf(stderr, "STOP_CAPTURE: %s\n", strerror(-status));
 	bridge->capture_active = false;
 
@@ -604,9 +642,9 @@ void castkms_close(struct pw_castkms *bridge)
 				strerror(-destroy_status));
 	}
 
-	if (bridge->attached_here && bridge->drm_fd >= 0) {
-		status = detach_monitor(bridge->drm_fd, bridge->connector_id);
-		if (status && status != -ENODEV)
+	if (bridge->attached_here && bridge->grant_fd >= 0) {
+		status = detach_monitor(bridge->grant_fd, bridge->connector_id);
+		if (status && status != -EKEYREVOKED && status != -ENODEV)
 			fprintf(stderr, "DETACH_MONITOR: %s\n",
 				strerror(-status));
 		bridge->attached_here = false;
@@ -616,9 +654,9 @@ void castkms_close(struct pw_castkms *bridge)
 	bridge->cursor_bitmap = NULL;
 	bridge->cursor_bitmap_size = 0;
 	bridge->cursor_bitmap_capacity = 0;
-	if (bridge->drm_fd >= 0)
-		close(bridge->drm_fd);
-	bridge->drm_fd = -1;
+	if (bridge->grant_fd >= 0)
+		close(bridge->grant_fd);
+	bridge->grant_fd = -1;
 }
 
 /* ---- DRM event validation and dispatch -------------------------------- */
@@ -761,12 +799,44 @@ static bool handle_frame_event(
 	return true;
 }
 
+static void handle_revoked_event(
+	struct pw_castkms *bridge,
+	const struct drm_event_castkms_grant_revoked *event)
+{
+	if (event->base.length != sizeof(*event) ||
+	    event->grant_id != bridge->grant_id || event->status >= 0) {
+		pw_castkms_fail(bridge, "invalid grant-revoked event", -EPROTO);
+		return;
+	}
+
+	pw_castkms_fail(bridge, "capture grant revoked", event->status);
+}
+
+static bool handle_grant_state_event(
+	struct pw_castkms *bridge,
+	const struct drm_event_castkms_grant_state *event,
+	bool *became_inactive)
+{
+	if (event->base.length != sizeof(*event) ||
+	    event->grant_id != bridge->grant_id ||
+	    event->state > DRM_CASTKMS_GRANT_STATE_REVOKED ||
+	    event->reserved) {
+		pw_castkms_fail(bridge, "invalid grant-state event", -EPROTO);
+		return false;
+	}
+
+	bridge->grant_state = event->state;
+	*became_inactive |= event->state != DRM_CASTKMS_GRANT_STATE_ACTIVE;
+	return true;
+}
+
 static int dispatch_event_batch(struct pw_castkms *bridge, int fd,
 				uint32_t discarded_stream_id,
 				bool *frame_ready)
 {
 	uint64_t aligned_events[4096 / sizeof(uint64_t)];
 	char *events = (char *)aligned_events;
+	bool grant_became_inactive = false;
 	ssize_t length;
 	ssize_t offset;
 
@@ -777,7 +847,7 @@ static int dispatch_event_batch(struct pw_castkms *bridge, int fd,
 	if (length <= 0) {
 		int status = length < 0 ? -errno : -EIO;
 
-		pw_castkms_fail(bridge, "DRM event read failed",
+		pw_castkms_fail(bridge, "DRM grant event read failed",
 				 status);
 		return status;
 	}
@@ -804,6 +874,14 @@ static int dispatch_event_batch(struct pw_castkms *bridge, int fd,
 			*frame_ready |= event_frame_ready;
 			break;
 		}
+		case DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED:
+			handle_revoked_event(bridge, (void *)base);
+			return -EKEYREVOKED;
+		case DRM_CASTKMS_CAPTURE_EVENT_GRANT_STATE:
+			if (!handle_grant_state_event(bridge, (void *)base,
+						      &grant_became_inactive))
+				return -EPROTO;
+			break;
 		default:
 			pw_castkms_fail(bridge, "unexpected DRM event type",
 					 -EPROTO);
@@ -811,6 +889,21 @@ static int dispatch_event_batch(struct pw_castkms *bridge, int fd,
 		}
 
 		offset += base->length;
+	}
+
+	/* Re-query after an inactive event to close a suspend/reacquire race. */
+	if (grant_became_inactive &&
+	    bridge->grant_state != DRM_CASTKMS_GRANT_STATE_ACTIVE) {
+		int status = query_grant(bridge);
+
+		if (status ||
+		    bridge->grant_state != DRM_CASTKMS_GRANT_STATE_ACTIVE) {
+			pw_castkms_fail(
+				bridge,
+				"capture grant suspended; restart required",
+				status ? status : -EAGAIN);
+			return status ? status : -EAGAIN;
+		}
 	}
 
 	return 0;
@@ -822,7 +915,7 @@ static int drain_stopped_stream_events(struct pw_castkms *bridge,
 	for (;;) {
 		bool ignored;
 		int status = dispatch_event_batch(
-			bridge, bridge->drm_fd, stream_id, &ignored);
+			bridge, bridge->grant_fd, stream_id, &ignored);
 
 		if (status == -EAGAIN)
 			return 0;
@@ -837,7 +930,7 @@ void castkms_on_fd_ready(void *data, int fd, uint32_t mask)
 	bool frame_ready;
 
 	if (mask & (SPA_IO_ERR | SPA_IO_HUP)) {
-		pw_castkms_fail(bridge, "DRM fd disconnected", -EIO);
+		pw_castkms_fail(bridge, "DRM grant fd disconnected", -EIO);
 		return;
 	}
 	if (dispatch_event_batch(bridge, fd, 0, &frame_ready))

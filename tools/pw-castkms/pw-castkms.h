@@ -63,7 +63,7 @@ struct captured_frame {
 };
 
 struct capture_buffer {
-	/* GEM and framebuffer objects live in the DRM file's private namespace. */
+	/* GEM and framebuffer objects live in the grant fd's private namespace. */
 	uint32_t gem_handle;
 	uint32_t fb_id;
 	uint32_t pitch;
@@ -89,11 +89,15 @@ struct capture_buffer {
 };
 
 struct pw_castkms {
-	/* The opened primary node owns the DRM object namespace. */
-	int drm_fd;
+	/* The inherited holder fd is the security boundary and DRM namespace. */
+	int grant_fd;
+	int pipewire_fd;
 	char card_label[256];
+	uint32_t grant_id;
+	uint32_t grant_rights;
+	uint32_t grant_state;
 
-	/* Selected connector and the compositor's active mode. */
+	/* Connector selected by the grant and the compositor's active mode. */
 	uint32_t connector_id;
 	uint32_t crtc_id;
 	uint32_t output_index;
@@ -126,6 +130,7 @@ struct pw_castkms {
 	struct spa_source *process_timer;
 	struct spa_source *sigint_source;
 	struct spa_source *sigterm_source;
+	bool allow_unrestricted_pipewire;
 
 	/* Process lifetime and diagnostics. */
 	bool failed;
@@ -145,8 +150,9 @@ struct pw_castkms {
 void pw_castkms_fail(struct pw_castkms *bridge, const char *operation,
 		     int status);
 
-/* CastKMS device, output, stream, and event handling. */
-int castkms_open_device(struct pw_castkms *bridge, const char *device_path);
+/* CastKMS grant, output, stream, and event handling. */
+int castkms_open_grant(struct pw_castkms *bridge, int inherited_fd,
+		       const char *card_label);
 int castkms_configure_output(struct pw_castkms *bridge,
 			     uint32_t preferred_crtc,
 			     const void *edid, uint32_t edid_size);
@@ -155,7 +161,7 @@ int castkms_stop_capture(struct pw_castkms *bridge);
 void castkms_close(struct pw_castkms *bridge);
 void castkms_on_fd_ready(void *data, int fd, uint32_t mask);
 
-/* DRM destination allocation and ownership transitions. */
+/* Holder-fd destination allocation and ownership transitions. */
 struct capture_buffer *
 castkms_find_buffer_by_pipewire(struct pw_castkms *bridge,
 			       struct pw_buffer *pipewire_buffer);

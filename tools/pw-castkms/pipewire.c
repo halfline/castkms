@@ -665,9 +665,11 @@ static struct pw_properties *create_node_properties(
 	const struct pw_castkms *bridge, const char *node_name)
 {
 	char crtc_id[16];
+	char grant_id[16];
 	char output_index[16];
 
 	(void)snprintf(crtc_id, sizeof(crtc_id), "%u", bridge->crtc_id);
+	(void)snprintf(grant_id, sizeof(grant_id), "%u", bridge->grant_id);
 	(void)snprintf(output_index, sizeof(output_index), "%u",
 		       bridge->output_index);
 
@@ -683,6 +685,9 @@ static struct pw_properties *create_node_properties(
 		"api.castkms.crtc-id", crtc_id,
 		"api.castkms.connector", bridge->connector_name,
 		"api.castkms.output-index", output_index,
+		"api.castkms.grant-id", grant_id,
+		"api.castkms.restricted",
+			bridge->allow_unrestricted_pipewire ? "false" : "true",
 		"api.castkms.capture", "true",
 		NULL);
 }
@@ -742,7 +747,15 @@ int pipewire_open(struct pw_castkms *bridge)
 		return -ENOMEM;
 	}
 
-	bridge->core = pw_context_connect(bridge->context, NULL, 0);
+	if (bridge->pipewire_fd >= 0) {
+		int pipewire_fd = bridge->pipewire_fd;
+
+		bridge->pipewire_fd = -1;
+		bridge->core = pw_context_connect_fd(
+			bridge->context, pipewire_fd, NULL, 0);
+	} else {
+		bridge->core = pw_context_connect(bridge->context, NULL, 0);
+	}
 	if (!bridge->core) {
 		status = errno ? -errno : -EIO;
 		fprintf(stderr, "pw_context_connect: %s\n", strerror(-status));
@@ -753,7 +766,7 @@ int pipewire_open(struct pw_castkms *bridge)
 			     &core_events, bridge);
 
 	bridge->drm_source = pw_loop_add_io(
-		pw_main_loop_get_loop(bridge->loop), bridge->drm_fd,
+		pw_main_loop_get_loop(bridge->loop), bridge->grant_fd,
 		SPA_IO_IN, false, castkms_on_fd_ready, bridge);
 	if (!bridge->drm_source) {
 		fprintf(stderr, "pw_loop_add_io failed\n");
@@ -815,7 +828,7 @@ void pipewire_close(struct pw_castkms *bridge)
 
 	bridge->shutting_down = true;
 	if (!bridge->loop)
-		return;
+		goto close_fd;
 
 	loop = pw_main_loop_get_loop(bridge->loop);
 	if (bridge->process_timer)
@@ -846,4 +859,9 @@ void pipewire_close(struct pw_castkms *bridge)
 	bridge->context = NULL;
 	pw_main_loop_destroy(bridge->loop);
 	bridge->loop = NULL;
+
+close_fd:
+	if (bridge->pipewire_fd >= 0)
+		close(bridge->pipewire_fd);
+	bridge->pipewire_fd = -1;
 }

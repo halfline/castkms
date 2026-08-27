@@ -15,7 +15,7 @@
 #include <unistd.h>
 
 /*
- * The DRM file has its own GEM namespace.  Every capture destination must be
+ * The holder fd has its own GEM namespace.  Every capture destination must be
  * created, registered, queued, and destroyed through that same fd.  Exporting
  * its GEM object as DMA-BUF is how this example shares the destination with
  * PipeWire without opening an ordinary card fd.
@@ -166,7 +166,7 @@ int castkms_create_destination(struct pw_castkms *bridge,
 		.reuse_syncobj_fd = -1,
 	};
 
-	if (ioctl(bridge->drm_fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb) < 0) {
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb) < 0) {
 		status = -errno;
 		perror("DRM_IOCTL_MODE_CREATE_DUMB");
 		return status;
@@ -186,7 +186,7 @@ int castkms_create_destination(struct pw_castkms *bridge,
 
 	fb.handles[0] = dumb.handle;
 	fb.pitches[0] = dumb.pitch;
-	if (ioctl(bridge->drm_fd, DRM_IOCTL_MODE_ADDFB2, &fb) < 0) {
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_MODE_ADDFB2, &fb) < 0) {
 		status = -errno;
 		perror("DRM_IOCTL_MODE_ADDFB2");
 		goto err_gem;
@@ -194,7 +194,7 @@ int castkms_create_destination(struct pw_castkms *bridge,
 	buffer->fb_id = fb.fb_id;
 
 	prime.handle = dumb.handle;
-	if (ioctl(bridge->drm_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime) < 0) {
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime) < 0) {
 		status = -errno;
 		perror("DRM_IOCTL_PRIME_HANDLE_TO_FD");
 		goto err_fb;
@@ -202,18 +202,18 @@ int castkms_create_destination(struct pw_castkms *bridge,
 	buffer->dmabuf_fd = prime.fd;
 
 	if (explicit_sync) {
-		status = create_syncobj(bridge->drm_fd,
+		status = create_syncobj(bridge->grant_fd,
 					&buffer->ready_syncobj);
 		if (!status)
-			status = create_syncobj(bridge->drm_fd,
+			status = create_syncobj(bridge->grant_fd,
 						&buffer->reuse_syncobj);
 		if (status)
 			goto err_syncobj;
 
 		buffer->ready_syncobj_fd = export_syncobj_fd(
-			bridge->drm_fd, buffer->ready_syncobj);
+			bridge->grant_fd, buffer->ready_syncobj);
 		buffer->reuse_syncobj_fd = export_syncobj_fd(
-			bridge->drm_fd, buffer->reuse_syncobj);
+			bridge->grant_fd, buffer->reuse_syncobj);
 		if (buffer->ready_syncobj_fd < 0) {
 			status = buffer->ready_syncobj_fd;
 			goto err_syncobj;
@@ -227,7 +227,7 @@ int castkms_create_destination(struct pw_castkms *bridge,
 	}
 
 	status = register_destination(
-		bridge->drm_fd, bridge->stream_id, buffer->fb_id,
+		bridge->grant_fd, bridge->stream_id, buffer->fb_id,
 		buffer->ready_syncobj, buffer->reuse_syncobj,
 		bridge->mode_generation, &buffer->buffer_id);
 	if (status) {
@@ -246,18 +246,18 @@ err_syncobj:
 	if (buffer->ready_syncobj_fd >= 0)
 		close(buffer->ready_syncobj_fd);
 	buffer->ready_syncobj_fd = -1;
-	destroy_syncobj(bridge->drm_fd, &buffer->reuse_syncobj);
-	destroy_syncobj(bridge->drm_fd, &buffer->ready_syncobj);
+	destroy_syncobj(bridge->grant_fd, &buffer->reuse_syncobj);
+	destroy_syncobj(bridge->grant_fd, &buffer->ready_syncobj);
 	close(buffer->dmabuf_fd);
 	buffer->dmabuf_fd = -1;
 err_fb:
-	(void)ioctl(bridge->drm_fd, DRM_IOCTL_MODE_RMFB, &buffer->fb_id);
+	(void)ioctl(bridge->grant_fd, DRM_IOCTL_MODE_RMFB, &buffer->fb_id);
 	buffer->fb_id = 0;
 err_gem:
 	destroy = (struct drm_mode_destroy_dumb) {
 		.handle = buffer->gem_handle,
 	};
-	(void)ioctl(bridge->drm_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
+	(void)ioctl(bridge->grant_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
 	buffer->gem_handle = 0;
 	return status;
 }
@@ -269,7 +269,7 @@ int castkms_destroy_destination(struct pw_castkms *bridge,
 	int status;
 
 	if (buffer->buffer_id && bridge->capture_active) {
-		status = unregister_destination(bridge->drm_fd,
+		status = unregister_destination(bridge->grant_fd,
 					bridge->stream_id,
 					buffer->buffer_id);
 		if (status)
@@ -280,21 +280,21 @@ int castkms_destroy_destination(struct pw_castkms *bridge,
 		close(buffer->reuse_syncobj_fd);
 	if (buffer->ready_syncobj_fd >= 0)
 		close(buffer->ready_syncobj_fd);
-	destroy_syncobj(bridge->drm_fd, &buffer->reuse_syncobj);
-	destroy_syncobj(bridge->drm_fd, &buffer->ready_syncobj);
+	destroy_syncobj(bridge->grant_fd, &buffer->reuse_syncobj);
+	destroy_syncobj(bridge->grant_fd, &buffer->ready_syncobj);
 
 	if (buffer->dmabuf_fd >= 0)
 		close(buffer->dmabuf_fd);
 
 	if (buffer->fb_id)
-		(void)ioctl(bridge->drm_fd, DRM_IOCTL_MODE_RMFB,
+		(void)ioctl(bridge->grant_fd, DRM_IOCTL_MODE_RMFB,
 			    &buffer->fb_id);
 
 	if (buffer->gem_handle) {
 		destroy = (struct drm_mode_destroy_dumb) {
 			.handle = buffer->gem_handle,
 		};
-		(void)ioctl(bridge->drm_fd, DRM_IOCTL_MODE_DESTROY_DUMB,
+		(void)ioctl(bridge->grant_fd, DRM_IOCTL_MODE_DESTROY_DUMB,
 			    &destroy);
 	}
 
@@ -329,7 +329,7 @@ void castkms_queue_available(struct pw_castkms *bridge)
 
 		buffer->user_data = ++bridge->user_data_sequence;
 		status = queue_destination(
-			bridge->drm_fd, bridge->stream_id, buffer->buffer_id,
+			bridge->grant_fd, bridge->stream_id, buffer->buffer_id,
 			bridge->mode_generation, buffer->user_data,
 			ready_point, reuse_point);
 		if (status == -EBUSY)
@@ -353,7 +353,7 @@ int castkms_read_cursor_bitmap(struct pw_castkms *bridge,
 	};
 	uint64_t minimum_size;
 
-	if (ioctl(bridge->drm_fd,
+	if (ioctl(bridge->grant_fd,
 		  DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, &args) < 0)
 		return -errno;
 
@@ -386,7 +386,7 @@ int castkms_read_cursor_bitmap(struct pw_castkms *bridge,
 
 	args.bitmap_ptr = (uint64_t)(uintptr_t)bridge->cursor_bitmap;
 	args.bitmap_size = bridge->cursor_bitmap_capacity;
-	if (ioctl(bridge->drm_fd,
+	if (ioctl(bridge->grant_fd,
 		  DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, &args) < 0) {
 		bridge->cursor_bitmap_size = 0;
 		return -errno;
@@ -421,7 +421,7 @@ int castkms_signal_reuse_point(struct pw_castkms *bridge,
 		.count_handles = 1,
 	};
 
-	if (ioctl(bridge->drm_fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL,
+	if (ioctl(bridge->grant_fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL,
 		  &args) < 0)
 		return -errno;
 
