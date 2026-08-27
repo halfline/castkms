@@ -4,6 +4,8 @@
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=kernel-diagnostics.sh
+. "$script_dir/kernel-diagnostics.sh"
 # shellcheck source=module-dependencies.sh
 . "$script_dir/module-dependencies.sh"
 
@@ -139,6 +141,7 @@ runtime_dir=$(mktemp -d)
 running_release=$(uname -r)
 test "$running_release" = "$expected_release"
 printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
+castkms_capture_guest_provenance "$result_dir"
 
 make clean
 test ! -e ./castkms.ko
@@ -456,4 +459,10 @@ test ! -e /sys/kernel/config/vkms
 test ! -e /sys/kernel/config/castkms
 
 printf '%s\n' 'cleanup=pass' | tee -a "$result_dir/summary.txt"
+cleanup
+trap - EXIT
+castkms_capture_kernel_log "$result_dir/product-dmesg.txt"
+castkms_check_kernel_log "$result_dir/product-dmesg.txt" \
+	"$result_dir/product-kernel-errors.txt"
+printf '%s\n' 'kernel_diagnostics=pass' | tee -a "$result_dir/summary.txt"
 printf '%s\n' 'result=pass' | tee -a "$result_dir/summary.txt"
