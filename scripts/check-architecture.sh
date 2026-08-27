@@ -39,6 +39,10 @@ reject 'ownership tracker imports authority policy' \
 	'castkms_capture_authority|reconcile_ownership' \
 	src/castkms_capture_owner.c src/castkms_capture_owner.h
 
+reject 'driver carries a hand-written DRM-core grant allowlist' \
+	'case DRM_IOCTL_[A-Z0-9_]+:' \
+	src/castkms_drv.c
+
 rg -q '^castkms_colorop_snapshot_init\(' src/castkms_colorop.c
 reject 'plane layer owns color-operation snapshots' \
 	'^castkms_colorop_snapshot_init\(' \
@@ -47,6 +51,7 @@ reject 'plane layer owns color-operation snapshots' \
 test -f src/castkms_frame_dispatch.c
 test -f src/castkms_frame_dispatch_demand.h
 test -f src/castkms_crc.h
+test -f src/castkms_grant_core_ioctl_table.inc
 test ! -e src/castkms_composer_demand.h
 
 printf '%s\n' 'architecture-dependencies=pass'

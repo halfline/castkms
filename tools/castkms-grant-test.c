@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
@@ -482,6 +483,70 @@ static int expect_holder_cannot_become_master(int fd)
 	return 0;
 }
 
+static int test_holder_syncobj_eventfd(int fd)
+{
+	struct drm_syncobj_create create = {};
+	struct drm_syncobj_eventfd event = {};
+	struct drm_syncobj_timeline_array signal;
+	struct drm_syncobj_destroy destroy;
+	struct pollfd pollfd;
+	uint64_t point = 1;
+	uint64_t count = 0;
+	int event_fd = -1;
+	int ret = -1;
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &create) < 0) {
+		perror("grant-holder SYNCOBJ_CREATE");
+		return -1;
+	}
+	event_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+	if (event_fd < 0) {
+		perror("eventfd");
+		goto out;
+	}
+	event = (struct drm_syncobj_eventfd) {
+		.handle = create.handle,
+		.point = point,
+		.fd = event_fd,
+	};
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_EVENTFD, &event) < 0) {
+		perror("grant-holder SYNCOBJ_EVENTFD");
+		goto out;
+	}
+	signal = (struct drm_syncobj_timeline_array) {
+		.handles = (uint64_t)(uintptr_t)&create.handle,
+		.points = (uint64_t)(uintptr_t)&point,
+		.count_handles = 1,
+	};
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL, &signal) < 0) {
+		perror("grant-holder SYNCOBJ_TIMELINE_SIGNAL");
+		goto out;
+	}
+	pollfd = (struct pollfd) {
+		.fd = event_fd,
+		.events = POLLIN,
+	};
+	if (poll(&pollfd, 1, 1000) != 1 || !(pollfd.revents & POLLIN)) {
+		fprintf(stderr, "grant-holder syncobj eventfd was not signaled\n");
+		goto out;
+	}
+	if (read(event_fd, &count, sizeof(count)) != sizeof(count) || count != 1) {
+		fprintf(stderr, "grant-holder syncobj eventfd count is invalid\n");
+		goto out;
+	}
+	ret = 0;
+
+out:
+	if (event_fd >= 0)
+		close(event_fd);
+	destroy = (struct drm_syncobj_destroy) { .handle = create.handle };
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy) < 0) {
+		perror("grant-holder SYNCOBJ_DESTROY");
+		ret = -1;
+	}
+	return ret;
+}
+
 static int expect_create_flag_namespaces(int fd, uint32_t connector_id)
 {
 	struct drm_castkms_create_grant create = {
@@ -586,9 +651,11 @@ int main(int argc, char **argv)
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_PENDING, 0) ||
 	    expect_holder_cannot_create_grant(normal_fd, connector_id) ||
-	    expect_holder_cannot_become_master(normal_fd))
+	    expect_holder_cannot_become_master(normal_fd) ||
+	    test_holder_syncobj_eventfd(normal_fd))
 		goto out;
 	printf("grant_scm_rights=pass\n");
+	printf("grant_syncobj_eventfd=pass\n");
 	if (setup_display(issuer, connector_id, &display) ||
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE, 0))

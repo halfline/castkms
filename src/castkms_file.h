@@ -16,8 +16,8 @@ struct inode;
  * struct castkms_file - CastKMS state private to one DRM file
  * @revocable_grants: Grants this file may query or revoke and whose close
  * permanently revokes them
- * @holder_grant: Grant-fd wrapper carried by this file, or NULL
- * @grant_client: Unregistered DRM client backing a never-master grant fd
+ * @holder_grant: Live grant-fd authority adapter carried by this file, or NULL
+ * @grant_client: Unregistered DRM client identifying a never-master grant file
  */
 struct castkms_file {
 	struct xarray revocable_grants;

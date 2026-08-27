@@ -92,7 +92,12 @@ The returned file:
 - is not current DRM master and is marked unauthenticated;
 - cannot become DRM master through `SET_MASTER` or `DROP_MASTER`;
 - cannot create child grants;
-- is always close-on-exec and may optionally be nonblocking.
+- is always close-on-exec and may optionally be nonblocking;
+- supports ordinary non-master DRM buffer and synchronization ioctls.
+
+Create GEM objects, framebuffer IDs, syncobjs, registrations, and queues on
+this file. Handles from an independently opened DRM fd are in the wrong
+namespace.
 
 ## Rights
 

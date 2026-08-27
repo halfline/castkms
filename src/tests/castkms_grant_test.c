@@ -4,10 +4,12 @@
 
 #include <drm/castkms_drm.h>
 #include <drm/drm_auth.h>
+#include <drm/drm_ioctl.h>
 
 #include "../castkms_capture_authority.h"
 #include "../castkms_capture_owner.h"
 #include "../castkms_grant.h"
+#include "../castkms_ioctl_policy.h"
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 
@@ -263,6 +265,54 @@ static void castkms_disabling_last_plane_claims_safe_blank(struct kunit *test)
 							 false, false));
 }
 
+static void castkms_grant_core_ioctl_metadata_is_enforced(struct kunit *test)
+{
+	static const unsigned int allowed[] = {
+#define CASTKMS_GRANT_CORE_IOCTL(name) DRM_IOCTL_##name,
+#include "../castkms_grant_core_ioctl_table.inc"
+#undef CASTKMS_GRANT_CORE_IOCTL
+	};
+	static const unsigned int denied[] = {
+		DRM_IOCTL_SET_MASTER,
+		DRM_IOCTL_DROP_MASTER,
+		DRM_IOCTL_MODE_SETCRTC,
+		DRM_IOCTL_MODE_ATOMIC,
+		DRM_IOCTL_PRIME_FD_TO_HANDLE,
+	};
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(allowed); i++)
+		KUNIT_EXPECT_TRUE_MSG(
+			test, castkms_ioctl_is_allowed_on_grant(allowed[i]),
+			"metadata entry %zu was denied", i);
+	for (i = 0; i < ARRAY_SIZE(denied); i++)
+		KUNIT_EXPECT_FALSE_MSG(
+			test, castkms_ioctl_is_allowed_on_grant(denied[i]),
+			"sensitive core ioctl %zu was allowed", i);
+}
+
+static void castkms_grant_ioctl_policy_accepts_compat_layouts(
+	struct kunit *test)
+{
+	/* Sizes of DRM's drm_version32_t and packed x86 fb_cmd232 types. */
+	const unsigned int compat_version =
+		_IOC(_IOC_DIR(DRM_IOCTL_VERSION), DRM_IOCTL_BASE,
+		     DRM_IOCTL_NR(DRM_IOCTL_VERSION), 36);
+	const unsigned int compat_addfb2 =
+		_IOC(_IOC_DIR(DRM_IOCTL_MODE_ADDFB2), DRM_IOCTL_BASE,
+		     DRM_IOCTL_NR(DRM_IOCTL_MODE_ADDFB2), 100);
+	const unsigned int wrong_type =
+		_IOC(_IOC_DIR(DRM_IOCTL_VERSION), 'x',
+		     DRM_IOCTL_NR(DRM_IOCTL_VERSION), 36);
+
+	KUNIT_EXPECT_TRUE(test,
+		castkms_ioctl_is_allowed_on_grant(compat_version));
+	KUNIT_EXPECT_TRUE(test,
+		castkms_ioctl_is_allowed_on_grant(compat_addfb2));
+	KUNIT_EXPECT_FALSE(test,
+		castkms_ioctl_is_allowed_on_grant(wrong_type));
+}
+
 static struct kunit_case castkms_grant_test_cases[] = {
 	KUNIT_CASE(castkms_grant_pending_before_safe_output),
 	KUNIT_CASE(castkms_grant_active_for_owned_content),
@@ -283,6 +333,8 @@ static struct kunit_case castkms_grant_test_cases[] = {
 	KUNIT_CASE(castkms_grant_device_shutdown_is_terminal),
 	KUNIT_CASE(castkms_blank_noop_does_not_claim_content),
 	KUNIT_CASE(castkms_disabling_last_plane_claims_safe_blank),
+	KUNIT_CASE(castkms_grant_core_ioctl_metadata_is_enforced),
+	KUNIT_CASE(castkms_grant_ioctl_policy_accepts_compat_layouts),
 	{}
 };
 

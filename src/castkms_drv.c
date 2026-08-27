@@ -102,10 +102,28 @@ static const struct castkms_ioctl_metadata castkms_ioctl_metadata[] = {
 VISIBLE_IF_KUNIT bool
 castkms_ioctl_is_allowed_on_grant(unsigned int command)
 {
+	static const unsigned int core_commands[] = {
+#define CASTKMS_GRANT_CORE_IOCTL(name) DRM_IOCTL_##name,
+#include "castkms_grant_core_ioctl_table.inc"
+#undef CASTKMS_GRANT_CORE_IOCTL
+	};
 	size_t i;
 
+	if (DRM_IOCTL_TYPE(command) != DRM_IOCTL_BASE)
+		return false;
+
+	/*
+	 * Compat ioctl encodings may have a different argument size from their
+	 * native counterparts. DRM dispatches both by type and command number,
+	 * so apply the grant policy to that same stable identity.
+	 */
+	for (i = 0; i < ARRAY_SIZE(core_commands); i++)
+		if (DRM_IOCTL_NR(core_commands[i]) == DRM_IOCTL_NR(command))
+			return true;
+
 	for (i = 0; i < ARRAY_SIZE(castkms_ioctl_metadata); i++) {
-		if (castkms_ioctl_metadata[i].command == command)
+		if (DRM_IOCTL_NR(castkms_ioctl_metadata[i].command) ==
+		    DRM_IOCTL_NR(command))
 			return castkms_ioctl_metadata[i].grant_access ==
 				CASTKMS_IOCTL_GRANT_ALLOWED;
 	}
@@ -200,7 +218,8 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 }
 
 static const struct drm_driver castkms_driver = {
-	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM,
+	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM |
+				  DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
 	.ioctls			= castkms_ioctls,
 	.num_ioctls		= ARRAY_SIZE(castkms_ioctls),
 	.open			= castkms_file_open,

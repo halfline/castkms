@@ -49,7 +49,7 @@ bool castkms_file_is_grant(struct file *file)
 	if (!file_priv)
 		return false;
 	file_state = file_priv->driver_priv;
-	return file_state && READ_ONCE(file_state->holder_grant);
+	return file_state && READ_ONCE(file_state->grant_client);
 }
 
 int castkms_file_release(struct inode *inode, struct file *file)
