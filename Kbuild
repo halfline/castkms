@@ -10,6 +10,7 @@ castkms-y := \
 	src/castkms_output_buffer.o \
 	src/castkms_formats.o \
 	src/castkms_crtc.o \
+	src/castkms_frame_dispatch.o \
 	src/castkms_composer.o \
 	src/castkms_writeback.o \
 	src/castkms_connector.o \

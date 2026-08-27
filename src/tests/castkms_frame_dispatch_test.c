@@ -3,6 +3,7 @@
 #include <kunit/test.h>
 
 #include "../castkms_crtc.h"
+#include "../castkms_frame_dispatch.h"
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 

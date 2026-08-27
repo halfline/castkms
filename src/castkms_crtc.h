@@ -21,6 +21,7 @@ struct drm_plane;
  * @base: Base DRM CRTC state
  * @frame: Renderer input produced during atomic check
  * @composer_work: Legacy composition work pending scheduler migration
+ * @dispatch_work: Aggregate frame-consumer work item
  * @active_writeback: Current writeback destination
  * @crc_pending: Whether a checksum is waiting for composition
  * @wb_pending: Whether a writeback job is waiting for composition
@@ -31,6 +32,7 @@ struct castkms_crtc_state {
 	struct drm_crtc_state base;
 	struct castkms_frame_stage frame;
 	struct work_struct composer_work;
+	struct work_struct dispatch_work;
 	struct castkms_output_buffer *active_writeback;
 	bool crc_pending;
 	bool wb_pending;

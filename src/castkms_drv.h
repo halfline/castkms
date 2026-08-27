@@ -15,6 +15,7 @@
 
 #include "castkms_frame.h"
 #include "castkms_crtc.h"
+#include "castkms_output.h"
 #include "castkms_plane.h"
 
 #define DEFAULT_DEVICE_NAME "castkms"
@@ -30,52 +31,6 @@
 
 #define NUM_OVERLAY_PLANES 8
 #define CASTKMS_MAX_OUTPUT_OBJECTS 31
-
-enum castkms_composer_client {
-	CASTKMS_COMPOSER_CLIENT_CRC,
-	CASTKMS_COMPOSER_CLIENT_WRITEBACK,
-};
-
-/**
- * struct castkms_composer_demand - Clients requiring frame composition
- * @crc_enabled: Whether CRC capture requires composition
- * @writeback_count: Number of committed writeback jobs awaiting composition
- */
-struct castkms_composer_demand {
-	bool crc_enabled;
-	unsigned int writeback_count;
-};
-
-static inline bool
-castkms_composer_demand_is_active(const struct castkms_composer_demand *demand)
-{
-	return demand->crc_enabled || demand->writeback_count;
-}
-
-/**
- * struct castkms_output - Internal representation of all output components in CASTKMS
- *
- * @crtc: Base CRTC in DRM
- * @wb_connector: DRM writeback connector used for this output
- * @wb_encoder: DRM encoder used by @wb_connector
- * @composer_workq: Ordered workqueue for @composer_state.composer_work.
- * @lock: Lock used to protect the current composer state and scheduling
- * @composer_demand: Protected by @lock, clients keeping the composer active
- * @composer_state: Protected by @lock, current state of this CASTKMS output
- * @composer_lock: Lock used internally to protect @composer_state members
- */
-struct castkms_output {
-	struct drm_crtc crtc;
-	struct drm_writeback_connector wb_connector;
-	struct drm_encoder wb_encoder;
-	struct workqueue_struct *composer_workq;
-	spinlock_t lock;
-
-	struct castkms_composer_demand composer_demand;
-	struct castkms_crtc_state *composer_state;
-
-	spinlock_t composer_lock;
-};
 
 struct castkms_config;
 struct castkms_config_plane;
@@ -99,9 +54,6 @@ struct castkms_device {
 /*
  * The following helpers are used to convert a member of a struct into its parent.
  */
-
-#define drm_crtc_to_castkms_output(target) \
-	container_of(target, struct castkms_output, crtc)
 
 #define drm_device_to_castkms_device(target) \
 	container_of(target, struct castkms_device, drm)

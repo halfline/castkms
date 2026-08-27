@@ -20,6 +20,9 @@ drm-runtime src/castkms_connector.c
 drm-runtime src/castkms_connector.h
 drm-runtime src/castkms_crtc.c
 drm-runtime src/castkms_crtc.h
+drm-runtime src/castkms_frame_dispatch.c
+drm-runtime src/castkms_frame_dispatch.h
+drm-runtime src/castkms_frame_dispatch_demand.h
 drm-runtime src/castkms_output.h
 drm-runtime src/castkms_plane.c
 drm-runtime src/castkms_plane.h

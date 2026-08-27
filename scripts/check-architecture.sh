@@ -19,9 +19,17 @@ reject()
 	fi
 }
 
+reject 'output runtime header imports a complete subsystem API' \
+	'#include "castkms_(capture|composer|frame)\.h"' \
+	src/castkms_output.h
+
 rg -q '^castkms_colorop_snapshot_init\(' src/castkms_colorop.c
 reject 'plane layer owns color-operation snapshots' \
 	'^castkms_colorop_snapshot_init\(' \
 	src/castkms_plane.c
+
+test -f src/castkms_frame_dispatch.c
+test -f src/castkms_frame_dispatch_demand.h
+test ! -e src/castkms_composer_demand.h
 
 printf '%s\n' 'architecture-dependencies=pass'

@@ -17,6 +17,7 @@
 
 #include "castkms_crtc.h"
 #include "castkms_drv.h"
+#include "castkms_frame_dispatch.h"
 #include "castkms_plane.h"
 
 static int castkms_frame_plane_zpos_cmp(const void *a, const void *b)
@@ -94,6 +95,7 @@ castkms_atomic_crtc_duplicate_state(struct drm_crtc *crtc)
 
 	__drm_atomic_helper_crtc_duplicate_state(crtc, &castkms_state->base);
 	INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
+	INIT_WORK(&castkms_state->dispatch_work, castkms_frame_dispatch_worker);
 
 	return &castkms_state->base;
 }
@@ -106,6 +108,7 @@ static void castkms_atomic_crtc_destroy_state(struct drm_crtc *crtc,
 	__drm_atomic_helper_crtc_destroy_state(state);
 
 	WARN_ON(work_pending(&castkms_state->composer_work));
+	WARN_ON(work_pending(&castkms_state->dispatch_work));
 	kfree(castkms_state->frame.planes);
 	kfree(castkms_state);
 }
@@ -124,6 +127,7 @@ static void castkms_atomic_crtc_reset(struct drm_crtc *crtc)
 
 	__drm_atomic_helper_crtc_reset(crtc, &castkms_state->base);
 	INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
+	INIT_WORK(&castkms_state->dispatch_work, castkms_frame_dispatch_worker);
 }
 
 static const struct drm_crtc_funcs castkms_crtc_funcs = {
@@ -304,11 +308,16 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 
 	spin_lock_init(&castkms_out->lock);
 	spin_lock_init(&castkms_out->composer_lock);
+	spin_lock_init(&castkms_out->dispatch_lock);
 
 	castkms_out->composer_workq =
 		drmm_alloc_ordered_workqueue(dev, "castkms_composer", 0);
 	if (IS_ERR(castkms_out->composer_workq))
 		return ERR_CAST(castkms_out->composer_workq);
+	castkms_out->dispatch_workq =
+		drmm_alloc_ordered_workqueue(dev, "castkms_dispatch", 0);
+	if (IS_ERR(castkms_out->dispatch_workq))
+		return ERR_CAST(castkms_out->dispatch_workq);
 
 	return castkms_out;
 }

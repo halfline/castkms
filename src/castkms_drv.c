@@ -86,6 +86,7 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 		struct castkms_crtc_state *castkms_state = to_castkms_crtc_state(old_crtc_state);
 
 		flush_work(&castkms_state->composer_work);
+		flush_work(&castkms_state->dispatch_work);
 	}
 
 	drm_atomic_helper_cleanup_planes(dev, old_state);
