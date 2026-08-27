@@ -4,6 +4,7 @@
 
 #include "../castkms_crtc.h"
 #include "../castkms_frame_dispatch.h"
+#include "../castkms_limits.h"
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 
@@ -121,7 +122,7 @@ static void castkms_frame_dispatch_test_sorts_planes_by_zpos(struct kunit *test)
 
 	primary.zpos = 0;
 	overlay.zpos = 7;
-	cursor.zpos = overlay.zpos + 1;
+	cursor.zpos = CASTKMS_MAX_OUTPUT_OBJECTS;
 
 	castkms_sort_frame_planes(planes, ARRAY_SIZE(planes));
 
