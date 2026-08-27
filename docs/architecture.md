@@ -14,8 +14,9 @@ metadata.
 
 `castkms_capture_cursor.c` owns cursor metadata and bitmap extraction. A zero
 serial means that no cursor state is available. A nonzero serial without
-`VISIBLE` describes a hidden cursor. `IMAGE_CHANGED` tells a client to
-invalidate any image cached for the previous serial.
+`VISIBLE` describes a hidden cursor. `IMAGE_CHANGED` tells a client to read
+the new bitmap from the event's buffer before re-queuing it and cache that
+image for later events. A hidden cursor exposes no bitmap.
 
 Writeback always retains the cursor. When writeback or frame checksums overlap
 a cursor-excluded capture, frame dispatch preserves the full composition for

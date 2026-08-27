@@ -18,6 +18,8 @@ int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
 					    struct drm_file *file_priv);
 int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 				       struct drm_file *file_priv);
+int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
+					     struct drm_file *file_priv);
 
 void castkms_capture_uapi_file_fini(struct drm_file *file_priv);
 

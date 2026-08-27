@@ -41,6 +41,8 @@ static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
 	      "capture event ABI size changed");
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108,
 	      "capture event ABI layout changed");
+static_assert(sizeof(struct drm_castkms_capture_read_cursor_bitmap) == 40,
+	      "capture read-cursor-bitmap ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
@@ -1391,6 +1393,73 @@ static int run_cursor_test(const char *device, int inherited_fd,
 	first_serial = event.cursor_serial;
 	printf("cursor_metadata=pass\n");
 
+	/* READ_CURSOR_BITMAP: probe then fetch */
+	{
+		struct drm_castkms_capture_read_cursor_bitmap bmp = {
+			.stream_id = stream.stream_id,
+			.buffer_id = buffer_id,
+		};
+		uint32_t required_size;
+		void *bitmap;
+
+		if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  &bmp) < 0) {
+			perror("probe cursor bitmap size");
+			goto out;
+		}
+		if (bmp.format != DRM_FORMAT_ARGB8888) {
+			fprintf(stderr, "cursor bitmap format: %#x\n",
+				bmp.format);
+			goto out;
+		}
+		if (bmp.width != cursor_w || bmp.height != cursor_h) {
+			fprintf(stderr, "cursor bitmap size: %ux%u\n",
+				bmp.width, bmp.height);
+			goto out;
+		}
+		if (bmp.stride != cursor_w * sizeof(uint32_t) ||
+		    bmp.bitmap_size != bmp.stride * cursor_h) {
+			fprintf(stderr,
+				"cursor bitmap layout: stride=%u size=%u\n",
+				bmp.stride, bmp.bitmap_size);
+			goto out;
+		}
+
+		required_size = bmp.bitmap_size;
+		bitmap = malloc(required_size);
+		if (!bitmap)
+			goto out;
+		bmp.bitmap_ptr = (uint64_t)(uintptr_t)bitmap;
+		bmp.bitmap_size = required_size - 1;
+		errno = 0;
+		if (ioctl(grant_fd,
+			  DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  &bmp) == 0 || errno != ENOSPC ||
+		    bmp.bitmap_size != required_size) {
+			fprintf(stderr,
+				"short cursor bitmap read: errno=%s size=%u\n",
+				strerror(errno), bmp.bitmap_size);
+			free(bitmap);
+			goto out;
+		}
+		bmp.bitmap_size = required_size;
+		if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  &bmp) < 0) {
+			perror("read cursor bitmap");
+			free(bitmap);
+			goto out;
+		}
+		if (((uint32_t *)bitmap)[0] != cursor_fill) {
+			fprintf(stderr,
+				"cursor bitmap pixel[0]: %#x, expected %#x\n",
+				((uint32_t *)bitmap)[0], cursor_fill);
+			free(bitmap);
+			goto out;
+		}
+		free(bitmap);
+	}
+	printf("cursor_bitmap=pass\n");
+
 	/* Second capture: same cursor, IMAGE_CHANGED must NOT be set */
 	ioctl_ret = queue_capture_when_available(grant_fd, stream.stream_id,
 		second_buffer_id, DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
@@ -1541,6 +1610,25 @@ static int run_cursor_test(const char *device, int inherited_fd,
 		fprintf(stderr, "cursor hide transition metadata is invalid\n");
 		goto out;
 	}
+	{
+		struct drm_castkms_capture_read_cursor_bitmap bmp = {
+			.stream_id = stream.stream_id,
+			.buffer_id = buffer_id,
+		};
+
+		if (ioctl(grant_fd,
+			  DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			  &bmp) < 0) {
+			perror("read hidden cursor bitmap");
+			goto out;
+		}
+		if (bmp.format || bmp.width || bmp.height || bmp.stride ||
+		    bmp.bitmap_size) {
+			fprintf(stderr, "hidden cursor retained stale bitmap data\n");
+			goto out;
+		}
+	}
+	printf("cursor_hidden_bitmap=pass\n");
 	printf("cursor_clear=pass\n");
 
 	printf("cursor_test=pass\n");

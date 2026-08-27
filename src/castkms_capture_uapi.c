@@ -76,6 +76,7 @@ static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112);
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108);
+static_assert(sizeof(struct drm_castkms_capture_read_cursor_bitmap) == 40);
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -699,5 +700,100 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 out_unlock:
 	mutex_unlock(&file_state->capture_lock);
 	castkms_grant_end(authority);
+	return ret;
+}
+
+int castkms_capture_read_cursor_bitmap_ioctl(struct drm_device *dev, void *data,
+					     struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_read_cursor_bitmap *args = data;
+	struct castkms_file *file_state = file_priv->driver_priv;
+	struct castkms_capture_uapi_stream *uapi_stream;
+	struct castkms_capture_buffer *buffer;
+	struct castkms_capture_cursor_data cursor;
+	struct castkms_capture_authority *authority;
+	void *bitmap = NULL;
+	int ret;
+
+	(void)dev;
+	if (args->reserved)
+		return -EINVAL;
+
+	ret = castkms_grant_begin(file_priv, NULL,
+				  CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS |
+				  CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR,
+				  &authority);
+	if (ret)
+		return ret;
+
+	mutex_lock(&file_state->capture_lock);
+	uapi_stream = xa_load(&file_state->capture_streams, args->stream_id);
+	if (!uapi_stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	if (!castkms_capture_stream_has_authority(uapi_stream->stream,
+						     authority)) {
+		ret = -EACCES;
+		goto out_unlock;
+	}
+	ret = castkms_capture_stream_status(uapi_stream->stream);
+	if (ret)
+		goto out_unlock;
+
+	buffer = xa_load(&uapi_stream->buffers, args->buffer_id);
+	if (!buffer) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	ret = castkms_capture_buffer_get_cursor_data(buffer, &cursor);
+	if (ret)
+		goto out_unlock;
+
+	if (!cursor.bitmap || !cursor.size) {
+		args->format = 0;
+		args->width = 0;
+		args->height = 0;
+		args->stride = 0;
+		args->bitmap_size = 0;
+		ret = 0;
+		goto out_unlock;
+	}
+
+	args->format = DRM_FORMAT_ARGB8888;
+	args->width = cursor.width;
+	args->height = cursor.height;
+	args->stride = cursor.stride;
+	if (!args->bitmap_size) {
+		args->bitmap_size = cursor.size;
+		ret = 0;
+		goto out_unlock;
+	}
+	if (args->bitmap_size < cursor.size) {
+		args->bitmap_size = cursor.size;
+		ret = -ENOSPC;
+		goto out_unlock;
+	}
+
+	/*
+	 * Snapshot authorized bytes before releasing the buffer lifetime lock.
+	 */
+	bitmap = kmemdup(cursor.bitmap, cursor.size, GFP_KERNEL);
+	if (!bitmap) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+
+	args->bitmap_size = cursor.size;
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&file_state->capture_lock);
+	castkms_grant_end(authority);
+	if (!ret && bitmap &&
+	    copy_to_user(u64_to_user_ptr(args->bitmap_ptr), bitmap,
+			 cursor.size))
+		ret = -EFAULT;
+	kfree(bitmap);
 	return ret;
 }

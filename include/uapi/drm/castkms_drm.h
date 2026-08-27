@@ -84,8 +84,8 @@ extern "C" {
 /**
  * DRM_CASTKMS_GRANT_READ_CURSOR:
  *
- * Permit cursor inclusion and metadata in a capture stream. Pixel capture
- * without this right must exclude the cursor.
+ * Permit cursor inclusion, metadata, and bitmap retrieval in a capture
+ * stream. Pixel capture without this right must exclude the cursor.
  */
 #define DRM_CASTKMS_GRANT_READ_CURSOR		(1U << 3)
 
@@ -584,9 +584,38 @@ struct drm_event_castkms_capture_frame {
 #define DRM_CASTKMS_CAPTURE_REGISTER_BUFFER	0x03
 #define DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER	0x04
 #define DRM_CASTKMS_CAPTURE_QUEUE_BUFFER	0x05
+#define DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP	0x09
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13
+
+/**
+ * struct drm_castkms_capture_read_cursor_bitmap - read cursor image data
+ * @stream_id: file-local capture stream identifier
+ * @buffer_id: read cursor snapshot from this buffer (must be IDLE)
+ * @format: output: DRM_FORMAT_ARGB8888
+ * @width: output: cursor image width in pixels
+ * @height: output: cursor image height in pixels
+ * @stride: output: bytes per row
+ * @bitmap_size: input: buffer capacity in bytes; output: required size
+ * @reserved: must be zero
+ * @bitmap_ptr: input: userspace buffer for pixel data
+ *
+ * Reads the cursor image that was snapshotted during composition of the
+ * specified capture buffer. Call after the capture event and before
+ * re-queuing. Only needed when DRM_CASTKMS_CURSOR_IMAGE_CHANGED is set.
+ */
+struct drm_castkms_capture_read_cursor_bitmap {
+	__u32 stream_id;
+	__u32 buffer_id;
+	__u32 format;
+	__u32 width;
+	__u32 height;
+	__u32 stride;
+	__u32 bitmap_size;
+	__u32 reserved;
+	__u64 bitmap_ptr;
+};
 
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
@@ -606,6 +635,9 @@ struct drm_event_castkms_capture_frame {
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUEUE_BUFFER \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUEUE_BUFFER, \
 		struct drm_castkms_capture_queue_buffer)
+#define DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, \
+		 struct drm_castkms_capture_read_cursor_bitmap)
 #define DRM_IOCTL_CASTKMS_CREATE_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
 		 struct drm_castkms_create_grant)

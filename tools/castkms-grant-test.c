@@ -849,13 +849,19 @@ static int expect_plain_capture_denied(int fd)
 		.fb_id = 1,
 		.flags = DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
 	};
+	struct drm_castkms_capture_read_cursor_bitmap cursor = {
+		.stream_id = 1,
+		.buffer_id = 1,
+	};
 	struct drm_castkms_get_grant get_grant = {};
 
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_GET_GRANT, &get_grant,
 			       ENODATA, "plain-fd GET_GRANT") ||
 	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER,
 			       &register_buffer, EACCES,
-			       "plain-fd REGISTER_BUFFER"))
+			       "plain-fd REGISTER_BUFFER") ||
+	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
+			       &cursor, EACCES, "plain-fd READ_CURSOR_BITMAP"))
 		return -1;
 
 	return 0;

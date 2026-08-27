@@ -274,6 +274,11 @@ struct castkms_plane *castkms_plane_init(struct castkms_device *castkmsdev,
 	num_formats = castkms_plane_formats_alloc(&formats);
 	if (num_formats < 0)
 		return ERR_PTR(num_formats);
+	if (castkms_config_plane_get_type(plane_cfg) == DRM_PLANE_TYPE_CURSOR) {
+		/* Cursor bitmap capture exports this byte layout as ARGB8888. */
+		formats[0] = DRM_FORMAT_ARGB8888;
+		num_formats = 1;
+	}
 
 	plane = drmm_universal_plane_alloc(dev, struct castkms_plane, base, 0,
 					   &castkms_plane_funcs,

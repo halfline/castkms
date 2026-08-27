@@ -117,6 +117,24 @@ struct castkms_capture_completion {
 	struct castkms_capture_result result;
 };
 
+/**
+ * struct castkms_capture_cursor_data - Captured cursor bitmap view
+ * @bitmap: Core-owned tightly packed ARGB8888 pixels, or NULL
+ * @size: Size of @bitmap in bytes
+ * @stride: Bitmap row stride in bytes
+ * @width: Bitmap width
+ * @height: Bitmap height
+ *
+ * The view remains valid only while the buffer stays idle and registered.
+ */
+struct castkms_capture_cursor_data {
+	const void *bitmap;
+	u32 size;
+	u32 stride;
+	u32 width;
+	u32 height;
+};
+
 int castkms_capture_output_init(struct drm_device *dev,
 				struct castkms_output *output);
 bool castkms_capture_mode_changed(struct castkms_output *output,
@@ -178,5 +196,7 @@ enum castkms_capture_sync_mode
 castkms_capture_buffer_sync_mode(const struct castkms_capture_buffer *buffer);
 int castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 				  struct castkms_capture_request *request);
+int castkms_capture_buffer_get_cursor_data(struct castkms_capture_buffer *buffer,
+					   struct castkms_capture_cursor_data *cursor);
 
 #endif /* _CASTKMS_CAPTURE_H_ */

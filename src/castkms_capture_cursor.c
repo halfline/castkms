@@ -142,3 +142,35 @@ int castkms_capture_buffer_set_cursor(struct castkms_capture_buffer *buffer,
 
 	return 0;
 }
+
+int castkms_capture_buffer_get_cursor_data(
+	struct castkms_capture_buffer *buffer,
+	struct castkms_capture_cursor_data *cursor)
+{
+	struct castkms_capture_output *capture = &buffer->stream->output->capture;
+	unsigned long flags;
+
+	if (!cursor)
+		return -EINVAL;
+
+	spin_lock_irqsave(&capture->state_lock, flags);
+	if (buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE) {
+		spin_unlock_irqrestore(&capture->state_lock, flags);
+		return -EBUSY;
+	}
+
+	*cursor = (struct castkms_capture_cursor_data) {};
+	if (buffer->cursor_bitmap &&
+	    buffer->cursor_bitmap_serial == buffer->cursor_serial) {
+		*cursor = (struct castkms_capture_cursor_data) {
+			.bitmap = buffer->cursor_bitmap,
+			.size = buffer->cursor_bitmap_size,
+			.stride = buffer->cursor_bitmap_stride,
+			.width = buffer->cursor_width,
+			.height = buffer->cursor_height,
+		};
+	}
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+
+	return 0;
+}
