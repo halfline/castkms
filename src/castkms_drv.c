@@ -30,6 +30,7 @@
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_vblank.h>
 
+#include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
@@ -178,15 +179,6 @@ static int castkms_modeset_init(struct castkms_device *castkmsdev)
 	return castkms_output_init(castkmsdev);
 }
 
-static void castkms_capture_owner_fini_action(struct drm_device *dev,
-					      void *data)
-{
-	struct castkms_device *castkmsdev = data;
-
-	(void)dev;
-	castkms_capture_owner_device_fini(castkmsdev);
-}
-
 int castkms_create(struct castkms_config *config)
 {
 	int ret;
@@ -216,10 +208,7 @@ int castkms_create(struct castkms_config *config)
 	castkms_device->faux_dev = fdev;
 	castkms_device->config = config;
 	config->dev = castkms_device;
-	castkms_capture_owner_device_init(castkms_device, NULL, NULL);
-	ret = drmm_add_action_or_reset(&castkms_device->drm,
-				       castkms_capture_owner_fini_action,
-				       castkms_device);
+	ret = castkms_capture_authority_device_init(castkms_device);
 	if (ret)
 		goto out_devres;
 

@@ -6,6 +6,7 @@ obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += src/tests/
 castkms-y := \
 	src/castkms_drv.o \
 	src/castkms_framebuffer.o \
+	src/castkms_capture_authority.o \
 	src/castkms_capture_owner.o \
 	src/castkms_plane.o \
 	src/castkms_output.o \
