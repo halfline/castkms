@@ -33,6 +33,8 @@
 
 #include <drm/castkms_drm.h>
 
+#include <kunit/visibility.h>
+
 #include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
 #include "castkms_config.h"
@@ -42,6 +44,7 @@
 #include "castkms_file.h"
 #include "castkms_framebuffer.h"
 #include "castkms_grant.h"
+#include "castkms_ioctl_policy.h"
 #include "castkms_uapi_device.h"
 
 #define DRIVER_NAME	"castkms"
@@ -75,14 +78,74 @@ static bool create_default_dev = true;
 module_param_named(create_default_dev, create_default_dev, bool, 0444);
 MODULE_PARM_DESC(create_default_dev, "Create or not the default CASTKMS device");
 
+enum castkms_ioctl_grant_access {
+	CASTKMS_IOCTL_GRANT_DENIED,
+	CASTKMS_IOCTL_GRANT_ALLOWED,
+};
+
+struct castkms_ioctl_metadata {
+	unsigned int command;
+	drm_ioctl_t *handler;
+	enum castkms_ioctl_grant_access grant_access;
+};
+
+static const struct castkms_ioctl_metadata castkms_ioctl_metadata[] = {
+#define CASTKMS_PRIVATE_IOCTL(name, ioctl_handler, access) { \
+	.command = DRM_IOCTL_##name, \
+	.handler = ioctl_handler, \
+	.grant_access = CASTKMS_IOCTL_GRANT_##access, \
+},
+#include "castkms_ioctl_table.inc"
+#undef CASTKMS_PRIVATE_IOCTL
+};
+
+VISIBLE_IF_KUNIT bool
+castkms_ioctl_is_allowed_on_grant(unsigned int command)
+{
+	size_t i;
+
+	for (i = 0; i < ARRAY_SIZE(castkms_ioctl_metadata); i++) {
+		if (castkms_ioctl_metadata[i].command == command)
+			return castkms_ioctl_metadata[i].grant_access ==
+				CASTKMS_IOCTL_GRANT_ALLOWED;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_ioctl_is_allowed_on_grant);
+
+static long castkms_drm_ioctl(struct file *file, unsigned int command,
+			      unsigned long argument)
+{
+	if (castkms_file_is_grant(file) &&
+	    !castkms_ioctl_is_allowed_on_grant(command))
+		return -EACCES;
+
+	return drm_ioctl(file, command, argument);
+}
+
+#ifdef CONFIG_COMPAT
+static long castkms_drm_compat_ioctl(struct file *file, unsigned int command,
+				     unsigned long argument)
+{
+	if (castkms_file_is_grant(file) &&
+	    !castkms_ioctl_is_allowed_on_grant(command))
+		return -EACCES;
+
+	return drm_compat_ioctl(file, command, argument);
+}
+
+#define CASTKMS_DRM_COMPAT_IOCTL castkms_drm_compat_ioctl
+#else
+#define CASTKMS_DRM_COMPAT_IOCTL NULL
+#endif
+
 static const struct file_operations castkms_driver_fops = {
 	.owner = THIS_MODULE,
 	.open = drm_open,
 	.release = castkms_file_release,
-	.unlocked_ioctl = drm_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = drm_compat_ioctl,
-#endif
+	.unlocked_ioctl = castkms_drm_ioctl,
+	.compat_ioctl = CASTKMS_DRM_COMPAT_IOCTL,
 	.poll = drm_poll,
 	.read = drm_read,
 	.llseek = noop_llseek,
@@ -97,12 +160,14 @@ bool castkms_crc_enabled(void)
 }
 
 static const struct drm_ioctl_desc castkms_ioctls[] = {
-	DRM_IOCTL_DEF_DRV(CASTKMS_CREATE_GRANT,
-			  castkms_grant_create_ioctl, 0),
-	DRM_IOCTL_DEF_DRV(CASTKMS_REVOKE_GRANT,
-			  castkms_grant_revoke_ioctl, 0),
-	DRM_IOCTL_DEF_DRV(CASTKMS_GET_GRANT,
-			  castkms_grant_get_ioctl, 0),
+#define CASTKMS_IOCTL_FLAGS_ALLOWED 0
+#define CASTKMS_IOCTL_FLAGS_DENIED 0
+#define CASTKMS_PRIVATE_IOCTL(name, handler, access) \
+	DRM_IOCTL_DEF_DRV(name, handler, CASTKMS_IOCTL_FLAGS_##access),
+#include "castkms_ioctl_table.inc"
+#undef CASTKMS_PRIVATE_IOCTL
+#undef CASTKMS_IOCTL_FLAGS_DENIED
+#undef CASTKMS_IOCTL_FLAGS_ALLOWED
 };
 
 static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)

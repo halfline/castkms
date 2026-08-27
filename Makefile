@@ -2,7 +2,7 @@
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all check check-architecture \
+.PHONY: all check check-architecture check-ioctls \
 	check-shell clean install kunit tools
 
 all:
@@ -20,11 +20,14 @@ kunit:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) \
 		CONFIG_DRM_CASTKMS_KUNIT_TEST=m modules
 
-check: check-architecture check-shell
+check: check-architecture check-ioctls check-shell
 	$(MAKE) -C tools check
 
 check-architecture:
 	./scripts/check-architecture.sh
+
+check-ioctls:
+	./scripts/check-private-ioctls.sh
 
 check-shell:
 	bash -O nullglob -c 'files=(scripts/*.sh scripts/vm/*.sh tools/pw-castkms/*.sh); \
