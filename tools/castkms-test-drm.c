@@ -132,3 +132,15 @@ int castkms_test_capture_start(int fd, uint32_t crtc_id, uint32_t flags,
 
 	return 0;
 }
+
+int castkms_test_capture_stop(int fd, uint32_t stream_id)
+{
+	struct drm_castkms_capture_stop stop = {
+		.stream_id = stream_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_STOP, &stop) < 0)
+		return -errno;
+
+	return 0;
+}

@@ -285,6 +285,18 @@ struct drm_castkms_capture_start {
 };
 
 /**
+ * struct drm_castkms_capture_stop - stop an owned capture stream
+ * @stream_id: file-local stream identifier returned by start
+ * @flags: must be zero
+ * @reserved: must be zero
+ */
+struct drm_castkms_capture_stop {
+	__u32 stream_id;
+	__u32 flags;
+	__u64 reserved;
+};
+
+/**
  * DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED:
  *
  * Reliable notification that a grant has become permanently inert. This is
@@ -331,6 +343,7 @@ struct drm_event_castkms_grant_state {
 
 #define DRM_CASTKMS_CAPTURE_QUERY_CAPS	0x00
 #define DRM_CASTKMS_CAPTURE_START	0x01
+#define DRM_CASTKMS_CAPTURE_STOP		0x02
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13
@@ -341,6 +354,9 @@ struct drm_event_castkms_grant_state {
 #define DRM_IOCTL_CASTKMS_CAPTURE_START \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_START, \
 		 struct drm_castkms_capture_start)
+#define DRM_IOCTL_CASTKMS_CAPTURE_STOP \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_STOP, \
+		struct drm_castkms_capture_stop)
 #define DRM_IOCTL_CASTKMS_CREATE_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
 		 struct drm_castkms_create_grant)

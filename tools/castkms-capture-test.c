@@ -24,6 +24,8 @@ static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
 	      "capture query ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_start) == 24,
 	      "capture start ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_stop) == 16,
+	      "capture stop ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
@@ -132,6 +134,11 @@ static int start_capture(int fd, uint32_t crtc_id,
 {
 	return castkms_test_capture_start(
 		fd, crtc_id, DRM_CASTKMS_CAPTURE_START_EXCLUSIVE, start);
+}
+
+static int stop_capture(int fd, uint32_t stream_id)
+{
+	return castkms_test_capture_stop(fd, stream_id);
 }
 
 static int connector_drives_crtc(int fd, uint32_t connector_id,
@@ -327,6 +334,13 @@ int main(int argc, char **argv)
 		}
 		printf("capture_mode_generation=%llu\n",
 		       (unsigned long long)stream.mode_generation);
+		ioctl_ret = stop_capture(fd, stream.stream_id);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("stop capture stream");
+			close(fd);
+			return EXIT_FAILURE;
+		}
 		close(fd);
 		return EXIT_SUCCESS;
 	}
@@ -404,6 +418,13 @@ int main(int argc, char **argv)
 				"capture start returned invalid stream metadata\n");
 			goto out_close;
 		}
+		ioctl_ret = stop_capture(competitor_fd, first_stream.stream_id);
+		if (ioctl_ret != -ENOENT) {
+			fprintf(stderr,
+				"ordinary-fd capture stop returned %d, expected %d\n",
+				ioctl_ret, -ENOENT);
+			goto out_close;
+		}
 	}
 
 	ioctl_ret = start_capture(fd, crtc_id, &second_stream);
@@ -413,11 +434,35 @@ int main(int argc, char **argv)
 			ioctl_ret, -EBUSY);
 		goto out_close;
 	}
-
 	printf("capture_stream_exclusive=pass\n");
+
+	ioctl_ret = stop_capture(fd, first_stream.stream_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("stop first capture stream");
+		goto out_close;
+	}
+	ioctl_ret = start_capture(fd, crtc_id, &second_stream);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("start capture stream after stop");
+		goto out_close;
+	}
+	if (second_stream.mode_generation != first_stream.mode_generation) {
+		fprintf(stderr, "mode generation changed without a modeset\n");
+		goto out_close;
+	}
+	printf("capture_stream_stop=pass\n");
+	ioctl_ret = stop_capture(fd, second_stream.stream_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("stop restarted capture stream");
+		goto out_close;
+	}
+
 	printf("capture_mode_generation=%llu\n",
-	       (unsigned long long)first_stream.mode_generation);
-	printf("capture_stream_start=pass\n");
+	       (unsigned long long)second_stream.mode_generation);
+	printf("capture_stream_lifecycle=pass\n");
 	ret = EXIT_SUCCESS;
 
 out_close:

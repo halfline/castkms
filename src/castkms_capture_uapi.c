@@ -51,6 +51,7 @@ static_assert(CASTKMS_MAX_CURSOR_HEIGHT ==
 static_assert(CASTKMS_MAX_EDID_SIZE == DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE);
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_capture_start) == 24);
+static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -286,4 +287,33 @@ out_clear_generation:
 out_end_grant:
 	castkms_grant_end(authority);
 	return ret;
+}
+
+int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
+			       struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_stop *args = data;
+	struct castkms_file *file_state = file_priv->driver_priv;
+	struct castkms_capture_uapi_stream *uapi_stream;
+	bool put_mapping;
+
+	(void)dev;
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	mutex_lock(&file_state->capture_lock);
+	uapi_stream = xa_load(&file_state->capture_streams, args->stream_id);
+	if (!uapi_stream) {
+		mutex_unlock(&file_state->capture_lock);
+		return -ENOENT;
+	}
+	put_mapping =
+		castkms_capture_uapi_unpublish_stream(uapi_stream);
+	mutex_unlock(&file_state->capture_lock);
+
+	castkms_capture_uapi_stream_stop(uapi_stream, -ECANCELED);
+	if (put_mapping)
+		castkms_capture_uapi_stream_put(uapi_stream);
+
+	return 0;
 }

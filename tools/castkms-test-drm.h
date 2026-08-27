@@ -27,4 +27,5 @@ void castkms_test_framebuffer_destroy(int fd,
 
 int castkms_test_capture_start(int fd, uint32_t crtc_id, uint32_t flags,
 			       struct drm_castkms_capture_start *start);
+int castkms_test_capture_stop(int fd, uint32_t stream_id);
 #endif /* CASTKMS_TEST_DRM_H */
