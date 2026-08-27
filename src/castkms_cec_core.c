@@ -259,6 +259,71 @@ out_free:
 	return ret;
 }
 
+int castkms_cec_core_unbind(struct castkms_cec_output *output,
+			    struct castkms_capture_authority *authority,
+			    u64 transport_generation)
+{
+	struct castkms_cec_transport *transport;
+	unsigned long flags;
+
+	if (!output)
+		return -ENOENT;
+
+	spin_lock_irqsave(&output->lock, flags);
+	transport = output->transport;
+	if (!transport || transport->authority != authority) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		return -EACCES;
+	}
+	if (transport->generation != transport_generation) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		return -ESTALE;
+	}
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	if (!castkms_capture_authority_unregister_resource(authority,
+							   &transport->resource))
+		return -EKEYREVOKED;
+
+	spin_lock_irqsave(&output->lock, flags);
+	if (WARN_ON(output->transport != transport)) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		transport->ops->release(transport->data);
+		kfree(transport);
+		return -EIO;
+	}
+	output->transport = NULL;
+	output->transport_online = false;
+	output->state_generation++;
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	transport->ops->release(transport->data);
+	kfree(transport);
+	return 0;
+}
+
+int castkms_cec_core_get_state(struct castkms_cec_output *output,
+			       struct castkms_capture_authority *authority,
+			       struct castkms_cec_state *state)
+{
+	unsigned long flags;
+
+	if (!output)
+		return -ENOENT;
+	if (!state)
+		return -EINVAL;
+
+	spin_lock_irqsave(&output->lock, flags);
+	if (!output->transport ||
+	    output->transport->authority != authority) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		return -EACCES;
+	}
+	castkms_cec_copy_state(output, state);
+	spin_unlock_irqrestore(&output->lock, flags);
+	return 0;
+}
+
 void castkms_cec_core_suspend_connector(struct drm_connector *connector)
 {
 	(void)connector;

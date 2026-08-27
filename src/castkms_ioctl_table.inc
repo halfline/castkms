@@ -41,4 +41,6 @@ CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_QUERY_CAPS,
 			     castkms_cec_query_caps_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_BIND_TRANSPORT,
 			     castkms_cec_bind_transport_ioctl, ALLOWED)
+CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_UNBIND_TRANSPORT,
+			     castkms_cec_unbind_transport_ioctl, ALLOWED)
 #endif

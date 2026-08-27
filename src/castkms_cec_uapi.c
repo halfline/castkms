@@ -29,6 +29,7 @@ struct castkms_cec_uapi_transport {
 static_assert(sizeof(struct drm_castkms_cec_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_cec_bind_transport) == 48);
 static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44);
+static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16);
 
 static struct castkms_cec_output *
 cec_uapi_lookup(struct drm_device *dev, struct drm_file *file_priv,
@@ -103,6 +104,19 @@ static u32 castkms_cec_uapi_state_flags(const struct castkms_cec_state *state)
 	if (state->adapter_enabled)
 		flags |= DRM_CASTKMS_CEC_STATE_ADAPTER_ENABLED;
 	return flags;
+}
+
+static int castkms_cec_uapi_get_transport(struct castkms_cec_output *output,
+					  struct castkms_capture_authority *authority,
+					  u32 transport_id,
+					  struct castkms_cec_state *state)
+{
+	int ret;
+
+	ret = castkms_cec_core_get_state(output, authority, state);
+	if (!ret && (u32)state->transport_generation != transport_id)
+		ret = -EACCES;
+	return ret;
 }
 
 int castkms_cec_query_caps_ioctl(struct drm_device *dev, void *data,
@@ -196,6 +210,41 @@ int castkms_cec_bind_transport_ioctl(struct drm_device *dev, void *data,
 out_authority:
 	castkms_grant_end(authority);
 	drm_connector_put(base);
+out_dev:
+	drm_dev_exit(idx);
+	return ret;
+}
+
+int castkms_cec_unbind_transport_ioctl(struct drm_device *dev, void *data,
+				       struct drm_file *file_priv)
+{
+	struct drm_castkms_cec_unbind_transport *args = data;
+	struct castkms_capture_authority *authority;
+	struct castkms_cec_state state;
+	struct castkms_cec_output *output;
+	struct drm_connector *connector;
+	int idx;
+	int ret;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
+	output = cec_uapi_lookup_granted(dev, file_priv, args->connector_id,
+					 &connector, &authority);
+	if (IS_ERR(output)) {
+		ret = PTR_ERR(output);
+		goto out_dev;
+	}
+	ret = castkms_cec_uapi_get_transport(output, authority,
+					     args->transport_id, &state);
+	if (!ret)
+		ret = castkms_cec_core_unbind(output, authority,
+					      state.transport_generation);
+
+	castkms_grant_end(authority);
+	drm_connector_put(connector);
 out_dev:
 	drm_dev_exit(idx);
 	return ret;

@@ -832,12 +832,27 @@ struct drm_castkms_cec_bind_transport {
 	__u32 pad0;
 };
 
+/**
+ * struct drm_castkms_cec_unbind_transport - release transport ownership
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @flags: must be zero
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_unbind_transport {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u32 flags;
+	__u32 reserved;
+};
+
 /* CEC DRM event types */
 #define DRM_CASTKMS_CEC_EVENT_STATE	0x80000002U
 
 /* CEC ioctl command numbers (after capture range 0x00-0x09) */
 #define DRM_CASTKMS_CEC_QUERY_CAPS		0x0a
 #define DRM_CASTKMS_CEC_BIND_TRANSPORT		0x0b
+#define DRM_CASTKMS_CEC_UNBIND_TRANSPORT	0x0c
 
 #define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
@@ -845,6 +860,9 @@ struct drm_castkms_cec_bind_transport {
 #define DRM_IOCTL_CASTKMS_CEC_BIND_TRANSPORT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_BIND_TRANSPORT, \
 		 struct drm_castkms_cec_bind_transport)
+#define DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_UNBIND_TRANSPORT, \
+		struct drm_castkms_cec_unbind_transport)
 #if defined(__cplusplus)
 }
 #endif

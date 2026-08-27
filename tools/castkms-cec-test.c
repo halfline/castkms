@@ -25,6 +25,8 @@ static_assert(sizeof(struct drm_castkms_cec_bind_transport) == 48,
 	      "cec bind transport ABI size changed");
 static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44,
 	      "cec bind transport ABI layout changed");
+static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16,
+	      "cec unbind transport ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get grant ABI size changed");
 
@@ -152,6 +154,19 @@ static int cec_bind(int fd, uint32_t connector_id,
 	return 0;
 }
 
+static int cec_unbind(int fd, uint32_t connector_id, uint32_t transport_id)
+{
+	struct drm_castkms_cec_unbind_transport args = {
+		.connector_id = connector_id,
+		.transport_id = transport_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
 /* --- Tests --- */
 
 static void test_query_caps(int fd, uint32_t connector_id)
@@ -237,6 +252,47 @@ static void test_query_caps_reserved_reject(int fd, uint32_t connector_id)
 	PASS("query_caps_reserved_reject");
 }
 
+static void test_bind_unbind(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("bind_transport", "ioctl failed: %s", strerror(-ret));
+		return;
+	}
+
+	if (!bind.transport_id) {
+		FAIL("bind_transport_id", "got zero transport_id");
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+	PASS("bind_transport_id");
+
+	if (!bind.transport_generation) {
+		FAIL("bind_transport_generation", "got zero generation");
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+	PASS("bind_transport_generation");
+
+	if (bind.state_flags & DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE) {
+		FAIL("bind_initial_offline",
+		     "transport should be offline after bind");
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+	PASS("bind_initial_offline");
+
+	ret = cec_unbind(fd, connector_id, bind.transport_id);
+	if (ret) {
+		FAIL("unbind_transport", "ioctl failed: %s", strerror(-ret));
+		return;
+	}
+	PASS("unbind_transport");
+}
+
 static void test_double_bind(int fd, uint32_t connector_id)
 {
 	struct drm_castkms_cec_bind_transport bind1, bind2;
@@ -253,10 +309,35 @@ static void test_double_bind(int fd, uint32_t connector_id)
 		FAIL("double_bind_reject",
 		     "expected EBUSY, got %s",
 		     ret ? strerror(-ret) : "success");
+		cec_unbind(fd, connector_id, bind1.transport_id);
 		return;
 	}
 	PASS("double_bind_reject");
 
+	cec_unbind(fd, connector_id, bind1.transport_id);
+}
+
+static void test_unbind_wrong_owner(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("unbind_wrong_owner", "bind failed: %s", strerror(-ret));
+		return;
+	}
+
+	ret = cec_unbind(fd, connector_id, bind.transport_id + 1);
+	if (ret != -EACCES) {
+		FAIL("unbind_wrong_owner",
+		     "expected EACCES, got %s",
+		     ret ? strerror(-ret) : "success");
+	} else {
+		PASS("unbind_wrong_owner");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
 }
 
 static void usage(const char *program)
@@ -310,7 +391,9 @@ int main(int argc, char **argv)
 	test_query_caps(fd, connector_id);
 	test_query_caps_bad_connector(fd);
 	test_query_caps_reserved_reject(fd, connector_id);
+	test_bind_unbind(fd, connector_id);
 	test_double_bind(fd, connector_id);
+	test_unbind_wrong_owner(fd, connector_id);
 	detach_monitor(fd, connector_id);
 
 	printf("\n%d/%d tests passed\n", tests_pass, tests_run);

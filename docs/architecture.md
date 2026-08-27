@@ -52,7 +52,8 @@ pixel-capture path.
 A grant with `MANAGE_CEC` may bind one transport to its connector. The
 transport-neutral `castkms_cec_core` owns exclusive binding and connector
 state; its authority resource hook removes the binding when the grant is
-revoked. `castkms_cec_uapi` performs DRM object lookup, checks grant rights,
+revoked. The owning grant may also unbind explicitly without ending its
+authority. `castkms_cec_uapi` performs DRM object lookup, checks grant rights,
 and translates the core snapshot into the public CEC structures.
 
 ## HDMI audio
