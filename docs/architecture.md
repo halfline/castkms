@@ -86,3 +86,9 @@ The current specialized interfaces have explicit owners:
 | Captured cursor state and bitmap extraction | `castkms_capture_cursor.c` |
 | CEC transport state | `castkms_cec_core.c` |
 | CEC ioctl and DRM events | `castkms_cec_uapi.c` |
+
+`scripts/architecture-layers.txt` assigns every production C source and header
+to exactly one layer. The architecture check rejects stale, duplicate, or
+unclassified paths and validates forbidden include directions from that
+complete manifest, so adding a file cannot silently bypass the core/UAPI
+boundary checks.

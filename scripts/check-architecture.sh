@@ -6,6 +6,58 @@ set -euo pipefail
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_dir"
 
+layer_manifest=scripts/architecture-layers.txt
+declare -A source_layers=()
+manifest_files=()
+
+while read -r layer path extra; do
+	case "$layer" in
+	''|'#'*) continue ;;
+	esac
+	if test -n "${extra:-}"; then
+		printf 'invalid architecture manifest entry: %s %s %s\n' \
+			"$layer" "$path" "$extra" >&2
+		exit 1
+	fi
+	case "$layer" in
+	assembly|audio-core|authority-core|capture-core|capture-uapi|cec-core|cec-uapi|config|drm-runtime|grant-uapi|render-core) ;;
+	*)
+		printf 'unknown architecture layer: %s\n' "$layer" >&2
+		exit 1
+		;;
+	esac
+	if test ! -f "$path"; then
+		printf 'stale architecture manifest path: %s\n' "$path" >&2
+		exit 1
+	fi
+	if test -n "${source_layers[$path]:-}"; then
+		printf 'duplicate architecture manifest path: %s\n' "$path" >&2
+		exit 1
+	fi
+	source_layers[$path]=$layer
+	manifest_files+=("$path")
+done < "$layer_manifest"
+
+mapfile -t current_sources < <(
+	git ls-files --cached --others --exclude-standard -- src | \
+	while IFS= read -r path; do
+		case "$path" in
+		src/tests/*) ;;
+		src/*.c|src/*.h)
+			test -f "$path" && printf '%s\n' "$path"
+			;;
+		esac
+	done | sort
+)
+
+if ! diff -u \
+	<(printf '%s\n' "${manifest_files[@]}" | sort) \
+	<(printf '%s\n' "${current_sources[@]}"); then
+	printf '%s\n' \
+		'architecture manifest does not classify every production source exactly once' >&2
+	exit 1
+fi
+
 reject()
 {
 	local description=$1
