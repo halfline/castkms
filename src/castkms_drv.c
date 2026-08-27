@@ -95,7 +95,6 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 	for_each_old_crtc_in_state(old_state, crtc, old_crtc_state, i) {
 		struct castkms_crtc_state *castkms_state = to_castkms_crtc_state(old_crtc_state);
 
-		flush_work(&castkms_state->composer_work);
 		flush_work(&castkms_state->dispatch_work);
 	}
 

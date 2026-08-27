@@ -19,21 +19,24 @@ struct drm_plane;
 /**
  * struct castkms_crtc_state - Driver-specific atomic CRTC state
  * @base: Base DRM CRTC state
+ * @dispatch_work: Work item that services requested frame consumers
  * @frame: Renderer input produced during atomic check
- * @composer_work: Legacy composition work pending scheduler migration
- * @dispatch_work: Aggregate frame-consumer work item
- * @active_writeback: Current writeback destination
- * @crc_pending: Whether a checksum is waiting for composition
- * @wb_pending: Whether a writeback job is waiting for composition
- * @frame_start: First pending vertical-blank sequence
- * @frame_end: Last pending vertical-blank sequence
+ * @active_writeback: Current writeback destination buffer
+ * @crc_pending: Whether CRC composition is pending
+ * @wb_pending: Whether writeback composition is pending
+ * @frame_start: Frame number at the start of composition
+ * @frame_end: Last requested frame number
+ *
+ * Pending flags and frame numbers are protected by
+ * &castkms_output.dispatch_lock.
  */
 struct castkms_crtc_state {
 	struct drm_crtc_state base;
-	struct castkms_frame_stage frame;
-	struct work_struct composer_work;
 	struct work_struct dispatch_work;
+
+	struct castkms_frame_stage frame;
 	struct castkms_output_buffer *active_writeback;
+
 	bool crc_pending;
 	bool wb_pending;
 	u64 frame_start;

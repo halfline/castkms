@@ -3,6 +3,7 @@
 #include "castkms_config.h"
 #include "castkms_connector.h"
 #include "castkms_drv.h"
+#include "castkms_writeback.h"
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 

@@ -10,8 +10,10 @@
 #include <drm/drm_gem_shmem_helper.h>
 
 #include "castkms_drv.h"
+#include "castkms_frame_dispatch.h"
 #include "castkms_formats.h"
 #include "castkms_output_buffer.h"
+#include "castkms_writeback.h"
 
 static const struct drm_connector_funcs castkms_wb_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
@@ -128,23 +130,24 @@ static void castkms_wb_atomic_commit(struct drm_connector *conn,
 	crtc_state = to_castkms_crtc_state(new_crtc_state);
 	active_wb = connector_state->writeback_job->priv;
 
-	ret = castkms_composer_get(output, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
+	ret = castkms_frame_dispatch_get(output,
+					 CASTKMS_FRAME_DISPATCH_CLIENT_WRITEBACK);
 	if (ret)
 		goto err_complete_job;
 
 	drm_writeback_queue_job(wb_conn, connector_state);
 
-	spin_lock_irq(&output->composer_lock);
+	spin_lock_irq(&output->dispatch_lock);
 	crtc_state->active_writeback = active_wb;
 	crtc_state->wb_pending = true;
-	spin_unlock_irq(&output->composer_lock);
+	spin_unlock_irq(&output->dispatch_lock);
 
 	/*
 	 * A vblank can race with this connector hook after atomic_flush() has
 	 * published the CRTC state. Queue the state directly so that a newer
 	 * atomic commit cannot replace it before this job reaches the worker.
 	 */
-	queue_work(output->composer_workq, &crtc_state->composer_work);
+	queue_work(output->dispatch_workq, &crtc_state->dispatch_work);
 
 	return;
 

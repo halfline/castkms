@@ -7,6 +7,7 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
+#include <drm/drm_writeback.h>
 
 #include <kunit/visibility.h>
 
@@ -20,39 +21,61 @@
  * castkms_frame_dispatch_worker - service pending frame consumers
  * @work: CRTC-state work item
  *
- * Coordinates the CRC consumer around the immutable frame stage produced by
- * atomic check. Pixel rendering itself remains in castkms_composer.c.
+ * Coordinates writeback and CRC consumers around the immutable frame stage
+ * produced by atomic check. Pixel rendering itself remains in
+ * castkms_composer.c.
  */
 void castkms_frame_dispatch_worker(struct work_struct *work)
 {
 	struct castkms_crtc_state *crtc_state = container_of(
 		work, struct castkms_crtc_state, dispatch_work);
 	struct drm_crtc *crtc = crtc_state->base.crtc;
+	struct castkms_output_buffer *active_wb;
 	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
 	const struct castkms_frame_stage *frame = &crtc_state->frame;
-	bool crc_pending;
+	bool crc_pending, wb_pending;
 	u64 frame_start, frame_end;
 	u32 crc32 = 0;
-	int ret;
+	int ret = 0;
 
 	spin_lock_irq(&out->dispatch_lock);
 	frame_start = crtc_state->frame_start;
 	frame_end = crtc_state->frame_end;
 	crc_pending = crtc_state->crc_pending;
+	wb_pending = crtc_state->wb_pending;
+	active_wb = crtc_state->active_writeback;
 	crtc_state->frame_start = 0;
 	crtc_state->frame_end = 0;
 	/*
 	 * crc_pending is cleared eagerly so the vblank timer can detect a slow
-	 * worker and accumulate frame_start/frame_end.
+	 * worker and accumulate frame_start/frame_end. The writeback flag also
+	 * guards its destination pointer, so it clears after rendering.
 	 */
 	crtc_state->crc_pending = false;
 	spin_unlock_irq(&out->dispatch_lock);
 
-	if (!crc_pending)
+	if (!crc_pending && !wb_pending)
 		return;
 
-	ret = castkms_compose_targets(frame, NULL, NULL, &crc32);
-	if (ret)
+	if (WARN_ON(wb_pending && !active_wb))
+		ret = -EINVAL;
+	else if (!ret)
+		ret = castkms_compose_targets(
+			frame, wb_pending ? active_wb : NULL,
+			NULL, &crc32);
+
+	if (wb_pending) {
+		int wb_ret = active_wb ? ret : -EINVAL;
+
+		spin_lock_irq(&out->dispatch_lock);
+		crtc_state->wb_pending = false;
+		crtc_state->active_writeback = NULL;
+		spin_unlock_irq(&out->dispatch_lock);
+		castkms_frame_dispatch_put(out, CASTKMS_FRAME_DISPATCH_CLIENT_WRITEBACK);
+		drm_writeback_signal_completion(&out->wb_connector, wb_ret);
+	}
+
+	if (ret || !crc_pending)
 		return;
 
 	while (frame_start <= frame_end)

@@ -12,23 +12,13 @@
 #include <drm/drm_fixed.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
-#include <drm/drm_vblank.h>
 #include <linux/minmax.h>
 #include <kunit/visibility.h>
 
 #include "castkms_composer.h"
-#include "castkms_drv.h"
 #include "castkms_formats.h"
 #include "castkms_luts.h"
 #include "castkms_output_buffer.h"
-
-VISIBLE_IF_KUNIT int
-castkms_composer_demand_get(struct castkms_composer_demand *demand,
-			    enum castkms_composer_client client,
-			    int vblank_ret, bool *keep_vblank);
-VISIBLE_IF_KUNIT bool
-castkms_composer_demand_put(struct castkms_composer_demand *demand,
-			    enum castkms_composer_client client);
 
 static u16 pre_mul_blend_channel(u16 src, u16 dst, u16 alpha)
 {
@@ -704,144 +694,3 @@ int castkms_compose_frame(const struct castkms_frame_stage *frame,
 	return castkms_compose_targets(frame, destination, NULL, &crc32);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_compose_frame);
-
-/* Keep the legacy writeback scheduler usable until it moves to dispatch. */
-static int
-compose_active_planes(const struct castkms_output_buffer *destination,
-		      struct castkms_crtc_state *crtc_state, u32 *crc32)
-{
-	return castkms_compose_targets(&crtc_state->frame, destination, NULL,
-				       crc32);
-}
-
-/**
- * castkms_composer_worker - copy one frame for legacy writeback
- * @work: CRTC-state work item
- */
-void castkms_composer_worker(struct work_struct *work)
-{
-	struct castkms_crtc_state *crtc_state = container_of(work,
-							  struct castkms_crtc_state,
-							  composer_work);
-	struct castkms_output_buffer *active_wb;
-	struct castkms_output *out =
-		drm_crtc_to_castkms_output(crtc_state->base.crtc);
-	bool wb_pending;
-	u32 crc32 = 0;
-	int ret;
-
-	spin_lock_irq(&out->composer_lock);
-	wb_pending = crtc_state->wb_pending;
-	active_wb = crtc_state->active_writeback;
-	spin_unlock_irq(&out->composer_lock);
-
-	if (!wb_pending)
-		return;
-
-	if (WARN_ON(!active_wb))
-		ret = -EINVAL;
-	else
-		ret = compose_active_planes(active_wb, crtc_state, &crc32);
-
-	spin_lock_irq(&out->composer_lock);
-	crtc_state->wb_pending = false;
-	crtc_state->active_writeback = NULL;
-	spin_unlock_irq(&out->composer_lock);
-	castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
-	drm_writeback_signal_completion(&out->wb_connector, ret);
-}
-
-VISIBLE_IF_KUNIT int
-castkms_composer_demand_get(struct castkms_composer_demand *demand,
-			    enum castkms_composer_client client,
-			    int vblank_ret, bool *keep_vblank)
-{
-	bool was_active = castkms_composer_demand_is_active(demand);
-
-	*keep_vblank = false;
-	if (vblank_ret)
-		return vblank_ret;
-
-	switch (client) {
-	case CASTKMS_COMPOSER_CLIENT_CRC:
-		if (demand->crc_enabled)
-			return 0;
-		demand->crc_enabled = true;
-		break;
-	case CASTKMS_COMPOSER_CLIENT_WRITEBACK:
-		if (WARN_ON(demand->writeback_count == UINT_MAX))
-			return -EOVERFLOW;
-		demand->writeback_count++;
-		break;
-	default:
-		WARN_ON(1);
-		return -EINVAL;
-	}
-
-	*keep_vblank = !was_active;
-	return 0;
-}
-EXPORT_SYMBOL_IF_KUNIT(castkms_composer_demand_get);
-
-VISIBLE_IF_KUNIT bool
-castkms_composer_demand_put(struct castkms_composer_demand *demand,
-			    enum castkms_composer_client client)
-{
-	bool was_active = castkms_composer_demand_is_active(demand);
-
-	switch (client) {
-	case CASTKMS_COMPOSER_CLIENT_CRC:
-		if (!demand->crc_enabled)
-			return false;
-		demand->crc_enabled = false;
-		break;
-	case CASTKMS_COMPOSER_CLIENT_WRITEBACK:
-		if (WARN_ON(!demand->writeback_count))
-			return false;
-		demand->writeback_count--;
-		break;
-	default:
-		WARN_ON(1);
-		return false;
-	}
-
-	return was_active && !castkms_composer_demand_is_active(demand);
-}
-EXPORT_SYMBOL_IF_KUNIT(castkms_composer_demand_put);
-
-int castkms_composer_get(struct castkms_output *out,
-			 enum castkms_composer_client client)
-{
-	bool keep_vblank;
-	int ret, vblank_ret;
-
-	/*
-	 * Get optimistically so the vblank implementation never runs under
-	 * out->lock. The demand state decides whether this reference becomes the
-	 * aggregate reference or is an extra reference that must be returned.
-	 */
-	vblank_ret = drm_crtc_vblank_get(&out->crtc);
-
-	spin_lock_irq(&out->lock);
-	ret = castkms_composer_demand_get(&out->composer_demand, client,
-					  vblank_ret, &keep_vblank);
-	spin_unlock_irq(&out->lock);
-
-	if (!vblank_ret && !keep_vblank)
-		drm_crtc_vblank_put(&out->crtc);
-
-	return ret;
-}
-
-void castkms_composer_put(struct castkms_output *out,
-			  enum castkms_composer_client client)
-{
-	bool put_vblank;
-
-	spin_lock_irq(&out->lock);
-	put_vblank = castkms_composer_demand_put(&out->composer_demand, client);
-	spin_unlock_irq(&out->lock);
-
-	if (put_vblank)
-		drm_crtc_vblank_put(&out->crtc);
-}

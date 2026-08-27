@@ -103,16 +103,6 @@ int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name);
 int castkms_verify_crc_source(struct drm_crtc *crtc, const char *source_name,
 			   size_t *values_cnt);
 
-/* Composer Support */
-void castkms_composer_worker(struct work_struct *work);
-int castkms_composer_get(struct castkms_output *out,
-			 enum castkms_composer_client client);
-void castkms_composer_put(struct castkms_output *out,
-			  enum castkms_composer_client client);
-
-/* Writeback */
-int castkms_enable_writeback_connector(struct castkms_device *castkmsdev, struct castkms_output *castkms_out);
-
 #if IS_ENABLED(CONFIG_KUNIT)
 void castkms_sort_plane_states(struct castkms_plane_state **planes,
 			       size_t count);

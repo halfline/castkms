@@ -78,10 +78,6 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 			DRM_DEBUG_DRIVER("Frame-dispatch worker already queued\n");
 	}
 
-	state = output->composer_state;
-	if (state && output->composer_demand.writeback_count &&
-	    !queue_work(output->composer_workq, &state->composer_work))
-		DRM_DEBUG_DRIVER("Composer worker already queued\n");
 	spin_unlock(&output->lock);
 
 	dma_fence_end_signalling(fence_cookie);
@@ -102,7 +98,6 @@ castkms_atomic_crtc_duplicate_state(struct drm_crtc *crtc)
 		return NULL;
 
 	__drm_atomic_helper_crtc_duplicate_state(crtc, &castkms_state->base);
-	INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
 	INIT_WORK(&castkms_state->dispatch_work, castkms_frame_dispatch_worker);
 
 	return &castkms_state->base;
@@ -115,7 +110,6 @@ static void castkms_atomic_crtc_destroy_state(struct drm_crtc *crtc,
 
 	__drm_atomic_helper_crtc_destroy_state(state);
 
-	WARN_ON(work_pending(&castkms_state->composer_work));
 	WARN_ON(work_pending(&castkms_state->dispatch_work));
 	kfree(castkms_state->frame.planes);
 	kfree(castkms_state);
@@ -134,7 +128,6 @@ static void castkms_atomic_crtc_reset(struct drm_crtc *crtc)
 		return;
 
 	__drm_atomic_helper_crtc_reset(crtc, &castkms_state->base);
-	INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
 	INIT_WORK(&castkms_state->dispatch_work, castkms_frame_dispatch_worker);
 }
 
@@ -280,7 +273,6 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 		crtc->state->event = NULL;
 	}
 
-	castkms_output->composer_state = to_castkms_crtc_state(crtc->state);
 	castkms_output->dispatch_state = to_castkms_crtc_state(crtc->state);
 	spin_unlock_irq(&castkms_output->lock);
 }
@@ -327,13 +319,8 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 	drm_crtc_attach_background_color_property(crtc);
 
 	spin_lock_init(&castkms_out->lock);
-	spin_lock_init(&castkms_out->composer_lock);
 	spin_lock_init(&castkms_out->dispatch_lock);
 
-	castkms_out->composer_workq =
-		drmm_alloc_ordered_workqueue(dev, "castkms_composer", 0);
-	if (IS_ERR(castkms_out->composer_workq))
-		return ERR_CAST(castkms_out->composer_workq);
 	castkms_out->dispatch_workq =
 		drmm_alloc_ordered_workqueue(dev, "castkms_dispatch", 0);
 	if (IS_ERR(castkms_out->dispatch_workq))
