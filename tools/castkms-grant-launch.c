@@ -56,7 +56,7 @@ static int drop_implicit_master(int fd)
 static void usage(const char *program)
 {
 	fprintf(stderr,
-		"usage: %s DRM-DEVICE CONNECTOR-ID -- COMMAND [ARG...]\n",
+		"usage: %s [--capture-only] DRM-DEVICE CONNECTOR-ID -- COMMAND [ARG...]\n",
 		program);
 }
 
@@ -80,20 +80,26 @@ int main(int argc, char **argv)
 	pid_t waited;
 	int issuer_fd;
 	int status;
+	int argument = 1;
 
 	if (argc == 2 && (!strcmp(argv[1], "-h") ||
 			  !strcmp(argv[1], "--help"))) {
 		usage(argv[0]);
 		return EXIT_SUCCESS;
 	}
-	if (argc < 5 || strcmp(argv[3], "--") ||
-	    parse_connector_id(argv[2], &create.connector_id)) {
+	if (argument < argc && !strcmp(argv[argument], "--capture-only")) {
+		rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+			 DRM_CASTKMS_GRANT_READ_CURSOR;
+		argument++;
+	}
+	if (argc - argument < 4 || strcmp(argv[argument + 2], "--") ||
+	    parse_connector_id(argv[argument + 1], &create.connector_id)) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
 	create.rights = rights;
 
-	issuer_fd = open(argv[1], O_RDWR | O_CLOEXEC | O_NONBLOCK);
+	issuer_fd = open(argv[argument], O_RDWR | O_CLOEXEC | O_NONBLOCK);
 	if (issuer_fd < 0) {
 		perror("open DRM device");
 		return EXIT_FAILURE;
@@ -139,7 +145,7 @@ int main(int argc, char **argv)
 			perror("setenv CASTKMS_GRANT_FD");
 			_exit(EXIT_FAILURE);
 		}
-		execvp(argv[4], &argv[4]);
+		execvp(argv[argument + 3], &argv[argument + 3]);
 		perror("execvp");
 		_exit(errno == ENOENT ? 127 : 126);
 	}
