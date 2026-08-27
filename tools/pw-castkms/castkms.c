@@ -418,6 +418,7 @@ int castkms_configure_output(struct pw_castkms *bridge,
 			     const void *edid, uint32_t edid_size)
 {
 	uint32_t candidate_crtc = 0;
+	uint64_t syncobj_cap = 0;
 	int status;
 
 	status = describe_device_connector(bridge, preferred_crtc,
@@ -469,6 +470,14 @@ int castkms_configure_output(struct pw_castkms *bridge,
 	status = query_capture_caps(bridge, bridge->crtc_id);
 	if (status)
 		return status;
+
+	if (!drmGetCap(bridge->drm_fd, DRM_CAP_SYNCOBJ_TIMELINE,
+		       &syncobj_cap) && syncobj_cap &&
+	    (bridge->capture_caps &
+	     DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE)) {
+		bridge->supports_explicit_sync = true;
+		fprintf(stderr, "explicit sync enabled\n");
+	}
 
 	return 0;
 }

@@ -12,6 +12,9 @@
 #include <pipewire/pipewire.h>
 
 #define PW_CASTKMS_BUFFER_LIMIT 4U
+#ifndef PW_CASTKMS_HAS_EXPLICIT_SYNC
+#define PW_CASTKMS_HAS_EXPLICIT_SYNC PW_CHECK_VERSION(1, 4, 8)
+#endif
 #define PW_CASTKMS_MAX_CURSOR_BITMAP_SIZE \
 	(DRM_CASTKMS_CAPTURE_MAX_CURSOR_WIDTH * \
 	 DRM_CASTKMS_CAPTURE_MAX_CURSOR_HEIGHT * 4U)
@@ -21,8 +24,8 @@
  *
  *   IN_PIPEWIRE -> AVAILABLE -> QUEUED -> READY -> IN_PIPEWIRE
  *
- * PipeWire returns an IN_PIPEWIRE buffer to the producer. CastKMS captures
- * into an AVAILABLE buffer after it is QUEUED. A frame event makes it READY,
+ * PipeWire returns an IN_PIPEWIRE buffer to the producer.  CastKMS captures
+ * into an AVAILABLE buffer after it is QUEUED.  A frame event makes it READY,
  * and publishing the completed buffer gives it back to PipeWire.
  */
 enum capture_buffer_state {
@@ -71,6 +74,14 @@ struct capture_buffer {
 	uint32_t buffer_id;
 	uint64_t user_data;
 
+	/* Optional acquire/release timelines exported to PipeWire. */
+	uint32_t ready_syncobj;
+	uint32_t reuse_syncobj;
+	int ready_syncobj_fd;
+	int reuse_syncobj_fd;
+	uint64_t next_ready_point;
+	uint64_t last_release_point;
+
 	/* PipeWire association and the shared ownership state machine. */
 	struct pw_buffer *pipewire_buffer;
 	enum capture_buffer_state state;
@@ -97,6 +108,7 @@ struct pw_castkms {
 	uint32_t stream_id;
 	uint64_t mode_generation;
 	bool capture_active;
+	bool supports_explicit_sync;
 	bool restart_capture_on_buffer_add;
 	struct capture_buffer buffers[PW_CASTKMS_BUFFER_LIMIT];
 	uint32_t buffer_count;
@@ -149,12 +161,16 @@ castkms_find_buffer_by_pipewire(struct pw_castkms *bridge,
 struct capture_buffer *
 castkms_find_buffer_by_id(struct pw_castkms *bridge, uint32_t buffer_id);
 int castkms_create_destination(struct pw_castkms *bridge,
-			       struct capture_buffer *buffer);
+			       struct capture_buffer *buffer,
+			       bool explicit_sync);
 int castkms_destroy_destination(struct pw_castkms *bridge,
 				struct capture_buffer *buffer);
 void castkms_queue_available(struct pw_castkms *bridge);
 int castkms_read_cursor_bitmap(struct pw_castkms *bridge,
 			       const struct capture_buffer *buffer);
+int castkms_signal_reuse_point(struct pw_castkms *bridge,
+			       const struct capture_buffer *buffer,
+			       uint64_t point);
 
 /* PipeWire publication.  pw_init()/pw_deinit() remain owned by main(). */
 int pipewire_open(struct pw_castkms *bridge);

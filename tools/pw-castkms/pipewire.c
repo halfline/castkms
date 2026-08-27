@@ -91,6 +91,56 @@ static void on_stream_state_changed(void *data, enum pw_stream_state old,
 	}
 }
 
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+static void add_explicit_buffer_param(struct spa_pod_builder *builder,
+				      const struct spa_pod **params,
+				      int *param_count,
+				      int buffer_count,
+				      uint32_t frame_size,
+				      uint32_t stride)
+{
+	struct spa_pod_frame frame;
+
+	spa_pod_builder_push_object(builder, &frame,
+		SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers);
+	spa_pod_builder_add(builder,
+		SPA_PARAM_BUFFERS_buffers,
+			SPA_POD_CHOICE_RANGE_Int(buffer_count, 2, buffer_count),
+		SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(3),
+		SPA_PARAM_BUFFERS_size, SPA_POD_Int(frame_size),
+		SPA_PARAM_BUFFERS_stride, SPA_POD_Int(stride),
+		SPA_PARAM_BUFFERS_dataType,
+			SPA_POD_CHOICE_FLAGS_Int(1 << SPA_DATA_DmaBuf),
+		0);
+	spa_pod_builder_prop(builder, SPA_PARAM_BUFFERS_metaType,
+			     SPA_POD_PROP_FLAG_MANDATORY);
+	spa_pod_builder_int(builder, 1 << SPA_META_SyncTimeline);
+	params[(*param_count)++] = spa_pod_builder_pop(builder, &frame);
+}
+
+static void add_explicit_sync_meta_param(struct spa_pod_builder *builder,
+					 const struct spa_pod **params,
+					 int *param_count)
+{
+	struct spa_pod_frame frame;
+
+	spa_pod_builder_push_object(builder, &frame,
+		SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta);
+	spa_pod_builder_add(builder,
+		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_SyncTimeline),
+		SPA_PARAM_META_size,
+			SPA_POD_Int(sizeof(struct spa_meta_sync_timeline)),
+		0);
+#if PW_CHECK_VERSION(1, 6, 0)
+	spa_pod_builder_prop(builder, SPA_PARAM_META_features,
+			     SPA_POD_PROP_FLAG_DROP);
+	spa_pod_builder_int(
+		builder, SPA_META_FEATURE_SYNC_TIMELINE_RELEASE);
+#endif
+	params[(*param_count)++] = spa_pod_builder_pop(builder, &frame);
+}
+#endif
+
 static void on_stream_param_changed(void *data, uint32_t id,
 				    const struct spa_pod *param)
 {
@@ -98,7 +148,7 @@ static void on_stream_param_changed(void *data, uint32_t id,
 	struct spa_video_info_raw info = {};
 	uint8_t params_buffer[1024];
 	struct spa_pod_builder builder;
-	const struct spa_pod *params[4];
+	const struct spa_pod *params[7];
 	uint32_t media_type;
 	uint32_t media_subtype;
 	uint32_t frame_size;
@@ -128,6 +178,12 @@ static void on_stream_param_changed(void *data, uint32_t id,
 	frame_size = bridge->width * bridge->height * 4U;
 
 	spa_pod_builder_init(&builder, params_buffer, sizeof(params_buffer));
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	if (bridge->supports_explicit_sync) {
+		add_explicit_buffer_param(&builder, params, &param_count,
+					  buffer_count, frame_size, stride);
+	}
+#endif
 
 	params[param_count++] = spa_pod_builder_add_object(&builder,
 		SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
@@ -159,6 +215,11 @@ static void on_stream_param_changed(void *data, uint32_t id,
 		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Cursor),
 		SPA_PARAM_META_size, SPA_POD_Int(MAX_CURSOR_META_SIZE));
 
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	if (bridge->supports_explicit_sync)
+		add_explicit_sync_meta_param(&builder, params, &param_count);
+#endif
+
 	status = pw_stream_update_params(bridge->stream, params, param_count);
 	if (status < 0)
 		pw_castkms_fail(bridge, "pw_stream_update_params failed", status);
@@ -180,11 +241,28 @@ static void configure_dmabuf_data(struct spa_data *data,
 	data->chunk->stride = buffer->pitch;
 }
 
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+static void configure_syncobj_data(struct spa_data *data, int fd,
+				   uint32_t flags)
+{
+	data->type = SPA_DATA_SyncObj;
+	data->fd = fd;
+	data->flags = flags;
+	data->mapoffset = 0;
+	data->maxsize = 0;
+	data->data = NULL;
+}
+#endif
+
 static void on_stream_add_buffer(void *data, struct pw_buffer *pipewire_buffer)
 {
 	struct pw_castkms *bridge = data;
 	struct capture_buffer *buffer;
 	struct spa_buffer *spa_buffer;
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	struct spa_meta_sync_timeline *sync_timeline;
+#endif
+	bool use_explicit_sync = false;
 	int status;
 
 	if (bridge->buffer_count >= PW_CASTKMS_BUFFER_LIMIT ||
@@ -203,9 +281,14 @@ static void on_stream_add_buffer(void *data, struct pw_buffer *pipewire_buffer)
 		return;
 	}
 
-	if (spa_buffer->n_datas != 1) {
-		pw_castkms_fail(bridge, "PipeWire buffer layout is invalid",
-				 -EPROTO);
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	sync_timeline = spa_buffer_find_meta_data(
+		spa_buffer, SPA_META_SyncTimeline, sizeof(*sync_timeline));
+	use_explicit_sync = sync_timeline && spa_buffer->n_datas == 3;
+#endif
+	if (spa_buffer->n_datas != 1 && !use_explicit_sync) {
+		pw_castkms_fail(bridge,
+				"PipeWire sync-timeline layout is invalid", -EPROTO);
 		return;
 	}
 	if (bridge->restart_capture_on_buffer_add) {
@@ -226,7 +309,8 @@ static void on_stream_add_buffer(void *data, struct pw_buffer *pipewire_buffer)
 		bridge->restart_capture_on_buffer_add = false;
 	}
 
-	status = castkms_create_destination(bridge, buffer);
+	status = castkms_create_destination(bridge, buffer,
+					     use_explicit_sync);
 	if (status < 0) {
 		pw_castkms_fail(bridge, "capture buffer allocation failed",
 				 status);
@@ -236,6 +320,17 @@ static void on_stream_add_buffer(void *data, struct pw_buffer *pipewire_buffer)
 	buffer->pipewire_buffer = pipewire_buffer;
 	buffer->state = CAPTURE_BUFFER_IN_PIPEWIRE;
 	configure_dmabuf_data(&spa_buffer->datas[0], buffer);
+
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	if (buffer->ready_syncobj) {
+		configure_syncobj_data(&spa_buffer->datas[1],
+				       buffer->ready_syncobj_fd,
+				       SPA_DATA_FLAG_READABLE);
+		configure_syncobj_data(&spa_buffer->datas[2],
+				       buffer->reuse_syncobj_fd,
+				       SPA_DATA_FLAG_READWRITE);
+	}
+#endif
 
 	bridge->buffer_count++;
 }
@@ -353,8 +448,6 @@ static int set_frame_metadata(struct pw_castkms *bridge,
 	struct spa_meta_header *header;
 	struct spa_meta *damage_meta;
 
-	(void)bridge;
-
 	header = spa_buffer_find_meta_data(spa_buffer, SPA_META_Header,
 					   sizeof(*header));
 	if (header) {
@@ -385,6 +478,34 @@ static int set_frame_metadata(struct pw_castkms *bridge,
 	return fill_cursor_metadata(bridge, buffer, spa_buffer);
 }
 
+static int set_acquire_timeline(struct capture_buffer *buffer,
+				struct spa_buffer *spa_buffer)
+{
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	struct spa_meta_sync_timeline *timeline;
+
+	if (!buffer->ready_syncobj)
+		return 0;
+
+	timeline = spa_buffer_find_meta_data(
+		spa_buffer, SPA_META_SyncTimeline, sizeof(*timeline));
+	if (!timeline || spa_buffer->n_datas != 3 ||
+	    buffer->next_ready_point == UINT64_MAX)
+		return -EPROTO;
+
+	timeline->flags = SPA_META_SYNC_TIMELINE_UNSCHEDULED_RELEASE;
+	timeline->padding = 0;
+	timeline->acquire_point = buffer->next_ready_point;
+	timeline->release_point = buffer->next_ready_point;
+	buffer->next_ready_point++;
+	return 0;
+#else
+	(void)buffer;
+	(void)spa_buffer;
+	return 0;
+#endif
+}
+
 static bool publish_ready_frames(struct pw_castkms *bridge)
 {
 	uint32_t i;
@@ -399,6 +520,8 @@ static bool publish_ready_frames(struct pw_castkms *bridge)
 
 		spa_buffer = buffer->pipewire_buffer->buffer;
 		status = set_frame_metadata(bridge, buffer, spa_buffer);
+		if (!status)
+			status = set_acquire_timeline(buffer, spa_buffer);
 		if (status) {
 			pw_castkms_fail(bridge, "frame metadata failed", status);
 			return false;
@@ -421,6 +544,41 @@ static bool publish_ready_frames(struct pw_castkms *bridge)
 	return true;
 }
 
+static int accept_release_timeline(struct pw_castkms *bridge,
+				   struct capture_buffer *buffer,
+				   struct spa_buffer *spa_buffer)
+{
+#if PW_CASTKMS_HAS_EXPLICIT_SYNC
+	struct spa_meta_sync_timeline *timeline;
+	int status;
+
+	if (!buffer->ready_syncobj || buffer->next_ready_point <= 1)
+		return 0;
+
+	timeline = spa_buffer_find_meta_data(
+		spa_buffer, SPA_META_SyncTimeline, sizeof(*timeline));
+	if (!timeline || !timeline->release_point ||
+	    timeline->release_point != buffer->next_ready_point - 1 ||
+	    timeline->release_point <= buffer->last_release_point)
+		return -EPROTO;
+
+	if (timeline->flags & SPA_META_SYNC_TIMELINE_UNSCHEDULED_RELEASE) {
+		status = castkms_signal_reuse_point(
+			bridge, buffer, timeline->release_point);
+		if (status)
+			return status;
+	}
+
+	buffer->last_release_point = timeline->release_point;
+	return 0;
+#else
+	(void)bridge;
+	(void)buffer;
+	(void)spa_buffer;
+	return 0;
+#endif
+}
+
 static bool reclaim_pipewire_buffers(struct pw_castkms *bridge)
 {
 	struct pw_buffer *pipewire_buffer;
@@ -428,12 +586,22 @@ static bool reclaim_pipewire_buffers(struct pw_castkms *bridge)
 	while ((pipewire_buffer = pw_stream_dequeue_buffer(bridge->stream))) {
 		struct capture_buffer *buffer = castkms_find_buffer_by_pipewire(
 			bridge, pipewire_buffer);
+		int status;
 
 		if (!buffer || buffer->state != CAPTURE_BUFFER_IN_PIPEWIRE) {
 			(void)pw_stream_queue_buffer(bridge->stream, pipewire_buffer);
 			pw_castkms_fail(
 				bridge, "unexpected PipeWire buffer ownership",
 				-EPROTO);
+			return false;
+		}
+
+		status = accept_release_timeline(
+			bridge, buffer, pipewire_buffer->buffer);
+		if (status) {
+			pw_castkms_fail(
+				bridge, "invalid explicit-sync release point",
+				status);
 			return false;
 		}
 

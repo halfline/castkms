@@ -22,13 +22,19 @@
  */
 
 static int register_destination(int fd, uint32_t stream_id, uint32_t fb_id,
+				uint32_t ready_syncobj,
+				uint32_t reuse_syncobj,
 				uint64_t mode_generation,
 				uint32_t *buffer_id)
 {
 	struct drm_castkms_capture_register_buffer args = {
 		.stream_id = stream_id,
 		.fb_id = fb_id,
-		.flags = DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		.ready_syncobj_handle = ready_syncobj,
+		.reuse_syncobj_handle = reuse_syncobj,
+		.flags = ready_syncobj ?
+			DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC :
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
 		.mode_generation = mode_generation,
 	};
 
@@ -54,20 +60,57 @@ static int unregister_destination(int fd, uint32_t stream_id,
 }
 
 static int queue_destination(int fd, uint32_t stream_id, uint32_t buffer_id,
-			     uint64_t mode_generation, uint64_t user_data)
+			     uint64_t mode_generation, uint64_t user_data,
+			     uint64_t ready_point, uint64_t reuse_point)
 {
 	struct drm_castkms_capture_queue_buffer args = {
 		.stream_id = stream_id,
 		.buffer_id = buffer_id,
-		.flags = DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+		.flags = ready_point ?
+			DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC :
+			DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
 		.mode_generation = mode_generation,
 		.user_data = user_data,
+		.ready_point = ready_point,
+		.reuse_point = reuse_point,
 	};
 
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_QUEUE_BUFFER, &args) < 0)
 		return -errno;
 
 	return 0;
+}
+
+static int create_syncobj(int fd, uint32_t *handle)
+{
+	struct drm_syncobj_create args = {};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &args) < 0)
+		return -errno;
+
+	*handle = args.handle;
+	return 0;
+}
+
+static void destroy_syncobj(int fd, uint32_t *handle)
+{
+	struct drm_syncobj_destroy args = { .handle = *handle };
+
+	if (*handle)
+		(void)ioctl(fd, DRM_IOCTL_SYNCOBJ_DESTROY, &args);
+	*handle = 0;
+}
+
+static int export_syncobj_fd(int fd, uint32_t handle)
+{
+	struct drm_syncobj_handle args = {
+		.handle = handle,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &args) < 0)
+		return -errno;
+
+	return args.fd;
 }
 
 struct capture_buffer *
@@ -98,7 +141,8 @@ castkms_find_buffer_by_id(struct pw_castkms *bridge, uint32_t buffer_id)
 }
 
 int castkms_create_destination(struct pw_castkms *bridge,
-			       struct capture_buffer *buffer)
+			       struct capture_buffer *buffer,
+			       bool explicit_sync)
 {
 	struct drm_mode_create_dumb dumb = {
 		.width = bridge->width,
@@ -118,6 +162,8 @@ int castkms_create_destination(struct pw_castkms *bridge,
 
 	*buffer = (struct capture_buffer) {
 		.dmabuf_fd = -1,
+		.ready_syncobj_fd = -1,
+		.reuse_syncobj_fd = -1,
 	};
 
 	if (ioctl(bridge->drm_fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb) < 0) {
@@ -155,19 +201,53 @@ int castkms_create_destination(struct pw_castkms *bridge,
 	}
 	buffer->dmabuf_fd = prime.fd;
 
+	if (explicit_sync) {
+		status = create_syncobj(bridge->drm_fd,
+					&buffer->ready_syncobj);
+		if (!status)
+			status = create_syncobj(bridge->drm_fd,
+						&buffer->reuse_syncobj);
+		if (status)
+			goto err_syncobj;
+
+		buffer->ready_syncobj_fd = export_syncobj_fd(
+			bridge->drm_fd, buffer->ready_syncobj);
+		buffer->reuse_syncobj_fd = export_syncobj_fd(
+			bridge->drm_fd, buffer->reuse_syncobj);
+		if (buffer->ready_syncobj_fd < 0) {
+			status = buffer->ready_syncobj_fd;
+			goto err_syncobj;
+		}
+		if (buffer->reuse_syncobj_fd < 0) {
+			status = buffer->reuse_syncobj_fd;
+			goto err_syncobj;
+		}
+
+		buffer->next_ready_point = 1;
+	}
+
 	status = register_destination(
 		bridge->drm_fd, bridge->stream_id, buffer->fb_id,
+		buffer->ready_syncobj, buffer->reuse_syncobj,
 		bridge->mode_generation, &buffer->buffer_id);
 	if (status) {
 		errno = -status;
 		perror("REGISTER_BUFFER");
-		goto err_dmabuf;
+		goto err_syncobj;
 	}
 
 	buffer->state = CAPTURE_BUFFER_IN_PIPEWIRE;
 	return 0;
 
-err_dmabuf:
+err_syncobj:
+	if (buffer->reuse_syncobj_fd >= 0)
+		close(buffer->reuse_syncobj_fd);
+	buffer->reuse_syncobj_fd = -1;
+	if (buffer->ready_syncobj_fd >= 0)
+		close(buffer->ready_syncobj_fd);
+	buffer->ready_syncobj_fd = -1;
+	destroy_syncobj(bridge->drm_fd, &buffer->reuse_syncobj);
+	destroy_syncobj(bridge->drm_fd, &buffer->ready_syncobj);
 	close(buffer->dmabuf_fd);
 	buffer->dmabuf_fd = -1;
 err_fb:
@@ -196,6 +276,13 @@ int castkms_destroy_destination(struct pw_castkms *bridge,
 			return status;
 	}
 
+	if (buffer->reuse_syncobj_fd >= 0)
+		close(buffer->reuse_syncobj_fd);
+	if (buffer->ready_syncobj_fd >= 0)
+		close(buffer->ready_syncobj_fd);
+	destroy_syncobj(bridge->drm_fd, &buffer->reuse_syncobj);
+	destroy_syncobj(bridge->drm_fd, &buffer->ready_syncobj);
+
 	if (buffer->dmabuf_fd >= 0)
 		close(buffer->dmabuf_fd);
 
@@ -213,6 +300,8 @@ int castkms_destroy_destination(struct pw_castkms *bridge,
 
 	*buffer = (struct capture_buffer) {
 		.dmabuf_fd = -1,
+		.ready_syncobj_fd = -1,
+		.reuse_syncobj_fd = -1,
 	};
 	return 0;
 }
@@ -226,15 +315,23 @@ void castkms_queue_available(struct pw_castkms *bridge)
 
 	for (i = 0; i < bridge->buffer_count; i++) {
 		struct capture_buffer *buffer = &bridge->buffers[i];
+		uint64_t ready_point = 0;
+		uint64_t reuse_point = 0;
 		int status;
 
 		if (buffer->state != CAPTURE_BUFFER_AVAILABLE)
 			continue;
 
+		if (buffer->ready_syncobj) {
+			ready_point = buffer->next_ready_point;
+			reuse_point = buffer->last_release_point;
+		}
+
 		buffer->user_data = ++bridge->user_data_sequence;
 		status = queue_destination(
 			bridge->drm_fd, bridge->stream_id, buffer->buffer_id,
-			bridge->mode_generation, buffer->user_data);
+			bridge->mode_generation, buffer->user_data,
+			ready_point, reuse_point);
 		if (status == -EBUSY)
 			break;
 		if (status) {
@@ -310,5 +407,23 @@ int castkms_read_cursor_bitmap(struct pw_castkms *bridge,
 	bridge->cursor_bitmap_width = args.width;
 	bridge->cursor_bitmap_height = args.height;
 	bridge->cursor_bitmap_stride = args.stride;
+	return 0;
+}
+
+int castkms_signal_reuse_point(struct pw_castkms *bridge,
+			       const struct capture_buffer *buffer,
+			       uint64_t point)
+{
+	uint32_t handle = buffer->reuse_syncobj;
+	struct drm_syncobj_timeline_array args = {
+		.handles = (uint64_t)(uintptr_t)&handle,
+		.points = (uint64_t)(uintptr_t)&point,
+		.count_handles = 1,
+	};
+
+	if (ioctl(bridge->drm_fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL,
+		  &args) < 0)
+		return -errno;
+
 	return 0;
 }
