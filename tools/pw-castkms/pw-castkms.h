@@ -12,6 +12,9 @@
 #include <pipewire/pipewire.h>
 
 #define PW_CASTKMS_BUFFER_LIMIT 4U
+#define PW_CASTKMS_MAX_CURSOR_BITMAP_SIZE \
+	(DRM_CASTKMS_CAPTURE_MAX_CURSOR_WIDTH * \
+	 DRM_CASTKMS_CAPTURE_MAX_CURSOR_HEIGHT * 4U)
 
 /*
  * A destination moves through this cycle:
@@ -36,12 +39,24 @@ struct capture_damage {
 	uint32_t height;
 };
 
+struct capture_cursor {
+	uint32_t serial;
+	uint32_t flags;
+	int32_t x;
+	int32_t y;
+	uint32_t hotspot_x;
+	uint32_t hotspot_y;
+	uint32_t width;
+	uint32_t height;
+};
+
 struct captured_frame {
 	uint64_t sequence;
 	int64_t timestamp_ns;
 	uint32_t flags;
 	uint32_t dropped_frames;
 	struct capture_damage damage;
+	struct capture_cursor cursor;
 };
 
 struct capture_buffer {
@@ -105,6 +120,13 @@ struct pw_castkms {
 	int exit_status;
 	uint64_t frames_produced;
 
+	/* Reusable staging allocation for READ_CURSOR_BITMAP. */
+	void *cursor_bitmap;
+	uint32_t cursor_bitmap_size;
+	uint32_t cursor_bitmap_capacity;
+	uint32_t cursor_bitmap_width;
+	uint32_t cursor_bitmap_height;
+	uint32_t cursor_bitmap_stride;
 };
 
 void pw_castkms_fail(struct pw_castkms *bridge, const char *operation,
@@ -131,6 +153,8 @@ int castkms_create_destination(struct pw_castkms *bridge,
 int castkms_destroy_destination(struct pw_castkms *bridge,
 				struct capture_buffer *buffer);
 void castkms_queue_available(struct pw_castkms *bridge);
+int castkms_read_cursor_bitmap(struct pw_castkms *bridge,
+			       const struct capture_buffer *buffer);
 
 /* PipeWire publication.  pw_init()/pw_deinit() remain owned by main(). */
 int pipewire_open(struct pw_castkms *bridge);

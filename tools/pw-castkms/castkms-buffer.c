@@ -246,3 +246,69 @@ void castkms_queue_available(struct pw_castkms *bridge)
 		buffer->state = CAPTURE_BUFFER_QUEUED;
 	}
 }
+
+int castkms_read_cursor_bitmap(struct pw_castkms *bridge,
+			       const struct capture_buffer *buffer)
+{
+	struct drm_castkms_capture_read_cursor_bitmap args = {
+		.stream_id = bridge->stream_id,
+		.buffer_id = buffer->buffer_id,
+	};
+	uint64_t minimum_size;
+
+	if (ioctl(bridge->drm_fd,
+		  DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, &args) < 0)
+		return -errno;
+
+	if (!args.bitmap_size) {
+		bridge->cursor_bitmap_size = 0;
+		bridge->cursor_bitmap_width = 0;
+		bridge->cursor_bitmap_height = 0;
+		bridge->cursor_bitmap_stride = 0;
+		return 0;
+	}
+
+	minimum_size = (uint64_t)args.stride * args.height;
+	if (args.format != DRM_FORMAT_ARGB8888 || !args.width || !args.height ||
+	    args.width > DRM_CASTKMS_CAPTURE_MAX_CURSOR_WIDTH ||
+	    args.height > DRM_CASTKMS_CAPTURE_MAX_CURSOR_HEIGHT ||
+	    args.stride < args.width * 4U || minimum_size > args.bitmap_size ||
+	    args.bitmap_size > PW_CASTKMS_MAX_CURSOR_BITMAP_SIZE)
+		return -EPROTO;
+
+	if (args.bitmap_size > bridge->cursor_bitmap_capacity) {
+		void *bitmap = realloc(bridge->cursor_bitmap, args.bitmap_size);
+
+		if (!bitmap) {
+			bridge->cursor_bitmap_size = 0;
+			return -ENOMEM;
+		}
+		bridge->cursor_bitmap = bitmap;
+		bridge->cursor_bitmap_capacity = args.bitmap_size;
+	}
+
+	args.bitmap_ptr = (uint64_t)(uintptr_t)bridge->cursor_bitmap;
+	args.bitmap_size = bridge->cursor_bitmap_capacity;
+	if (ioctl(bridge->drm_fd,
+		  DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, &args) < 0) {
+		bridge->cursor_bitmap_size = 0;
+		return -errno;
+	}
+
+	minimum_size = (uint64_t)args.stride * args.height;
+	if (args.format != DRM_FORMAT_ARGB8888 ||
+	    args.width != buffer->frame.cursor.width ||
+	    args.height != buffer->frame.cursor.height ||
+	    args.stride < args.width * 4U ||
+	    minimum_size > args.bitmap_size ||
+	    args.bitmap_size > bridge->cursor_bitmap_capacity) {
+		bridge->cursor_bitmap_size = 0;
+		return -EPROTO;
+	}
+
+	bridge->cursor_bitmap_size = args.bitmap_size;
+	bridge->cursor_bitmap_width = args.width;
+	bridge->cursor_bitmap_height = args.height;
+	bridge->cursor_bitmap_stride = args.stride;
+	return 0;
+}

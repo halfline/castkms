@@ -19,6 +19,9 @@
 #include <spa/pod/builder.h>
 #include <spa/utils/result.h>
 
+#define MAX_CURSOR_META_SIZE \
+	(sizeof(struct spa_meta_cursor) + sizeof(struct spa_meta_bitmap) + \
+	 PW_CASTKMS_MAX_CURSOR_BITMAP_SIZE)
 
 /* ---- Stream negotiation ------------------------------------------------ */
 
@@ -95,7 +98,7 @@ static void on_stream_param_changed(void *data, uint32_t id,
 	struct spa_video_info_raw info = {};
 	uint8_t params_buffer[1024];
 	struct spa_pod_builder builder;
-	const struct spa_pod *params[3];
+	const struct spa_pod *params[4];
 	uint32_t media_type;
 	uint32_t media_subtype;
 	uint32_t frame_size;
@@ -150,6 +153,11 @@ static void on_stream_param_changed(void *data, uint32_t id,
 				sizeof(struct spa_meta_region),
 				sizeof(struct spa_meta_region),
 				sizeof(struct spa_meta_region) * 16));
+
+	params[param_count++] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+		SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Cursor),
+		SPA_PARAM_META_size, SPA_POD_Int(MAX_CURSOR_META_SIZE));
 
 	status = pw_stream_update_params(bridge->stream, params, param_count);
 	if (status < 0)
@@ -274,6 +282,69 @@ static void on_stream_remove_buffer(void *data,
 	bridge->buffer_count--;
 }
 
+static int fill_cursor_metadata(struct pw_castkms *bridge,
+				struct capture_buffer *buffer,
+				struct spa_buffer *spa_buffer)
+{
+	const struct capture_cursor *frame_cursor = &buffer->frame.cursor;
+	struct spa_meta *meta =
+		spa_buffer_find_meta(spa_buffer, SPA_META_Cursor);
+	struct spa_meta_cursor *cursor;
+	struct spa_meta_bitmap *bitmap;
+	size_t required;
+	int status;
+
+	if (!meta)
+		return 0;
+	if (meta->size < sizeof(*cursor))
+		return -ENOSPC;
+
+	cursor = meta->data;
+	memset(cursor, 0, sizeof(*cursor));
+	if (!frame_cursor->serial)
+		return 0;
+
+	cursor->id = frame_cursor->serial;
+	if (frame_cursor->flags & DRM_CASTKMS_CURSOR_VISIBLE) {
+		cursor->position = SPA_POINT(frame_cursor->x, frame_cursor->y);
+		cursor->hotspot = SPA_POINT(frame_cursor->hotspot_x,
+					    frame_cursor->hotspot_y);
+	}
+	if (!(frame_cursor->flags & DRM_CASTKMS_CURSOR_IMAGE_CHANGED))
+		return 0;
+
+	required = sizeof(*cursor) + sizeof(*bitmap);
+	if (meta->size < required)
+		return -ENOSPC;
+	cursor->bitmap_offset = sizeof(*cursor);
+	bitmap = SPA_PTROFF(cursor, cursor->bitmap_offset,
+			    struct spa_meta_bitmap);
+	memset(bitmap, 0, sizeof(*bitmap));
+	bitmap->format = SPA_VIDEO_FORMAT_BGRA;
+	bitmap->offset = sizeof(*bitmap);
+
+	/* An empty bitmap is the PipeWire cursor-hide transition. */
+	if (!(frame_cursor->flags & DRM_CASTKMS_CURSOR_VISIBLE))
+		return 0;
+
+	status = castkms_read_cursor_bitmap(bridge, buffer);
+	if (status)
+		return status;
+	if (bridge->cursor_bitmap_width != frame_cursor->width ||
+	    bridge->cursor_bitmap_height != frame_cursor->height)
+		return -EPROTO;
+	required += bridge->cursor_bitmap_size;
+	if (required > meta->size)
+		return -ENOSPC;
+
+	bitmap->size = SPA_RECTANGLE(bridge->cursor_bitmap_width,
+				     bridge->cursor_bitmap_height);
+	bitmap->stride = bridge->cursor_bitmap_stride;
+	memcpy(SPA_PTROFF(bitmap, bitmap->offset, void),
+	       bridge->cursor_bitmap, bridge->cursor_bitmap_size);
+	return 0;
+}
+
 static int set_frame_metadata(struct pw_castkms *bridge,
 			      struct capture_buffer *buffer,
 			      struct spa_buffer *spa_buffer)
@@ -311,7 +382,7 @@ static int set_frame_metadata(struct pw_castkms *bridge,
 		}
 	}
 
-	return 0;
+	return fill_cursor_metadata(bridge, buffer, spa_buffer);
 }
 
 static bool publish_ready_frames(struct pw_castkms *bridge)

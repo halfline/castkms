@@ -479,7 +479,8 @@ int castkms_start_capture(struct pw_castkms *bridge)
 {
 	struct drm_castkms_capture_start args = {
 		.crtc_id = bridge->crtc_id,
-		.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE,
+		.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE |
+			 DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR,
 	};
 
 	if (ioctl(bridge->drm_fd, DRM_IOCTL_CASTKMS_CAPTURE_START, &args) < 0) {
@@ -553,12 +554,35 @@ void castkms_close(struct pw_castkms *bridge)
 		bridge->attached_here = false;
 	}
 
+	free(bridge->cursor_bitmap);
+	bridge->cursor_bitmap = NULL;
+	bridge->cursor_bitmap_size = 0;
+	bridge->cursor_bitmap_capacity = 0;
 	if (bridge->drm_fd >= 0)
 		close(bridge->drm_fd);
 	bridge->drm_fd = -1;
 }
 
 /* ---- DRM event validation and dispatch -------------------------------- */
+
+static bool cursor_event_is_valid(
+	const struct drm_event_castkms_capture_frame *event)
+{
+	if (event->cursor_flags & ~(DRM_CASTKMS_CURSOR_VISIBLE |
+				      DRM_CASTKMS_CURSOR_IMAGE_CHANGED))
+		return false;
+	if (!event->cursor_serial)
+		return !event->cursor_flags && !event->cursor_width &&
+			event->cursor_height == 0;
+	if (!(event->cursor_flags & DRM_CASTKMS_CURSOR_VISIBLE))
+		return !event->cursor_width && !event->cursor_height;
+
+	return event->cursor_width && event->cursor_height &&
+		event->cursor_width <= DRM_CASTKMS_CAPTURE_MAX_CURSOR_WIDTH &&
+		event->cursor_height <= DRM_CASTKMS_CAPTURE_MAX_CURSOR_HEIGHT &&
+		event->cursor_hotspot_x < event->cursor_width &&
+		event->cursor_hotspot_y < event->cursor_height;
+}
 
 static bool frame_payload_is_valid(
 	const struct pw_castkms *bridge,
@@ -573,7 +597,8 @@ static bool frame_payload_is_valid(
 	    event->damage_width > bridge->width - (uint32_t)event->damage_x ||
 	    (uint32_t)event->damage_y > bridge->height ||
 	    event->damage_height >
-		bridge->height - (uint32_t)event->damage_y)
+		bridge->height - (uint32_t)event->damage_y ||
+	    !cursor_event_is_valid(event))
 		return false;
 
 	if ((event->flags & DRM_CASTKMS_CAPTURE_FRAME_FULL_DAMAGE) &&
@@ -591,12 +616,16 @@ static void log_invalid_frame(
 {
 	fprintf(stderr,
 		"completion: generation=%llu/%llu flags=%#x "
-		"damage=(%d,%d)+%ux%u/%ux%u\n",
+		"damage=(%d,%d)+%ux%u/%ux%u cursor=%u/%#x "
+		"pos=(%d,%d) hotspot=%u,%u size=%ux%u\n",
 		(unsigned long long)event->mode_generation,
 		(unsigned long long)bridge->mode_generation,
 		event->flags, event->damage_x, event->damage_y,
 		event->damage_width, event->damage_height,
-		bridge->width, bridge->height);
+		bridge->width, bridge->height, event->cursor_serial,
+		event->cursor_flags, event->cursor_x, event->cursor_y,
+		event->cursor_hotspot_x, event->cursor_hotspot_y,
+		event->cursor_width, event->cursor_height);
 }
 
 static bool handle_frame_event(
@@ -657,6 +686,16 @@ static bool handle_frame_event(
 			.y = event->damage_y,
 			.width = event->damage_width,
 			.height = event->damage_height,
+		},
+		.cursor = {
+			.serial = event->cursor_serial,
+			.flags = event->cursor_flags,
+			.x = event->cursor_x,
+			.y = event->cursor_y,
+			.hotspot_x = event->cursor_hotspot_x,
+			.hotspot_y = event->cursor_hotspot_y,
+			.width = event->cursor_width,
+			.height = event->cursor_height,
 		},
 	};
 	buffer->state = CAPTURE_BUFFER_READY;
