@@ -297,6 +297,7 @@ void castkms_destroy(struct castkms_config *config)
 	castkms_device = config->dev;
 	fdev = castkms_device->faux_dev;
 
+	castkms_capture_authority_revoke_all(castkms_device, -ENODEV);
 	drm_dev_unplug(&castkms_device->drm);
 	drm_atomic_helper_shutdown(&castkms_device->drm);
 	castkms_config_clear_runtime_objects(config);

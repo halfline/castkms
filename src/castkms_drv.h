@@ -4,6 +4,8 @@
 #define _CASTKMS_DRV_H_
 
 #include <linux/hrtimer.h>
+#include <linux/mutex.h>
+#include <linux/xarray.h>
 
 #include <drm/drm.h>
 #include <drm/drm_colorop.h>
@@ -45,12 +47,20 @@ struct castkms_config_plane;
  * @config: Configuration used in this CASTKMS device. Runtime callbacks must
  *          hold a drm_dev_enter() reference while accessing it because its
  *          configfs owner may release it after unplug.
+ * @authority_registry_lock: Serializes the kernel-native authority registry
+ * @authorities: Live capture authorities, including non-UAPI kernel clients
+ * @next_authority_id: Internal cyclic authority-registry cursor
+ * @authorities_shutdown: Prevents new authorities during device teardown
  * @capture_owners: Device-global DRM ownership facts for composed content
  */
 struct castkms_device {
 	struct drm_device drm;
 	struct faux_device *faux_dev;
 	struct castkms_config *config;
+	struct mutex authority_registry_lock; /* Protects authorities. */
+	struct xarray authorities;
+	u32 next_authority_id;
+	bool authorities_shutdown;
 	struct castkms_capture_owner_state capture_owners;
 };
 
