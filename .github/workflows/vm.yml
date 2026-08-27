@@ -70,3 +70,45 @@ jobs:
             ~/.cache/castkms-vm/results
             ~/.cache/castkms-vm/instances/default/*.log
           if-no-files-found: warn
+
+  product:
+    name: Product / full capture stack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install VM host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes genisoimage qemu-system-x86 qemu-utils rsync
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+
+      - name: Cache verified Fedora base image
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/castkms-vm/images
+          key: castkms-fedora-43-cloud-1.6
+
+      - name: Provision pinned guest
+        run: ./scripts/vm/castkms-vm provision
+
+      - name: Run full product VM gate
+        env:
+          CASTKMS_VM_FAST_GATE: skip
+        run: ./scripts/vm/castkms-vm test
+
+      - name: Stop guest
+        if: always()
+        run: ./scripts/vm/castkms-vm stop || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: castkms-vm-product-results
+          path: |
+            ~/.cache/castkms-vm/results
+            ~/.cache/castkms-vm/instances/default/*.log
+          if-no-files-found: warn
