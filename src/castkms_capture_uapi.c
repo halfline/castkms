@@ -561,6 +561,8 @@ static void castkms_capture_uapi_request_complete(
 	event->stream_id = uapi_request->stream_id;
 	event->buffer_id = uapi_request->buffer_id;
 	event->status = result->status;
+	if (result->mode_changed)
+		event->flags |= DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED;
 	event->dropped_frames = result->dropped_frames;
 
 	/* drm_send_event() takes ownership of the adapter allocation. */

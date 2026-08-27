@@ -93,8 +93,9 @@ struct castkms_capture_completion {
 
 int castkms_capture_output_init(struct drm_device *dev,
 				struct castkms_output *output);
-void castkms_capture_mode_changed(struct castkms_output *output,
-				  const struct drm_crtc_state *state);
+bool castkms_capture_mode_changed(struct castkms_output *output,
+				  const struct drm_crtc_state *state,
+				  struct castkms_capture_completion *completion);
 void castkms_capture_deliver_completion(
 	struct castkms_output *output,
 	struct castkms_capture_completion *completion);

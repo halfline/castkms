@@ -474,6 +474,15 @@ struct drm_event_castkms_grant_state {
 };
 
 /**
+ * DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED:
+ *
+ * The queued buffer was returned because its mode generation became stale.
+ * The stream remains bound to its original generation; stop it and start a
+ * new stream before registering or queueing buffers for the new mode.
+ */
+#define DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED	(1U << 1)
+
+/**
  * struct drm_event_castkms_capture_frame - capture completion event
  * @base: DRM event header with type DRM_CASTKMS_CAPTURE_EVENT_FRAME
  * @user_data: opaque value supplied when the buffer was queued
@@ -484,7 +493,7 @@ struct drm_event_castkms_grant_state {
  * @stream_id: file-local capture stream identifier
  * @buffer_id: stream-local registered buffer identifier
  * @status: zero on success or a negative errno on asynchronous failure
- * @flags: must be zero
+ * @flags: bitmask of DRM_CASTKMS_CAPTURE_FRAME_* values
  * @dropped_frames: frames skipped since this buffer was queued
  * @reserved: must be zero
  */

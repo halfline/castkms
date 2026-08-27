@@ -334,6 +334,8 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 	__releases(&castkms_output->lock)
 {
 	struct castkms_output *castkms_output = drm_crtc_to_castkms_output(crtc);
+	struct castkms_capture_completion capture_completion = {};
+	bool capture_cancelled = false;
 
 	if (crtc->state->event) {
 		spin_lock(&crtc->dev->event_lock);
@@ -351,9 +353,17 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 	castkms_output->dispatch_state = to_castkms_crtc_state(crtc->state);
 	if (crtc->state->mode_changed || crtc->state->active_changed ||
 	    crtc->state->connectors_changed)
-		castkms_capture_mode_changed(castkms_output, crtc->state);
+		capture_cancelled =
+			castkms_capture_mode_changed(castkms_output, crtc->state,
+						     &capture_completion);
 
 	spin_unlock_irq(&castkms_output->lock);
+
+	if (capture_cancelled)
+		castkms_frame_dispatch_put(castkms_output,
+				     CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE);
+	castkms_capture_deliver_completion(castkms_output,
+					   &capture_completion);
 }
 
 static const struct drm_crtc_helper_funcs castkms_crtc_helper_funcs = {

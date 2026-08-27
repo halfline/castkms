@@ -234,19 +234,42 @@ void castkms_capture_stream_destroy(struct castkms_capture_stream *stream,
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_stream_destroy);
 
-void castkms_capture_mode_changed(struct castkms_output *output,
-				  const struct drm_crtc_state *state)
+bool castkms_capture_mode_changed(struct castkms_output *output,
+				  const struct drm_crtc_state *state,
+				  struct castkms_capture_completion *completion)
 {
 	struct castkms_capture_output *capture = &output->capture;
+	struct castkms_capture_buffer *buffer;
 	unsigned long flags;
+	bool remove_callback = false;
+	bool cancelled = false;
 
+	*completion = (struct castkms_capture_completion) {};
 	spin_lock_irqsave(&capture->state_lock, flags);
 	capture->mode_generation++;
 	capture->active = state->active;
 	capture->width = state->active ? state->mode.hdisplay : 0;
 	capture->height = state->active ? state->mode.vdisplay : 0;
+
+	buffer = capture->queued_buffer;
+	if (buffer) {
+		capture->queued_buffer = NULL;
+		remove_callback = buffer->reuse_callback_armed;
+		buffer->reuse_callback_armed = false;
+		castkms_capture_buffer_finish(
+			buffer, completion, -ESTALE, false, true,
+			capture->mode_generation, 0, ktime_get());
+		cancelled = true;
+	}
 	spin_unlock_irqrestore(&capture->state_lock, flags);
+
+	if (remove_callback)
+		castkms_capture_buffer_remove_reuse_callback(
+			buffer, completion->dependency);
+
+	return cancelled;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_capture_mode_changed);
 
 bool castkms_capture_prepare_frame(struct castkms_output *output,
 				   struct castkms_crtc_state *state,
