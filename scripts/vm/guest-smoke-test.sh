@@ -29,6 +29,16 @@ connect_mode_gate_open=0
 connect_modeset_pid=
 crc_fd=
 crc_pid=
+pw_daemon_pid=
+pw_wireplumber_pid=
+pw_source_pid=
+pw_modeset_pid=
+pw_mode_gate_open=0
+pw_runtime=
+sink_capture_pid=
+audio_modeset_pid=
+audio_mode_gate_open=0
+audio_attach_gate_open=0
 # Scenario modules expose one run_*_scenario entrypoint each. The module graph
 # has one authoritative loader; common.sh owns validation and ordered dispatch.
 # shellcheck source=guest-smoke/modules.sh
@@ -73,6 +83,17 @@ cleanup()
 		kill "$page_flip_pid" 2>/dev/null || true
 		wait "$page_flip_pid" 2>/dev/null || true
 	fi
+	if test "$audio_mode_gate_open" -eq 1; then
+		exec 4>&-
+	fi
+	if test -n "$audio_modeset_pid"; then
+		kill "$audio_modeset_pid" 2>/dev/null || true
+		wait "$audio_modeset_pid" 2>/dev/null || true
+	fi
+	if test "$audio_attach_gate_open" -eq 1; then
+		printf 'x' >&5 2>/dev/null || true
+		exec 5>&-
+	fi
 	if test "$attach_gate_open" -eq 1; then
 		printf 'x' >&9 2>/dev/null || true
 		exec 9>&-
@@ -97,13 +118,44 @@ cleanup()
 		kill "$unplug_helper_pid" 2>/dev/null || true
 		wait "$unplug_helper_pid" 2>/dev/null || true
 	fi
+	if test "$pw_mode_gate_open" -eq 1; then
+		exec 6>&-
+	fi
+	if test -n "$sink_capture_pid"; then
+		kill "$sink_capture_pid" 2>/dev/null || true
+		wait "$sink_capture_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_source_pid"; then
+		kill "$pw_source_pid" 2>/dev/null || true
+		wait "$pw_source_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_modeset_pid"; then
+		kill "$pw_modeset_pid" 2>/dev/null || true
+		wait "$pw_modeset_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_wireplumber_pid"; then
+		kill "$pw_wireplumber_pid" 2>/dev/null || true
+		wait "$pw_wireplumber_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_daemon_pid"; then
+		kill "$pw_daemon_pid" 2>/dev/null || true
+		wait "$pw_daemon_pid" 2>/dev/null || true
+	fi
+	if test -n "$pw_runtime"; then
+		sudo rm -rf -- "$pw_runtime"
+	fi
 	if test -n "$runtime_dir"; then
 		rm -f "$runtime_dir/drm-unplug-check" \
 			"$runtime_dir/unplug-gate" "$runtime_dir/mode-gate" \
-			"$runtime_dir/attach-gate" "$runtime_dir/connect-mode-gate"
+			"$runtime_dir/attach-gate" "$runtime_dir/connect-mode-gate" \
+			"$runtime_dir/pw-mode-gate" \
+			"$runtime_dir/audio-attach-gate"
 		rmdir "$runtime_dir" 2>/dev/null || true
 	fi
 	if test "$cast_loaded" -eq 1; then
+		# The ALSA udev rule may leave its per-card restore daemon attached.
+		sudo killall alsactl 2>/dev/null || true
+		sudo fuser -k /dev/snd/* 2>/dev/null || true
 		sudo rmmod castkms || true
 	fi
 	if test "$stock_loaded" -eq 1; then
@@ -127,14 +179,15 @@ make clean
 test ! -e ./castkms.ko
 test ! -e ./src/tests/castkms-kunit-tests.ko
 make kunit W=1 2>&1 | tee "$result_dir/build.log"
-make -C tools castkms-attach castkms-capture-test \
-	castkms-grant-launch castkms-cec-test 2>&1 | \
-	tee "$result_dir/tools-build.log"
+make tools 2>&1 | tee "$result_dir/tools-build.log"
 test -x ./tools/castkms-attach
 test -x ./tools/castkms-capture-test
 test -x ./tools/castkms-grant-launch
 test -x ./tools/castkms-cec-test
-printf '%s\n' 'capture_probe_build=pass' | tee -a "$result_dir/summary.txt"
+test -x ./tools/castkms-audio-test
+test -x ./tools/pw-castkms/pw-castkms
+test -x ./tools/pw-castkms/pw-castkms-test
+printf '%s\n' 'smoke_tools_build=pass' | tee -a "$result_dir/summary.txt"
 
 test "$(modinfo -F name ./castkms.ko)" = castkms
 case "$(modinfo -F vermagic ./castkms.ko)" in

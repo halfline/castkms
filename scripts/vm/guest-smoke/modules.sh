@@ -13,5 +13,7 @@ _smoke_module_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 . "$_smoke_module_dir/capture.sh"
 # shellcheck source=cursor.sh
 . "$_smoke_module_dir/cursor.sh"
+# shellcheck source=pipewire-audio.sh
+. "$_smoke_module_dir/pipewire-audio.sh"
 
 unset _smoke_module_dir

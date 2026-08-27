@@ -8,11 +8,13 @@ declare -ar smoke_scenario_names=(
 	configfs
 	capture
 	cursor
+	pipewire-audio
 )
 declare -Ar smoke_scenario_handlers=(
 	[configfs]=run_configfs_scenario
 	[capture]=run_capture_scenario
 	[cursor]=run_cursor_scenario
+	[pipewire-audio]=run_pipewire_audio_scenario
 )
 
 smoke_validate_scenario()

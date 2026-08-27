@@ -126,8 +126,8 @@ The product work is selectable:
 CASTKMS_VM_SCENARIO=capture ./scripts/vm/castkms-vm test
 ```
 
-The available scenarios are `configfs`, `capture`, and `cursor`. The default
-`all` runs them in that order.
+The available scenarios are `configfs`, `capture`, `cursor`, and
+`pipewire-audio`. The default `all` runs them in that order.
 
 The guest harness keeps lifecycle setup and the single failure-safe cleanup
 trap in `guest-smoke-test.sh`. Its product scenarios live in
@@ -152,6 +152,12 @@ standalone CEC session test through a full-rights grant.
 
 **cursor** checks cursor metadata and bitmap transitions on a grant-backed
 capture stream.
+
+**pipewire-audio** publishes a grant-backed PipeWire source, validates
+delivered frames, disconnects the consumer so the source releases its
+destination pool, reconnects a second consumer on a fresh CastKMS stream, and
+checks PipeWire audio-sink discovery plus ALSA card creation, ELD, playback,
+timestamps, and pause/resume when audio is available.
 
 Device-backed capture, grant, grant-launcher, and CEC clients share the small
 `castkms-test-drm` harness for driver identification, dumb framebuffers, and
