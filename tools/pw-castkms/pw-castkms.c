@@ -201,3 +201,55 @@ static int build_output_edid(const struct options *options,
 	*size = CASTKMS_EDID_BLOCK;
 	return 0;
 }
+
+int main(int argc, char **argv)
+{
+	struct pw_castkms bridge = {
+		.drm_fd = -1,
+		.exit_status = EXIT_FAILURE,
+	};
+	struct options options;
+	uint8_t *edid = NULL;
+	uint32_t edid_size = 0;
+	bool pipewire_initialized = false;
+	int status;
+
+	status = parse_options(argc, argv, &options);
+	if (status)
+		return status > 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+	/* 1. Open and validate the selected CastKMS primary node. */
+	status = castkms_open_device(&bridge, options.device_path);
+	if (status)
+		goto out;
+
+	/* 2. Attach an output and wait for the compositor's mode. */
+	status = build_output_edid(&options, &edid, &edid_size);
+	if (status)
+		goto out;
+	status = castkms_configure_output(&bridge, options.preferred_crtc,
+					  edid, edid_size);
+	if (status)
+		goto out;
+
+	/* 3. Start capture before PipeWire asks us to allocate destinations. */
+	status = castkms_start_capture(&bridge);
+	if (status)
+		goto out;
+
+	/* 4. Publish DRM-allocated DMA-BUFs and drive the event loop. */
+	pw_init(&argc, &argv);
+	pipewire_initialized = true;
+	status = pipewire_open(&bridge);
+	if (!status)
+		(void)pipewire_run(&bridge);
+
+out:
+	/* Stop first so remove_buffer never unregisters a queued destination. */
+	(void)castkms_stop_capture(&bridge);
+	pipewire_close(&bridge);
+	if (pipewire_initialized)
+		pw_deinit();
+	castkms_close(&bridge);
+	free(edid);
+	return bridge.exit_status;
+}

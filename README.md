@@ -55,6 +55,21 @@ make tools
 `make check` builds that probe, checks shell and architecture rules, and runs
 its command-line smoke test without requiring a loaded device.
 
+## PipeWire video
+
+`tools/pw-castkms/pw-castkms` is a small example consumer. It opens a
+CastKMS primary node, attaches a virtual monitor, captures linear
+`XRGB8888` buffers, and publishes them as a PipeWire source:
+
+```sh
+./tools/pw-castkms/pw-castkms -d /dev/dri/cardN
+```
+
+DRM device permissions control access to captured pixels, while PipeWire
+policy controls who may consume the published node. See the
+[`pw-castkms` reading guide](tools/pw-castkms/README.md) for the protocol
+and buffer-lifetime walkthrough.
+
 ## VM smoke test
 
 The repository includes a reproducible QEMU/KVM guest for development on hosts
