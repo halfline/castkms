@@ -26,6 +26,7 @@ castkms-y := \
 	src/castkms_config.o \
 	src/castkms_configfs.o \
 	src/castkms_colorop.o \
-	src/castkms_luts.o
+	src/castkms_luts.o \
+	src/castkms_snapshot.o
 
 ccflags-y += -I$(src)/src -I$(src)/include/uapi

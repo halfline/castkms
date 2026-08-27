@@ -63,3 +63,5 @@ render-core src/castkms_luts.c
 render-core src/castkms_luts.h
 render-core src/castkms_output_buffer.c
 render-core src/castkms_output_buffer.h
+render-core src/castkms_snapshot.c
+render-core src/castkms_snapshot.h

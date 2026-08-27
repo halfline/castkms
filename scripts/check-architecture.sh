@@ -36,7 +36,7 @@ reject 'kernel limits import the public UAPI' \
 	src/castkms_limits.h
 
 reject 'pixel composer coordinates mutable frame consumers' \
-	'castkms_capture|castkms_capture_owner|castkms_crtc|castkms_frame_dispatch|drm_writeback|drm_crtc_add_crc' \
+	'castkms_capture|castkms_capture_owner|castkms_crtc|castkms_frame_dispatch|castkms_snapshot|drm_writeback|drm_crtc_add_crc' \
 	src/castkms_composer.c src/castkms_composer.h
 
 reject 'stream scheduler owns buffer synchronization' \
