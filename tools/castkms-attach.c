@@ -121,6 +121,8 @@ int main(int argc, char **argv)
 {
 	uint8_t edid[CASTKMS_REFERENCE_EDID_MAX_SIZE];
 	uint32_t connector_id;
+	char discard;
+	ssize_t read_ret;
 	int inherited_fd = -1;
 	int edid_size;
 	int ioctl_ret;
@@ -164,6 +166,16 @@ int main(int argc, char **argv)
 		goto out_detach;
 	}
 
+	printf("connector_id=%u\n", connector_id);
+	printf("attached=1\n");
+	fflush(stdout);
+	do {
+		read_ret = read(STDIN_FILENO, &discard, 1);
+	} while (read_ret < 0 && errno == EINTR);
+	if (read_ret < 0) {
+		perror("attachment release gate");
+		goto out_detach;
+	}
 	ret = EXIT_SUCCESS;
 
 out_detach:

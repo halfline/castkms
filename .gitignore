@@ -8,6 +8,7 @@
 Module.symvers
 modules.order
 tools/castkms-grant-test
+tools/castkms-attach
 tools/castkms-capture-test
 tools/castkms-cec-test
 tools/castkms-edid-test
