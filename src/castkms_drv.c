@@ -47,6 +47,7 @@
 #include "castkms_framebuffer.h"
 #include "castkms_grant.h"
 #include "castkms_ioctl_policy.h"
+#include "castkms_topology.h"
 #include "castkms_uapi_device.h"
 
 #define DRIVER_NAME	"castkms"
@@ -79,6 +80,11 @@ MODULE_PARM_DESC(enable_plane_pipeline, "Enable/Disable plane pipeline support")
 static bool create_default_dev = true;
 module_param_named(create_default_dev, create_default_dev, bool, 0444);
 MODULE_PARM_DESC(create_default_dev, "Create or not the default CASTKMS device");
+
+static unsigned int max_outputs = 8;
+module_param_named(max_outputs, max_outputs, uint, 0444);
+MODULE_PARM_DESC(max_outputs,
+		 "Number of default display outputs (feature-dependent maximum, at most 31)");
 
 enum castkms_ioctl_grant_access {
 	CASTKMS_IOCTL_GRANT_DENIED,
@@ -351,7 +357,7 @@ static int castkms_modeset_init(struct castkms_device *castkmsdev)
 	dev->mode_config.preferred_depth = 0;
 	dev->mode_config.helper_private = &castkms_mode_config_helpers;
 
-	return castkms_output_init(castkmsdev);
+	return castkms_topology_init(castkmsdev);
 }
 
 int castkms_create(struct castkms_config *config)
@@ -437,6 +443,7 @@ static int __init castkms_init(void)
 {
 	int ret;
 	struct castkms_config *config;
+	unsigned int feature_max_outputs;
 
 	ret = castkms_configfs_register();
 	if (ret)
@@ -445,8 +452,20 @@ static int __init castkms_init(void)
 	if (!create_default_dev)
 		return 0;
 
-	config = castkms_config_default_create(enable_cursor, enable_writeback,
-					    enable_overlay, enable_plane_pipeline);
+	feature_max_outputs = castkms_config_default_max_outputs(
+		enable_cursor, enable_writeback, enable_overlay);
+	if (!max_outputs || max_outputs > feature_max_outputs) {
+		DRM_ERROR("max_outputs must be between 1 and %u for the enabled cursor, overlay, and writeback features\n",
+			  feature_max_outputs);
+		ret = -EINVAL;
+		goto err_configfs;
+	}
+
+	config = castkms_config_default_create_outputs(enable_cursor,
+						       enable_writeback,
+						       enable_overlay,
+						       enable_plane_pipeline,
+						       max_outputs);
 	if (IS_ERR(config)) {
 		ret = PTR_ERR(config);
 		goto err_configfs;

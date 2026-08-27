@@ -198,6 +198,72 @@ static void castkms_config_test_default_config(struct kunit *test)
 	castkms_config_destroy(config);
 }
 
+struct default_output_limit_case {
+	bool enable_cursor;
+	bool enable_writeback;
+	bool enable_overlay;
+	unsigned int max_outputs;
+};
+
+static struct default_output_limit_case default_output_limit_cases[] = {
+	{ false, false, false, 31 },
+	{ true, false, false, 15 },
+	{ false, true, false, 15 },
+	{ false, false, true, 23 },
+	{ true, true, false, 15 },
+	{ true, false, true, 11 },
+	{ false, true, true, 15 },
+	{ true, true, true, 11 },
+};
+
+KUNIT_ARRAY_PARAM(default_output_limit, default_output_limit_cases, NULL);
+
+static void castkms_config_test_default_output_limit(struct kunit *test)
+{
+	const struct default_output_limit_case *params = test->param_value;
+	struct castkms_config *config;
+	unsigned int max_outputs;
+
+	max_outputs = castkms_config_default_max_outputs(
+		params->enable_cursor, params->enable_writeback,
+		params->enable_overlay);
+	KUNIT_EXPECT_EQ(test, max_outputs, params->max_outputs);
+
+	config = castkms_config_default_create_outputs(
+		params->enable_cursor, params->enable_writeback,
+		params->enable_overlay, false, max_outputs);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
+	KUNIT_EXPECT_TRUE(test, castkms_config_is_valid(config));
+	castkms_config_destroy(config);
+
+	config = castkms_config_default_create_outputs(
+		params->enable_cursor, params->enable_writeback,
+		params->enable_overlay, false, max_outputs + 1);
+	if (!IS_ERR(config)) {
+		KUNIT_FAIL(test, "default topology accepted one output beyond its resource budget");
+		castkms_config_destroy(config);
+		return;
+	}
+	KUNIT_EXPECT_EQ(test, PTR_ERR(config), -EINVAL);
+}
+
+static void castkms_config_test_derived_writeback_limit(struct kunit *test)
+{
+	struct castkms_config_crtc *crtc_cfg;
+	struct castkms_config *config;
+
+	config = castkms_config_default_create_outputs(false, false, false,
+						       false, 16);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, config);
+	KUNIT_ASSERT_TRUE(test, castkms_config_is_valid(config));
+
+	castkms_config_for_each_crtc(config, crtc_cfg)
+		castkms_config_crtc_set_writeback(crtc_cfg, true);
+	KUNIT_EXPECT_FALSE(test, castkms_config_is_valid(config));
+
+	castkms_config_destroy(config);
+}
+
 static void castkms_config_test_get_planes(struct kunit *test)
 {
 	struct castkms_config *config;
@@ -997,6 +1063,9 @@ static struct kunit_case castkms_config_test_cases[] = {
 	KUNIT_CASE(castkms_config_test_empty_config),
 	KUNIT_CASE_PARAM(castkms_config_test_default_config,
 			 default_config_gen_params),
+	KUNIT_CASE_PARAM(castkms_config_test_default_output_limit,
+			 default_output_limit_gen_params),
+	KUNIT_CASE(castkms_config_test_derived_writeback_limit),
 	KUNIT_CASE(castkms_config_test_get_planes),
 	KUNIT_CASE(castkms_config_test_get_crtcs),
 	KUNIT_CASE(castkms_config_test_get_encoders),

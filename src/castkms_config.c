@@ -32,40 +32,109 @@ struct castkms_config *castkms_config_create(const char *dev_name)
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_create);
 
-struct castkms_config *castkms_config_default_create(bool enable_cursor,
+unsigned int castkms_config_default_max_outputs(bool enable_cursor,
+						 bool enable_writeback,
+						 bool enable_overlay)
+{
+	unsigned int max_outputs = CASTKMS_MAX_OUTPUT_OBJECTS;
+	unsigned int plane_budget = CASTKMS_MAX_OUTPUT_OBJECTS;
+	unsigned int planes_per_output = enable_cursor ? 2 : 1;
+
+	if (enable_overlay)
+		plane_budget -= NUM_OVERLAY_PLANES;
+	max_outputs = min(max_outputs, plane_budget / planes_per_output);
+	if (enable_writeback)
+		max_outputs = min(max_outputs,
+				  CASTKMS_MAX_OUTPUT_OBJECTS / 2);
+
+	return max_outputs;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_config_default_max_outputs);
+
+struct castkms_config *castkms_config_default_create_outputs(bool enable_cursor,
 					       bool enable_writeback,
 					       bool enable_overlay,
-					       bool enable_plane_pipeline)
+					       bool enable_plane_pipeline,
+					       unsigned int num_outputs)
 {
 	struct castkms_config *config;
 	struct castkms_config_plane *plane_cfg;
 	struct castkms_config_crtc *crtc_cfg;
 	struct castkms_config_encoder *encoder_cfg;
 	struct castkms_config_connector *connector_cfg;
+	unsigned int output;
 	int n, ret;
+
+	if (!num_outputs ||
+	    num_outputs > castkms_config_default_max_outputs(enable_cursor,
+							 enable_writeback,
+							 enable_overlay))
+		return ERR_PTR(-EINVAL);
 
 	config = castkms_config_create(DEFAULT_DEVICE_NAME);
 	if (IS_ERR(config))
 		return config;
 
-	plane_cfg = castkms_config_create_plane(config);
-	if (IS_ERR(plane_cfg)) {
-		ret = PTR_ERR(plane_cfg);
-		goto err_alloc;
-	}
-	castkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_PRIMARY);
+	for (output = 0; output < num_outputs; output++) {
+		plane_cfg = castkms_config_create_plane(config);
+		if (IS_ERR(plane_cfg)) {
+			ret = PTR_ERR(plane_cfg);
+			goto err_alloc;
+		}
+		castkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_PRIMARY);
 
-	crtc_cfg = castkms_config_create_crtc(config);
-	if (IS_ERR(crtc_cfg)) {
-		ret = PTR_ERR(crtc_cfg);
-		goto err_alloc;
-	}
-	castkms_config_crtc_set_writeback(crtc_cfg, enable_writeback);
+		crtc_cfg = castkms_config_create_crtc(config);
+		if (IS_ERR(crtc_cfg)) {
+			ret = PTR_ERR(crtc_cfg);
+			goto err_alloc;
+		}
+		castkms_config_crtc_set_writeback(crtc_cfg, enable_writeback);
 
-	ret = castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
-	if (ret)
-		goto err_alloc;
-	castkms_config_plane_set_default_pipeline(plane_cfg, enable_plane_pipeline);
+		ret = castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
+		if (ret)
+			goto err_alloc;
+		castkms_config_plane_set_default_pipeline(plane_cfg,
+							  enable_plane_pipeline);
+
+		if (enable_cursor) {
+			plane_cfg = castkms_config_create_plane(config);
+			if (IS_ERR(plane_cfg)) {
+				ret = PTR_ERR(plane_cfg);
+				goto err_alloc;
+			}
+
+			castkms_config_plane_set_type(plane_cfg,
+						      DRM_PLANE_TYPE_CURSOR);
+			castkms_config_plane_set_default_pipeline(plane_cfg,
+								  enable_plane_pipeline);
+
+			ret = castkms_config_plane_attach_crtc(plane_cfg,
+							       crtc_cfg);
+			if (ret)
+				goto err_alloc;
+		}
+
+		encoder_cfg = castkms_config_create_encoder(config);
+		if (IS_ERR(encoder_cfg)) {
+			ret = PTR_ERR(encoder_cfg);
+			goto err_alloc;
+		}
+
+		ret = castkms_config_encoder_attach_crtc(encoder_cfg, crtc_cfg);
+		if (ret)
+			goto err_alloc;
+
+		connector_cfg = castkms_config_create_connector(config);
+		if (IS_ERR(connector_cfg)) {
+			ret = PTR_ERR(connector_cfg);
+			goto err_alloc;
+		}
+
+		ret = castkms_config_connector_attach_encoder(connector_cfg,
+							      encoder_cfg);
+		if (ret)
+			goto err_alloc;
+	}
 
 	if (enable_overlay) {
 		for (n = 0; n < NUM_OVERLAY_PLANES; n++) {
@@ -77,54 +146,35 @@ struct castkms_config *castkms_config_default_create(bool enable_cursor,
 
 			castkms_config_plane_set_type(plane_cfg,
 						   DRM_PLANE_TYPE_OVERLAY);
-			castkms_config_plane_set_default_pipeline(plane_cfg, enable_plane_pipeline);
+			castkms_config_plane_set_default_pipeline(plane_cfg,
+								  enable_plane_pipeline);
 
-			ret = castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
-			if (ret)
-				goto err_alloc;
+			castkms_config_for_each_crtc(config, crtc_cfg) {
+				ret = castkms_config_plane_attach_crtc(plane_cfg,
+								       crtc_cfg);
+				if (ret)
+					goto err_alloc;
+			}
 		}
 	}
-
-	if (enable_cursor) {
-		plane_cfg = castkms_config_create_plane(config);
-		if (IS_ERR(plane_cfg)) {
-			ret = PTR_ERR(plane_cfg);
-			goto err_alloc;
-		}
-
-		castkms_config_plane_set_type(plane_cfg, DRM_PLANE_TYPE_CURSOR);
-		castkms_config_plane_set_default_pipeline(plane_cfg, enable_plane_pipeline);
-
-		ret = castkms_config_plane_attach_crtc(plane_cfg, crtc_cfg);
-		if (ret)
-			goto err_alloc;
-	}
-
-	encoder_cfg = castkms_config_create_encoder(config);
-	if (IS_ERR(encoder_cfg)) {
-		ret = PTR_ERR(encoder_cfg);
-		goto err_alloc;
-	}
-
-	ret = castkms_config_encoder_attach_crtc(encoder_cfg, crtc_cfg);
-	if (ret)
-		goto err_alloc;
-
-	connector_cfg = castkms_config_create_connector(config);
-	if (IS_ERR(connector_cfg)) {
-		ret = PTR_ERR(connector_cfg);
-		goto err_alloc;
-	}
-
-	ret = castkms_config_connector_attach_encoder(connector_cfg, encoder_cfg);
-	if (ret)
-		goto err_alloc;
 
 	return config;
 
 err_alloc:
 	castkms_config_destroy(config);
 	return ERR_PTR(ret);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_config_default_create_outputs);
+
+struct castkms_config *castkms_config_default_create(bool enable_cursor,
+					       bool enable_writeback,
+					       bool enable_overlay,
+					       bool enable_plane_pipeline)
+{
+	return castkms_config_default_create_outputs(enable_cursor,
+						     enable_writeback,
+						     enable_overlay,
+						     enable_plane_pipeline, 1);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_config_default_create);
 
@@ -264,11 +314,18 @@ static bool valid_crtc_number(const struct castkms_config *config)
 
 static bool valid_encoder_number(const struct castkms_config *config)
 {
+	struct castkms_config_crtc *crtc_cfg;
+	size_t n_writeback = 0;
 	size_t n_encoders;
 
+	castkms_config_for_each_crtc(config, crtc_cfg) {
+		if (castkms_config_crtc_get_writeback(crtc_cfg))
+			n_writeback++;
+	}
 	n_encoders = list_count_nodes((struct list_head *)&config->encoders);
-	if (!n_encoders || n_encoders > CASTKMS_MAX_OUTPUT_OBJECTS) {
-		pr_info("castkms %s: The number of encoders must be between 1 and %u\n",
+	if (!n_encoders ||
+	    n_encoders + n_writeback > CASTKMS_MAX_OUTPUT_OBJECTS) {
+		pr_info("castkms %s: The total number of encoders, including writeback, must be between 1 and %u\n",
 			config->dev_name, CASTKMS_MAX_OUTPUT_OBJECTS);
 		return false;
 	}
@@ -315,11 +372,18 @@ static bool valid_encoder_possible_crtcs(const struct castkms_config *config)
 
 static bool valid_connector_number(const struct castkms_config *config)
 {
+	struct castkms_config_crtc *crtc_cfg;
+	size_t n_writeback = 0;
 	size_t n_connectors;
 
+	castkms_config_for_each_crtc(config, crtc_cfg) {
+		if (castkms_config_crtc_get_writeback(crtc_cfg))
+			n_writeback++;
+	}
 	n_connectors = list_count_nodes((struct list_head *)&config->connectors);
-	if (!n_connectors || n_connectors > CASTKMS_MAX_OUTPUT_OBJECTS) {
-		pr_info("castkms %s: The number of connectors must be between 1 and %u\n",
+	if (!n_connectors ||
+	    n_connectors + n_writeback > CASTKMS_MAX_OUTPUT_OBJECTS) {
+		pr_info("castkms %s: The total number of connectors, including writeback, must be between 1 and %u\n",
 			config->dev_name, CASTKMS_MAX_OUTPUT_OBJECTS);
 		return false;
 	}

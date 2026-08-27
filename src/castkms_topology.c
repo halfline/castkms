@@ -3,11 +3,12 @@
 #include "castkms_config.h"
 #include "castkms_connector.h"
 #include "castkms_drv.h"
+#include "castkms_topology.h"
 #include "castkms_writeback.h"
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 
-int castkms_output_init(struct castkms_device *castkmsdev)
+int castkms_topology_init(struct castkms_device *castkmsdev)
 {
 	struct drm_device *dev = &castkmsdev->drm;
 	struct castkms_config_plane *plane_cfg;

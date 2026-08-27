@@ -7,6 +7,14 @@ VKMS baseline that builds as an external `castkms.ko` module.
 The imported source and matching kernel baseline are recorded in
 [`UPSTREAM.md`](UPSTREAM.md).
 
+## Default outputs
+
+The default device has one virtual display. Set `max_outputs=N` when
+loading the module to create N independent CRTC, encoder, and connector
+pipelines. Its feature-dependent limit reserves DRM object-mask slots
+for cursor planes, overlays, and writeback; invalid values reject device
+creation.
+
 ## Build
 
 The default build uses the development tree for the running kernel:

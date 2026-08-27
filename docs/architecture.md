@@ -3,6 +3,13 @@
 This is for people changing the driver. The userspace grant contract is in
 [`capture-grants.md`](capture-grants.md).
 
+## Topology construction
+
+`castkms_topology.c` constructs runtime DRM objects from configuration.
+The default configuration can create multiple independent output
+pipelines while budgeting their planes, encoders, connectors, and
+optional writeback objects against DRM mask limits.
+
 ## Monitor attachment
 
 Virtual display connectors start disconnected. A grant with

@@ -17,7 +17,7 @@ castkms-y := \
 	src/castkms_capture_cursor.o \
 	src/castkms_capture_job.o \
 	src/castkms_plane.o \
-	src/castkms_output.o \
+	src/castkms_topology.o \
 	src/castkms_output_buffer.o \
 	src/castkms_formats.o \
 	src/castkms_crtc.o \
