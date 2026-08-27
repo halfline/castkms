@@ -108,7 +108,7 @@ Rights are immutable and connector-scoped:
 | `CAPTURE_PIXELS` | Start streams and register or queue capture buffers. |
 | `MANAGE_ATTACHMENT` | Attach a remote monitor. |
 | `UPDATE_EDID` | Provide an EDID while attaching a remote monitor. |
-| `READ_CURSOR` | Include cursor pixels. |
+| `READ_CURSOR` | Include cursor pixels or receive cursor metadata. |
 | `MANAGE_CEC` | Bind and operate HDMI-CEC (the HDMI command channel) on the connector. |
 
 `ATTACH_MONITOR` with an EDID requires both attachment and EDID rights. Unknown

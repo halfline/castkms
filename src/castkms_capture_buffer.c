@@ -128,6 +128,7 @@ void castkms_capture_buffer_finish(
 		return;
 	WARN_ON(buffer->reuse_callback_armed);
 
+	*result = (struct castkms_capture_result) {};
 	result->status = status;
 	result->sequence = sequence;
 	result->timestamp = timestamp;
@@ -137,6 +138,17 @@ void castkms_capture_buffer_finish(
 	result->cancelled = cancelled;
 	result->mode_changed = mode_changed;
 	result->full_damage = !status && full_damage;
+	if (!status) {
+		result->cursor_serial = buffer->cursor_serial;
+		result->cursor_visible = buffer->cursor_visible;
+		result->cursor_image_changed = buffer->cursor_image_changed;
+		result->cursor_x = buffer->cursor_x;
+		result->cursor_y = buffer->cursor_y;
+		result->cursor_hotspot_x = buffer->cursor_hotspot_x;
+		result->cursor_hotspot_y = buffer->cursor_hotspot_y;
+		result->cursor_width = buffer->cursor_width;
+		result->cursor_height = buffer->cursor_height;
+	}
 
 	completion->request = buffer->request;
 	completion->fence = buffer->completion_fence;
@@ -243,6 +255,7 @@ void castkms_capture_buffer_destroy(struct castkms_capture_buffer *buffer)
 	WARN_ON(buffer->reuse_callback_armed);
 	WARN_ON(buffer->completion_fence);
 	dma_fence_put(buffer->reuse_fence);
+	kfree(buffer->cursor_bitmap);
 	castkms_output_buffer_fini(&buffer->output);
 	if (buffer->ready_syncobj)
 		drm_syncobj_put(buffer->ready_syncobj);

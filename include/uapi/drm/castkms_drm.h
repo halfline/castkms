@@ -84,7 +84,7 @@ extern "C" {
 /**
  * DRM_CASTKMS_GRANT_READ_CURSOR:
  *
- * Permit cursor inclusion in a capture stream.
+ * Permit cursor inclusion and metadata in a capture stream.
  */
 #define DRM_CASTKMS_GRANT_READ_CURSOR		(1U << 3)
 
@@ -491,6 +491,22 @@ struct drm_event_castkms_grant_state {
 #define DRM_CASTKMS_CAPTURE_FRAME_MODE_CHANGED	(1U << 1)
 
 /**
+ * DRM_CASTKMS_CURSOR_VISIBLE:
+ *
+ * The cursor plane was visible when the frame was captured.
+ */
+#define DRM_CASTKMS_CURSOR_VISIBLE		(1U << 0)
+
+/**
+ * DRM_CASTKMS_CURSOR_IMAGE_CHANGED:
+ *
+ * The cursor image, hotspot, or visibility changed since the previous
+ * successful capture on this stream. Clients should invalidate any cached
+ * image associated with the previous cursor serial.
+ */
+#define DRM_CASTKMS_CURSOR_IMAGE_CHANGED	(1U << 1)
+
+/**
  * struct drm_event_castkms_capture_frame - capture completion event
  * @base: DRM event header with type DRM_CASTKMS_CAPTURE_EVENT_FRAME
  * @user_data: opaque value supplied when the buffer was queued
@@ -507,10 +523,22 @@ struct drm_event_castkms_grant_state {
  * @damage_y: top edge of the changed rectangle in output coordinates
  * @damage_width: width of the changed rectangle; zero on failure
  * @damage_height: height of the changed rectangle; zero on failure
+ * @cursor_serial: cursor generation counter; zero means no cursor state data
+ * @cursor_flags: bitmask of DRM_CASTKMS_CURSOR_* values
+ * @cursor_x: cursor x position in output coordinates
+ * @cursor_y: cursor y position in output coordinates
+ * @cursor_hotspot_x: hotspot x offset within the cursor image
+ * @cursor_hotspot_y: hotspot y offset within the cursor image
+ * @cursor_width: cursor image width in pixels; zero when hidden
+ * @cursor_height: cursor image height in pixels; zero when hidden
  * @reserved: must be zero
  *
  * The damage rectangle is valid only when @status is zero. Its coordinates
  * describe a bounding box in the captured output, not the source framebuffer.
+ * Cursor metadata is likewise valid only on success. A nonzero @cursor_serial
+ * without DRM_CASTKMS_CURSOR_VISIBLE represents a hidden cursor state.
+ * DRM_CASTKMS_CURSOR_IMAGE_CHANGED is set for image, hotspot, and visibility
+ * changes.
  */
 struct drm_event_castkms_capture_frame {
 	struct drm_event base;
@@ -527,6 +555,14 @@ struct drm_event_castkms_capture_frame {
 	__s32 damage_y;
 	__u32 damage_width;
 	__u32 damage_height;
+	__u32 cursor_serial;
+	__u32 cursor_flags;
+	__s32 cursor_x;
+	__s32 cursor_y;
+	__u32 cursor_hotspot_x;
+	__u32 cursor_hotspot_y;
+	__u32 cursor_width;
+	__u32 cursor_height;
 	__u32 reserved;
 };
 

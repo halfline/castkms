@@ -30,6 +30,9 @@ static void castkms_capture_job_worker(struct work_struct *work)
 	castkms_capture_buffer_set_damage(job->buffer,
 					  &job->snapshot->frame.damage,
 					  job->snapshot->frame.full_damage);
+	if (!ret)
+		ret = castkms_capture_buffer_set_cursor(
+			job->buffer, &job->snapshot->frame.cursor);
 	castkms_capture_complete_frame(job->output, job->buffer, ret);
 	castkms_frame_snapshot_put(job->snapshot);
 	kfree(job);

@@ -43,8 +43,8 @@ reject 'snapshot layer owns deferred capture execution' \
 	'castkms_capture_queue_job|castkms_capture\.h|castkms_composer\.h|castkms_output\.h' \
 	src/castkms_snapshot.c src/castkms_snapshot.h
 
-reject 'stream scheduler owns buffer synchronization' \
-	'dma_resv|drm_syncobj|dma_fence_chain' \
+reject 'stream scheduler owns buffer synchronization or cursor extraction' \
+	'dma_resv|drm_syncobj|dma_fence_chain|drm_gem_fb_vmap|cursor_bitmap' \
 	src/castkms_capture.c
 
 reject 'buffer engine owns connector or CRTC scheduling' \
@@ -69,6 +69,7 @@ test -f src/castkms_frame_dispatch_demand.h
 test -f src/castkms_crc.h
 test -f src/castkms_capture_job.c
 test -f src/castkms_capture_buffer.c
+test -f src/castkms_capture_cursor.c
 test -f src/castkms_capture_internal.h
 test -f src/castkms_grant_core_ioctl_table.inc
 test ! -e src/castkms_composer_demand.h

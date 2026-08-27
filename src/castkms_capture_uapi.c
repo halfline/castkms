@@ -74,8 +74,8 @@ static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32);
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
-static_assert(sizeof(struct drm_event_castkms_capture_frame) == 80);
-static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 76);
+static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112);
+static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108);
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -594,6 +594,17 @@ static void castkms_capture_uapi_request_complete(
 	event->damage_y = result->damage.y1;
 	event->damage_width = drm_rect_width(&result->damage);
 	event->damage_height = drm_rect_height(&result->damage);
+	event->cursor_serial = result->cursor_serial;
+	if (result->cursor_visible)
+		event->cursor_flags |= DRM_CASTKMS_CURSOR_VISIBLE;
+	if (result->cursor_image_changed)
+		event->cursor_flags |= DRM_CASTKMS_CURSOR_IMAGE_CHANGED;
+	event->cursor_x = result->cursor_x;
+	event->cursor_y = result->cursor_y;
+	event->cursor_hotspot_x = result->cursor_hotspot_x;
+	event->cursor_hotspot_y = result->cursor_hotspot_y;
+	event->cursor_width = result->cursor_width;
+	event->cursor_height = result->cursor_height;
 
 	/* drm_send_event() takes ownership of the adapter allocation. */
 	drm_send_event(uapi_request->dev, &uapi_request->pending);

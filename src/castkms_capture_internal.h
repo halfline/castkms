@@ -24,9 +24,11 @@ struct castkms_capture_stream {
 	u32 width;
 	u32 height;
 	u32 num_buffers;
+	u32 cursor_serial;
 	u32 active_deliveries;
 	bool active;
 	bool attached;
+	bool cursor_serial_valid;
 	int cancel_status;
 };
 
@@ -62,6 +64,16 @@ struct castkms_capture_buffer {
 	enum castkms_capture_buffer_state state;
 	struct drm_rect damage_clip;
 	bool full_damage;
+	u32 cursor_serial;
+	bool cursor_visible;
+	bool cursor_image_changed;
+	s32 cursor_x, cursor_y;
+	u32 cursor_hotspot_x, cursor_hotspot_y;
+	u32 cursor_width, cursor_height;
+	void *cursor_bitmap;
+	u32 cursor_bitmap_size;
+	u32 cursor_bitmap_stride;
+	u32 cursor_bitmap_serial;
 };
 
 bool castkms_capture_buffer_state_transition_valid(

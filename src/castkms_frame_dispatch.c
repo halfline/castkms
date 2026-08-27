@@ -111,6 +111,9 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 			castkms_capture_buffer_set_damage(active_capture,
 						  &frame->damage,
 						  frame->full_damage);
+			if (!capture_ret)
+				capture_ret = castkms_capture_buffer_set_cursor(
+					active_capture, &frame->cursor);
 			castkms_capture_complete_frame(out, active_capture,
 						       capture_ret);
 		}

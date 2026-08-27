@@ -19,6 +19,7 @@ struct castkms_capture_buffer;
 struct castkms_capture_authority;
 struct castkms_capture_stream;
 struct castkms_crtc_state;
+struct castkms_cursor_snapshot;
 struct castkms_frame_snapshot;
 struct castkms_output;
 struct castkms_output_buffer;
@@ -41,6 +42,15 @@ enum castkms_capture_sync_mode {
  * @cancelled: The request was withdrawn instead of reported as a frame
  * @mode_changed: The request was invalidated by an output mode change
  * @full_damage: @damage covers the complete captured frame
+ * @cursor_serial: Serial of the cursor image state
+ * @cursor_visible: The cursor was visible in the captured frame
+ * @cursor_image_changed: Cursor image state changed since the prior frame
+ * @cursor_x: Cursor x coordinate
+ * @cursor_y: Cursor y coordinate
+ * @cursor_hotspot_x: Cursor hotspot x coordinate
+ * @cursor_hotspot_y: Cursor hotspot y coordinate
+ * @cursor_width: Cursor image width
+ * @cursor_height: Cursor image height
  */
 struct castkms_capture_result {
 	int status;
@@ -52,6 +62,15 @@ struct castkms_capture_result {
 	bool cancelled;
 	bool mode_changed;
 	bool full_damage;
+	u32 cursor_serial;
+	bool cursor_visible;
+	bool cursor_image_changed;
+	s32 cursor_x;
+	s32 cursor_y;
+	u32 cursor_hotspot_x;
+	u32 cursor_hotspot_y;
+	u32 cursor_width;
+	u32 cursor_height;
 };
 
 /**
@@ -114,6 +133,8 @@ castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
 void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
 				       const struct drm_rect *clip,
 				       bool full_damage);
+int castkms_capture_buffer_set_cursor(struct castkms_capture_buffer *buffer,
+				      const struct castkms_cursor_snapshot *cursor);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
