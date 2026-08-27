@@ -110,6 +110,6 @@ struct castkms_capture_buffer *
 castkms_capture_buffer_create(struct castkms_capture_stream *stream,
 			      struct drm_framebuffer *fb,
 			      u64 mode_generation);
-void castkms_capture_buffer_discard(struct castkms_capture_stream *stream,
-				    struct castkms_capture_buffer *buffer);
+int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
+				  struct castkms_capture_buffer *buffer);
 #endif /* _CASTKMS_CAPTURE_H_ */

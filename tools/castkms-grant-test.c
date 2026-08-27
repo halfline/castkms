@@ -512,6 +512,13 @@ static int test_capture_access(int grant_fd,
 		perror("grant REGISTER_BUFFER");
 		goto out_stop;
 	}
+	ioctl_ret = castkms_test_capture_unregister_buffer(
+		grant_fd, stream.stream_id, buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("grant UNREGISTER_BUFFER");
+		goto out_stop;
+	}
 	ret = 0;
 
 out_stop:

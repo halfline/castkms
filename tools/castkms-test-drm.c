@@ -162,3 +162,17 @@ int castkms_test_capture_register_buffer(
 
 	return 0;
 }
+
+int castkms_test_capture_unregister_buffer(int fd, uint32_t stream_id,
+					   uint32_t buffer_id)
+{
+	struct drm_castkms_capture_unregister_buffer buffer = {
+		.stream_id = stream_id,
+		.buffer_id = buffer_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_UNREGISTER_BUFFER, &buffer) < 0)
+		return -errno;
+
+	return 0;
+}

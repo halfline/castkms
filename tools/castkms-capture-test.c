@@ -29,6 +29,8 @@ static_assert(sizeof(struct drm_castkms_capture_stop) == 16,
 	      "capture stop ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 24,
 	      "capture register ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
+	      "capture unregister ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
@@ -151,6 +153,12 @@ static int register_capture_buffer(int fd, uint32_t stream_id,
 {
 	return castkms_test_capture_register_buffer(
 		fd, stream_id, fb_id, flags, mode_generation, buffer_id);
+}
+
+static int unregister_capture_buffer(int fd, uint32_t stream_id,
+				     uint32_t buffer_id)
+{
+	return castkms_test_capture_unregister_buffer(fd, stream_id, buffer_id);
 }
 
 static int connector_drives_crtc(int fd, uint32_t connector_id,
@@ -347,6 +355,7 @@ int main(int argc, char **argv)
 	struct castkms_test_framebuffer first_buffer = {};
 	struct castkms_test_framebuffer second_buffer = {};
 	struct castkms_test_framebuffer wrong_size_buffer = {};
+	uint32_t *extra_buffer_ids = NULL;
 	uint32_t buffer_id;
 	uint32_t crtc_id;
 	uint32_t height;
@@ -552,14 +561,20 @@ int main(int argc, char **argv)
 		perror("register second implicit capture buffer");
 		goto out_close;
 	}
+	if (query.max_registered_buffers > 2) {
+		extra_buffer_ids = calloc(query.max_registered_buffers - 2,
+					  sizeof(*extra_buffer_ids));
+		if (!extra_buffer_ids) {
+			perror("allocate capture buffer identifiers");
+			goto out_close;
+		}
+	}
 	for (uint32_t i = 2; i < query.max_registered_buffers; i++) {
-		uint32_t extra_buffer_id = 0;
-
 		ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 			first_buffer.fb_id,
 			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
-			first_stream.mode_generation, &extra_buffer_id);
-		if (ioctl_ret || !extra_buffer_id) {
+			first_stream.mode_generation, &extra_buffer_ids[i - 2]);
+		if (ioctl_ret || !extra_buffer_ids[i - 2]) {
 			errno = ioctl_ret ? -ioctl_ret : EPROTO;
 			perror("register buffer up to advertised limit");
 			goto out_close;
@@ -579,12 +594,50 @@ int main(int argc, char **argv)
 			goto out_close;
 		}
 	}
+	for (uint32_t i = 2; i < query.max_registered_buffers; i++) {
+		ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+						      extra_buffer_ids[i - 2]);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("unregister buffer-limit probe");
+			goto out_close;
+		}
+		extra_buffer_ids[i - 2] = 0;
+	}
+	free(extra_buffer_ids);
+	extra_buffer_ids = NULL;
 	printf("capture_buffer_limit=pass\n");
+
+	ioctl_ret = unregister_capture_buffer(competitor_fd,
+					      first_stream.stream_id,
+					      buffer_id);
+	if (ioctl_ret != -ENOENT) {
+		fprintf(stderr,
+			"foreign buffer unregister returned %d, expected %d\n",
+			ioctl_ret, -ENOENT);
+		goto out_close;
+	}
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("unregister implicit capture buffer");
+		goto out_close;
+	}
+	printf("capture_buffer_unregister=pass\n");
 
 	ioctl_ret = stop_capture(fd, first_stream.stream_id);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("stop first capture stream");
+		goto out_close;
+	}
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      second_buffer_id);
+	if (ioctl_ret != -ENOENT) {
+		fprintf(stderr,
+			"unregister after stream stop returned %d, expected %d\n",
+			ioctl_ret, -ENOENT);
 		goto out_close;
 	}
 	destroy_test_framebuffer(fd, &wrong_size_buffer);
@@ -617,6 +670,7 @@ int main(int argc, char **argv)
 	ret = EXIT_SUCCESS;
 
 out_close:
+	free(extra_buffer_ids);
 	if (competitor_fd >= 0)
 		close(competitor_fd);
 	destroy_test_framebuffer(fd, &wrong_size_buffer);

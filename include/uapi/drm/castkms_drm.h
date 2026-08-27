@@ -314,8 +314,8 @@ struct drm_castkms_capture_stop {
  * @mode_generation: generation returned when the stream was started
  *
  * The framebuffer must match the active CRTC mode and an advertised format.
- * Registration retains and maps it until its stream is stopped or the DRM
- * file is closed. Registration alone never writes it.
+ * Registration retains and maps it until it is unregistered, its stream is
+ * stopped, or the DRM file is closed. Registration alone never writes it.
  */
 struct drm_castkms_capture_register_buffer {
 	__u32 stream_id;
@@ -323,6 +323,20 @@ struct drm_castkms_capture_register_buffer {
 	__u32 flags;
 	__u32 buffer_id;
 	__u64 mode_generation;
+};
+
+/**
+ * struct drm_castkms_capture_unregister_buffer - release a capture buffer
+ * @stream_id: file-local capture stream identifier
+ * @buffer_id: stream-local capture buffer identifier
+ * @flags: must be zero
+ * @reserved: must be zero
+ */
+struct drm_castkms_capture_unregister_buffer {
+	__u32 stream_id;
+	__u32 buffer_id;
+	__u32 flags;
+	__u32 reserved;
 };
 
 /**
@@ -374,6 +388,7 @@ struct drm_event_castkms_grant_state {
 #define DRM_CASTKMS_CAPTURE_START	0x01
 #define DRM_CASTKMS_CAPTURE_STOP		0x02
 #define DRM_CASTKMS_CAPTURE_REGISTER_BUFFER	0x03
+#define DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER	0x04
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13
@@ -390,6 +405,9 @@ struct drm_event_castkms_grant_state {
 #define DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_REGISTER_BUFFER, \
 		 struct drm_castkms_capture_register_buffer)
+#define DRM_IOCTL_CASTKMS_CAPTURE_UNREGISTER_BUFFER \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER, \
+		struct drm_castkms_capture_unregister_buffer)
 #define DRM_IOCTL_CASTKMS_CREATE_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
 		 struct drm_castkms_create_grant)

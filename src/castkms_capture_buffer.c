@@ -258,13 +258,29 @@ err_destroy:
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_buffer_create);
 
-void castkms_capture_buffer_discard(struct castkms_capture_stream *stream,
-				    struct castkms_capture_buffer *buffer)
+int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
+				  struct castkms_capture_buffer *buffer)
 {
+	struct castkms_capture_output *capture = &stream->output->capture;
+	unsigned long flags;
+	bool busy;
+
 	if (WARN_ON(buffer->stream != stream))
-		return;
+		return -EINVAL;
+
+	spin_lock_irqsave(&stream->output->lock, flags);
+	spin_lock(&capture->state_lock);
+	busy = buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE;
+	spin_unlock(&capture->state_lock);
+	spin_unlock_irqrestore(&stream->output->lock, flags);
+
+	if (busy)
+		return -EBUSY;
 
 	list_del(&buffer->link);
 	stream->num_buffers--;
 	castkms_capture_buffer_destroy(buffer);
+
+	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_capture_buffer_remove);

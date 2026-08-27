@@ -55,6 +55,7 @@ static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_capture_start) == 24);
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 24);
+static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -402,11 +403,46 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 	goto out_put_fb;
 
 out_remove_buffer:
-	castkms_capture_buffer_discard(uapi_stream->stream, buffer);
+	castkms_capture_buffer_remove(uapi_stream->stream, buffer);
 out_put_fb:
 	drm_framebuffer_put(fb);
 out_unlock:
 	mutex_unlock(&file_state->capture_lock);
 	castkms_grant_end(authority);
+	return ret;
+}
+
+int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
+					    struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_unregister_buffer *args = data;
+	struct castkms_file *file_state = file_priv->driver_priv;
+	struct castkms_capture_uapi_stream *uapi_stream;
+	struct castkms_capture_buffer *buffer;
+	int ret;
+
+	(void)dev;
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	mutex_lock(&file_state->capture_lock);
+	uapi_stream = xa_load(&file_state->capture_streams, args->stream_id);
+	if (!uapi_stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	buffer = xa_load(&uapi_stream->buffers, args->buffer_id);
+	if (!buffer) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	ret = castkms_capture_buffer_remove(uapi_stream->stream, buffer);
+	if (!ret)
+		xa_erase(&uapi_stream->buffers, args->buffer_id);
+
+out_unlock:
+	mutex_unlock(&file_state->capture_lock);
 	return ret;
 }
