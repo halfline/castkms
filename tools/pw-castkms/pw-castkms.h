@@ -74,6 +74,7 @@ struct pw_castkms {
 	uint32_t stream_id;
 	uint64_t mode_generation;
 	bool capture_active;
+	bool restart_capture_on_buffer_add;
 	struct capture_buffer buffers[PW_CASTKMS_BUFFER_LIMIT];
 	uint32_t buffer_count;
 	uint64_t user_data_sequence;

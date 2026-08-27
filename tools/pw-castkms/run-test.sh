@@ -96,6 +96,30 @@ if ! grep -Fx 'pw_castkms_test=pass' \
 fi
 printf '%s\n' 'pw_castkms_frame_delivery=pass' | tee -a "$result_dir/summary.txt"
 
+# Disconnecting the first consumer removes PipeWire's destination pool.  The
+# source should remain published and rebuild its CastKMS stream for a second
+# consumer.
+sleep 0.25
+if ! kill -0 "$bridge_pid" 2>/dev/null; then
+	printf 'pw-castkms exited after its first consumer disconnected\n' >&2
+	cat "$result_dir/pw-castkms.log" >&2
+	exit 1
+fi
+"$script_dir/pw-castkms-test" -f 10 -t 10 \
+	| tee "$result_dir/pw-castkms-reconnect-test.txt"
+sleep 0.25
+if ! grep -Fx 'pw_castkms_test=pass' \
+		"$result_dir/pw-castkms-reconnect-test.txt" >/dev/null ||
+	! kill -0 "$bridge_pid" 2>/dev/null ||
+	grep -Eq 'ownership mismatch|could not restart capture' \
+		"$result_dir/pw-castkms.log"; then
+	printf 'pw-castkms buffer-pool reconnect test failed\n' >&2
+	cat "$result_dir/pw-castkms.log" >&2
+	exit 1
+fi
+printf '%s\n' 'pw_castkms_pool_reconnect=pass' | \
+	tee -a "$result_dir/summary.txt"
+
 kill "$bridge_pid"
 bridge_status=0
 wait "$bridge_pid" || bridge_status=$?

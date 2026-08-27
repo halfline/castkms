@@ -191,6 +191,23 @@ static void on_stream_add_buffer(void *data, struct pw_buffer *pipewire_buffer)
 				 -EPROTO);
 		return;
 	}
+	if (bridge->restart_capture_on_buffer_add) {
+		if (bridge->buffer_count) {
+			pw_castkms_fail(
+				bridge,
+				"PipeWire replaced only part of the capture pool",
+				-EPROTO);
+			return;
+		}
+		status = castkms_start_capture(bridge);
+		if (status) {
+			pw_castkms_fail(bridge,
+					"could not restart capture for PipeWire",
+					status);
+			return;
+		}
+		bridge->restart_capture_on_buffer_add = false;
+	}
 
 	status = castkms_create_destination(bridge, buffer);
 	if (status < 0) {
@@ -217,6 +234,23 @@ static void on_stream_remove_buffer(void *data,
 
 	if (!buffer)
 		return;
+
+	/*
+	 * PipeWire removes the complete pool when its last consumer pauses.
+	 * STOP synchronously cancels queued captures and invalidates every old
+	 * registration; a later add_buffer callback starts a fresh stream before
+	 * creating the replacement pool.
+	 */
+	if (bridge->capture_active && !bridge->shutting_down) {
+		status = castkms_stop_capture(bridge);
+		if (status) {
+			pw_castkms_fail(
+				bridge, "could not stop capture for PipeWire",
+				status);
+			return;
+		}
+		bridge->restart_capture_on_buffer_add = true;
+	}
 
 	index = (uint32_t)(buffer - bridge->buffers);
 	status = castkms_destroy_destination(bridge, buffer);

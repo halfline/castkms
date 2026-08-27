@@ -24,6 +24,9 @@ static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
 		      "capture-event ABI size changed");
 
+static int drain_stopped_stream_events(struct pw_castkms *bridge,
+				       uint32_t stream_id);
+
 /* ---- Device validation ------------------------------------------------- */
 
 static int check_castkms_driver(int fd)
@@ -521,6 +524,8 @@ int castkms_stop_capture(struct pw_castkms *bridge)
 		bridge->buffers[i].user_data = 0;
 	}
 
+	if (!status)
+		status = drain_stopped_stream_events(bridge, stopped_stream_id);
 	return status;
 }
 
@@ -706,6 +711,21 @@ static int dispatch_event_batch(struct pw_castkms *bridge, int fd,
 	}
 
 	return 0;
+}
+
+static int drain_stopped_stream_events(struct pw_castkms *bridge,
+				       uint32_t stream_id)
+{
+	for (;;) {
+		bool ignored;
+		int status = dispatch_event_batch(
+			bridge, bridge->drm_fd, stream_id, &ignored);
+
+		if (status == -EAGAIN)
+			return 0;
+		if (status)
+			return status;
+	}
 }
 
 void castkms_on_fd_ready(void *data, int fd, uint32_t mask)
