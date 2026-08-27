@@ -123,10 +123,11 @@ product work.
 The product work is selectable:
 
 ```sh
-CASTKMS_VM_SCENARIO=configfs ./scripts/vm/castkms-vm test
+CASTKMS_VM_SCENARIO=capture ./scripts/vm/castkms-vm test
 ```
 
-The available scenario is `configfs`. The default `all` runs it.
+The available scenarios are `configfs` and `capture`. The default `all` runs
+them in that order.
 
 The guest harness keeps lifecycle setup and the single failure-safe cleanup
 trap in `guest-smoke-test.sh`. Its product scenarios live in
@@ -141,6 +142,18 @@ device through configfs. It also confirms that removing a topology disables
 and unplugs the device before its configuration is detached, even when ioctl
 and debugfs calls fail on file descriptors left open across the removal.
 
+**capture** creates a default card with a color pipeline, writeback, and frame
+checksums. It consumes a `0.9` grant fd, checks that an ordinary card fd
+remains unauthorized, and exercises monitor attach, EDID, implicit and
+explicit buffer synchronization, DMA-BUF fence reuse, completion metadata,
+composed pixels, a vsynced `800x600` page-flip that advances the capture
+mode generation, writeback overlapping an in-flight capture, and the
+standalone CEC session test through a full-rights grant.
+
+Device-backed capture, grant, grant-launcher, and CEC clients share the small
+`castkms-test-drm` harness for driver identification, dumb framebuffers, and
+capture stream/buffer protocol operations. Scenario runners keep only their
+test-specific policy and sequencing.
 
 ## Graphical testing
 
