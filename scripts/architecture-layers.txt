@@ -18,10 +18,14 @@ capture-core src/castkms_capture.c
 capture-core src/castkms_capture.h
 capture-core src/castkms_capture_output.h
 
+capture-uapi src/castkms_capture_uapi.c
+capture-uapi src/castkms_capture_uapi.h
+
 config src/castkms_config.c
 config src/castkms_config.h
 config src/castkms_configfs.c
 config src/castkms_configfs.h
+config src/castkms_limits.h
 
 drm-runtime src/castkms_connector.c
 drm-runtime src/castkms_connector.h

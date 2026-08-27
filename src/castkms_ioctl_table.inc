@@ -7,6 +7,8 @@
  * security-sensitive grant-file allowlist. Keep policy in the third column:
  * ALLOWED or DENIED. The includer must define CASTKMS_PRIVATE_IOCTL().
  */
+CASTKMS_PRIVATE_IOCTL(CASTKMS_CAPTURE_QUERY_CAPS,
+			     castkms_capture_query_caps_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_CREATE_GRANT,
 			     castkms_grant_create_ioctl, DENIED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_REVOKE_GRANT,

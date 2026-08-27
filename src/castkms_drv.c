@@ -37,6 +37,7 @@
 
 #include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
+#include "castkms_capture_uapi.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_crc.h"

@@ -16,24 +16,24 @@
 #include <drm/drm_writeback.h>
 
 #include "castkms_capture_owner.h"
+#include "castkms_limits.h"
 #include "castkms_frame.h"
 #include "castkms_crtc.h"
 #include "castkms_output.h"
 #include "castkms_plane.h"
 
-#define DEFAULT_DEVICE_NAME "castkms"
+#define DEFAULT_DEVICE_NAME CASTKMS_DEFAULT_DEVICE_NAME
 
-#define XRES_MIN    10
-#define YRES_MIN    10
+#define XRES_MIN CASTKMS_MIN_WIDTH
+#define YRES_MIN CASTKMS_MIN_HEIGHT
 
-#define XRES_DEF  1024
-#define YRES_DEF   768
+#define XRES_DEF CASTKMS_DEFAULT_WIDTH
+#define YRES_DEF CASTKMS_DEFAULT_HEIGHT
 
-#define XRES_MAX  8192
-#define YRES_MAX  8192
+#define XRES_MAX CASTKMS_MAX_WIDTH
+#define YRES_MAX CASTKMS_MAX_HEIGHT
 
-#define NUM_OVERLAY_PLANES 8
-#define CASTKMS_MAX_OUTPUT_OBJECTS 31
+#define NUM_OVERLAY_PLANES CASTKMS_NUM_OVERLAY_PLANES
 
 struct castkms_config;
 struct castkms_config_plane;

@@ -31,6 +31,10 @@ reject 'grant adapter reaches into capture UAPI teardown' \
 	'castkms_capture_uapi|stop_authority_stream' \
 	src/castkms_grant.c src/castkms_grant.h
 
+reject 'kernel limits import the public UAPI' \
+	'castkms_drm\.h|DRM_CASTKMS_' \
+	src/castkms_limits.h
+
 reject 'pixel composer coordinates mutable frame consumers' \
 	'castkms_capture|castkms_capture_owner|castkms_crtc|castkms_frame_dispatch|drm_writeback|drm_crtc_add_crc' \
 	src/castkms_composer.c src/castkms_composer.h

@@ -11,6 +11,7 @@ castkms-y := \
 	src/castkms_capture_owner.o \
 	src/castkms_grant.o \
 	src/castkms_grant_file.o \
+	src/castkms_capture_uapi.o \
 	src/castkms_plane.o \
 	src/castkms_output.o \
 	src/castkms_output_buffer.o \
