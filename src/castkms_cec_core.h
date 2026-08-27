@@ -52,6 +52,9 @@ int castkms_cec_core_bind(struct castkms_cec_output *output,
 int castkms_cec_core_unbind(struct castkms_cec_output *output,
 			    struct castkms_capture_authority *authority,
 			    u64 transport_generation);
+int castkms_cec_core_set_online(struct castkms_cec_output *output,
+				struct castkms_capture_authority *authority,
+				u64 transport_generation, bool online);
 int castkms_cec_core_get_state(struct castkms_cec_output *output,
 			       struct castkms_capture_authority *authority,
 			       struct castkms_cec_state *state);

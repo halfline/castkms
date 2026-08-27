@@ -14,5 +14,7 @@ int castkms_cec_bind_transport_ioctl(struct drm_device *dev, void *data,
 				     struct drm_file *file_priv);
 int castkms_cec_unbind_transport_ioctl(struct drm_device *dev, void *data,
 				       struct drm_file *file_priv);
+int castkms_cec_set_transport_state_ioctl(struct drm_device *dev, void *data,
+					  struct drm_file *file_priv);
 #endif /* CASTKMS_HAVE_CEC */
 #endif /* _CASTKMS_CEC_UAPI_H_ */

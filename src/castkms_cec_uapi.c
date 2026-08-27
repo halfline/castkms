@@ -30,6 +30,7 @@ static_assert(sizeof(struct drm_castkms_cec_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_cec_bind_transport) == 48);
 static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44);
 static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16);
+static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16);
 
 static struct castkms_cec_output *
 cec_uapi_lookup(struct drm_device *dev, struct drm_file *file_priv,
@@ -146,7 +147,8 @@ int castkms_cec_query_caps_ioctl(struct drm_device *dev, void *data,
 
 	args->uapi_major = DRM_CASTKMS_CEC_UAPI_MAJOR;
 	args->uapi_minor = DRM_CASTKMS_CEC_UAPI_MINOR;
-	args->capabilities = DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR;
+	args->capabilities = DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE |
+			     DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR;
 	args->max_msg_size = CASTKMS_CEC_MAX_MSG_SIZE;
 	args->output_index = connector->output_index;
 	args->has_adapter = connector->cec ? 1 : 0;
@@ -242,6 +244,43 @@ int castkms_cec_unbind_transport_ioctl(struct drm_device *dev, void *data,
 	if (!ret)
 		ret = castkms_cec_core_unbind(output, authority,
 					      state.transport_generation);
+
+	castkms_grant_end(authority);
+	drm_connector_put(connector);
+out_dev:
+	drm_dev_exit(idx);
+	return ret;
+}
+
+int castkms_cec_set_transport_state_ioctl(struct drm_device *dev, void *data,
+					  struct drm_file *file_priv)
+{
+	struct drm_castkms_cec_set_transport_state *args = data;
+	struct castkms_capture_authority *authority;
+	struct castkms_cec_state state;
+	struct castkms_cec_output *output;
+	struct drm_connector *connector;
+	int idx;
+	int ret;
+
+	if (args->flags & ~DRM_CASTKMS_CEC_TRANSPORT_ONLINE || args->reserved)
+		return -EINVAL;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
+	output = cec_uapi_lookup_granted(dev, file_priv, args->connector_id,
+					 &connector, &authority);
+	if (IS_ERR(output)) {
+		ret = PTR_ERR(output);
+		goto out_dev;
+	}
+	ret = castkms_cec_uapi_get_transport(output, authority,
+					     args->transport_id, &state);
+	if (!ret)
+		ret = castkms_cec_core_set_online(output, authority,
+						  state.transport_generation,
+						  args->flags &
+						  DRM_CASTKMS_CEC_TRANSPORT_ONLINE);
 
 	castkms_grant_end(authority);
 	drm_connector_put(connector);

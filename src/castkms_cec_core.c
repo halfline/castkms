@@ -302,6 +302,36 @@ int castkms_cec_core_unbind(struct castkms_cec_output *output,
 	return 0;
 }
 
+int castkms_cec_core_set_online(struct castkms_cec_output *output,
+				struct castkms_capture_authority *authority,
+				u64 transport_generation, bool online)
+{
+	struct castkms_cec_transport *transport;
+	unsigned long flags;
+
+	if (!output)
+		return -ENOENT;
+
+	spin_lock_irqsave(&output->lock, flags);
+	transport = output->transport;
+	if (!transport || transport->authority != authority) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		return -EACCES;
+	}
+	if (transport->generation != transport_generation) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		return -ESTALE;
+	}
+
+	if (online != output->transport_online) {
+		output->transport_online = online;
+		output->state_generation++;
+	}
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	return 0;
+}
+
 int castkms_cec_core_get_state(struct castkms_cec_output *output,
 			       struct castkms_capture_authority *authority,
 			       struct castkms_cec_state *state)

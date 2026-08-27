@@ -43,4 +43,6 @@ CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_BIND_TRANSPORT,
 			     castkms_cec_bind_transport_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_UNBIND_TRANSPORT,
 			     castkms_cec_unbind_transport_ioctl, ALLOWED)
+CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_SET_TRANSPORT_STATE,
+			     castkms_cec_set_transport_state_ioctl, ALLOWED)
 #endif

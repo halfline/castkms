@@ -775,6 +775,9 @@ struct drm_castkms_capture_read_cursor_bitmap {
 #define DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE	(1ULL << 3)
 #define DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR	(1ULL << 4)
 
+/* Transport state flags for CEC_SET_TRANSPORT_STATE */
+#define DRM_CASTKMS_CEC_TRANSPORT_ONLINE	(1U << 0)
+
 /* State flags for bind response and get-state */
 #define DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE	(1U << 0)
 #define DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED	(1U << 1)
@@ -846,6 +849,21 @@ struct drm_castkms_cec_unbind_transport {
 	__u32 reserved;
 };
 
+/**
+ * struct drm_castkms_cec_set_transport_state - set online/offline state
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @flags: DRM_CASTKMS_CEC_TRANSPORT_ONLINE or 0 for offline
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_set_transport_state {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u32 flags;
+	__u32 reserved;
+};
+
+
 /* CEC DRM event types */
 #define DRM_CASTKMS_CEC_EVENT_STATE	0x80000002U
 
@@ -853,6 +871,7 @@ struct drm_castkms_cec_unbind_transport {
 #define DRM_CASTKMS_CEC_QUERY_CAPS		0x0a
 #define DRM_CASTKMS_CEC_BIND_TRANSPORT		0x0b
 #define DRM_CASTKMS_CEC_UNBIND_TRANSPORT	0x0c
+#define DRM_CASTKMS_CEC_SET_TRANSPORT_STATE	0x0d
 
 #define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
@@ -863,6 +882,9 @@ struct drm_castkms_cec_unbind_transport {
 #define DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_UNBIND_TRANSPORT, \
 		struct drm_castkms_cec_unbind_transport)
+#define DRM_IOCTL_CASTKMS_CEC_SET_TRANSPORT_STATE \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_SET_TRANSPORT_STATE, \
+		struct drm_castkms_cec_set_transport_state)
 #if defined(__cplusplus)
 }
 #endif

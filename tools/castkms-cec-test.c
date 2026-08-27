@@ -27,6 +27,8 @@ static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44,
 	      "cec bind transport ABI layout changed");
 static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16,
 	      "cec unbind transport ABI size changed");
+static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16,
+	      "cec set transport state ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get grant ABI size changed");
 
@@ -167,6 +169,21 @@ static int cec_unbind(int fd, uint32_t connector_id, uint32_t transport_id)
 	return 0;
 }
 
+static int cec_set_online(int fd, uint32_t connector_id, uint32_t transport_id,
+			  bool online)
+{
+	struct drm_castkms_cec_set_transport_state args = {
+		.connector_id = connector_id,
+		.transport_id = transport_id,
+		.flags = online ? DRM_CASTKMS_CEC_TRANSPORT_ONLINE : 0,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CEC_SET_TRANSPORT_STATE, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
 /* --- Tests --- */
 
 static void test_query_caps(int fd, uint32_t connector_id)
@@ -202,7 +219,8 @@ static void test_query_caps(int fd, uint32_t connector_id)
 	}
 	PASS("query_caps_msg_size");
 
-	uint64_t expected_caps = DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR;
+	uint64_t expected_caps = DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE |
+				 DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR;
 	if (caps.capabilities != expected_caps) {
 		FAIL("query_caps_capabilities",
 		     "got 0x%llx, expected 0x%llx",
@@ -340,6 +358,38 @@ static void test_unbind_wrong_owner(int fd, uint32_t connector_id)
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
 
+static void test_set_transport_online(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("set_online", "bind failed: %s", strerror(-ret));
+		return;
+	}
+
+	ret = cec_set_online(fd, connector_id, bind.transport_id, true);
+	if (ret) {
+		FAIL("set_online", "ioctl failed: %s", strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	PASS("set_online");
+
+	ret = cec_set_online(fd, connector_id, bind.transport_id, false);
+	if (ret) {
+		FAIL("set_offline", "ioctl failed: %s", strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	PASS("set_offline");
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
 static void usage(const char *program)
 {
 	fprintf(stderr, "usage: %s [--grant-fd FD]\n", program);
@@ -394,6 +444,7 @@ int main(int argc, char **argv)
 	test_bind_unbind(fd, connector_id);
 	test_double_bind(fd, connector_id);
 	test_unbind_wrong_owner(fd, connector_id);
+	test_set_transport_online(fd, connector_id);
 	detach_monitor(fd, connector_id);
 
 	printf("\n%d/%d tests passed\n", tests_pass, tests_run);
