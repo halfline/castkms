@@ -657,6 +657,44 @@ static void test_set_transport_online(int fd, uint32_t connector_id)
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
 
+static void test_get_state_monitor_flag(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	struct drm_castkms_cec_get_state state;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("get_state_monitor", "bind failed: %s", strerror(-ret));
+		return;
+	}
+
+	if (!(bind.state_flags & DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED)) {
+		FAIL("get_state_monitor_attached",
+		     "monitor should be attached");
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+	PASS("get_state_monitor_attached");
+
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state);
+	if (ret) {
+		FAIL("get_state_monitor_flag", "get_state failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	if (!(state.state_flags & DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED)) {
+		FAIL("get_state_monitor_flag",
+		     "monitor not flagged in state");
+	} else {
+		PASS("get_state_monitor_flag");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
 static void test_get_state_stats(int fd, uint32_t connector_id)
 {
 	struct drm_castkms_cec_bind_transport bind;
@@ -683,6 +721,37 @@ static void test_get_state_stats(int fd, uint32_t connector_id)
 		     "expected zero stats after fresh bind");
 	} else {
 		PASS("get_state_stats_zero");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
+static void test_get_state_phys_addr(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	struct drm_castkms_cec_get_state state;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("get_state_phys_addr", "bind failed: %s", strerror(-ret));
+		return;
+	}
+
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state);
+	if (ret) {
+		FAIL("get_state_phys_addr", "get_state failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	/* EDID was set with PA 1.0.0.0 = 0x1000 */
+	if (state.phys_addr != 0x1000) {
+		FAIL("get_state_phys_addr",
+		     "expected 0x1000, got 0x%04x", state.phys_addr);
+	} else {
+		PASS("get_state_phys_addr");
 	}
 
 	cec_unbind(fd, connector_id, bind.transport_id);
@@ -1160,7 +1229,9 @@ int main(int argc, char **argv)
 	test_double_bind(fd, connector_id);
 	test_unbind_wrong_owner(fd, connector_id);
 	test_set_transport_online(fd, connector_id);
+	test_get_state_monitor_flag(fd, connector_id);
 	test_get_state_stats(fd, connector_id);
+	test_get_state_phys_addr(fd, connector_id);
 	test_state_generation_advances(fd, connector_id);
 	test_receive_inject(fd, connector_id);
 	test_receive_offline_reject(fd, connector_id);

@@ -1054,12 +1054,20 @@ static int expect_foreign_connector_denied(int grant_fd,
 
 static int test_attachment_lifecycle(int grant_fd, uint32_t connector_id)
 {
+	struct drm_castkms_cec_bind_transport bind = {
+		.connector_id = connector_id,
+	};
+	struct drm_castkms_cec_query_caps caps = {
+		.connector_id = connector_id,
+	};
 	struct drm_castkms_capture_attach_monitor attach = {
 		.connector_id = connector_id,
 	};
 	struct drm_castkms_capture_detach_monitor detach = {
 		.connector_id = connector_id,
 	};
+	bool cec_bound = false;
+	int cec_query_ret;
 
 	if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
 		  &attach) < 0) {
@@ -1067,10 +1075,93 @@ static int test_attachment_lifecycle(int grant_fd, uint32_t connector_id)
 		return -1;
 	}
 
+	cec_query_ret = ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS, &caps);
+	if (cec_query_ret < 0 && errno != ENOTTY) {
+		perror("grant holder CEC_QUERY_CAPS");
+		ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR,
+		      &detach);
+		return -1;
+	}
+	if (!cec_query_ret && caps.has_adapter) {
+		struct drm_castkms_cec_set_transport_state online;
+
+		if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_BIND_TRANSPORT,
+			  &bind) < 0) {
+			perror("grant holder CEC_BIND_TRANSPORT");
+			ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR,
+			      &detach);
+			return -1;
+		}
+		cec_bound = true;
+		online = (struct drm_castkms_cec_set_transport_state) {
+			.connector_id = connector_id,
+			.transport_id = bind.transport_id,
+			.flags = DRM_CASTKMS_CEC_TRANSPORT_ONLINE,
+		};
+		if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_SET_TRANSPORT_STATE,
+			  &online) < 0) {
+			struct drm_castkms_cec_unbind_transport unbind = {
+				.connector_id = connector_id,
+				.transport_id = bind.transport_id,
+			};
+
+			perror("grant holder CEC_SET_TRANSPORT_STATE");
+			ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT,
+			      &unbind);
+			ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR,
+			      &detach);
+			return -1;
+		}
+	}
+
 	if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR,
 		  &detach) < 0) {
 		perror("grant holder DETACH_MONITOR");
+		if (cec_bound) {
+			struct drm_castkms_cec_unbind_transport unbind = {
+				.connector_id = connector_id,
+				.transport_id = bind.transport_id,
+			};
+
+			ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT,
+			      &unbind);
+		}
 		return -1;
+	}
+
+	if (cec_bound) {
+		struct drm_castkms_cec_get_state state = {
+			.connector_id = connector_id,
+			.transport_id = bind.transport_id,
+		};
+		struct drm_castkms_cec_unbind_transport unbind = {
+			.connector_id = connector_id,
+			.transport_id = bind.transport_id,
+		};
+
+		if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_GET_STATE, &state) < 0) {
+			perror("grant holder CEC_GET_STATE after detach");
+			ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT,
+			      &unbind);
+			return -1;
+		}
+		if (!(state.state_flags &
+		      DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE) ||
+		    (state.state_flags &
+		     DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED)) {
+			fprintf(stderr,
+				"CEC detach returned unexpected state flags %#x\n",
+				state.state_flags);
+			ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT,
+			      &unbind);
+			return -1;
+		}
+		if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CEC_UNBIND_TRANSPORT,
+			  &unbind) < 0) {
+			perror("grant holder CEC_UNBIND_TRANSPORT");
+			return -1;
+		}
+		printf("grant_cec_detach=pass\n");
 	}
 
 	return 0;

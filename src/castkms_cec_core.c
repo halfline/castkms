@@ -188,6 +188,7 @@ static void castkms_cec_core_finish_cleanup(struct castkms_cec_output *output,
 	cancel_delayed_work_sync(&output->tx_timeout_work);
 	if (aborted)
 		castkms_cec_core_tx_aborted(output);
+	castkms_cec_core_refresh_connector(&output->connector->base);
 	if (release) {
 		transport->ops->release(transport->data);
 		kfree(transport);
@@ -378,6 +379,34 @@ static void castkms_cec_copy_state(struct castkms_cec_output *output,
 	state->monitor_attached =
 		READ_ONCE(output->connector->monitor_attached);
 	state->adapter_enabled = output->adapter_enabled;
+}
+
+void castkms_cec_core_refresh_connector(struct drm_connector *connector)
+{
+	struct castkms_cec_output *output = connector_to_cec(connector);
+	bool should_be_valid;
+	unsigned long flags;
+
+	if (!output)
+		return;
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (output->test_ops)
+		return;
+#endif
+
+	spin_lock_irqsave(&output->lock, flags);
+	should_be_valid = READ_ONCE(output->connector->monitor_attached) &&
+			  output->transport &&
+			  castkms_capture_authority_is_active(output->transport->authority) &&
+			  output->transport_online &&
+			  connector->display_info.source_physical_address !=
+			  CEC_PHYS_ADDR_INVALID;
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	if (should_be_valid)
+		drm_connector_cec_phys_addr_set(connector);
+	else
+		drm_connector_cec_phys_addr_invalidate(connector);
 }
 
 int castkms_cec_core_connector_init(struct castkms_connector *connector)
@@ -635,6 +664,8 @@ int castkms_cec_core_set_online(struct castkms_cec_output *output,
 
 	if (changed && !online)
 		castkms_cec_core_finish_cleanup(output, transport, aborted, false);
+	else if (changed)
+		castkms_cec_core_refresh_connector(&output->connector->base);
 	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_set_online);
@@ -793,6 +824,7 @@ void castkms_cec_core_suspend_connector(struct drm_connector *connector)
 	transport = output->transport;
 	if (!transport) {
 		spin_unlock_irqrestore(&output->lock, flags);
+		castkms_cec_core_refresh_connector(connector);
 		return;
 	}
 	aborted = cec_abort_pending_transmission(output);

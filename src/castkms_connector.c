@@ -249,8 +249,10 @@ int castkms_connector_attach_monitor(
 			connector, connector_status_disconnected);
 	}
 
-	if (!ret)
+	if (!ret) {
 		castkms_audio_notify_eld(castkmsdev, connector);
+		castkms_cec_core_refresh_connector(connector);
+	}
 	return ret;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_connector_attach_monitor);
@@ -352,8 +354,10 @@ int castkms_connector_update_authority_edid(
 		return ret;
 
 	ret = castkms_connector_publish_edid(connector, drm_edid);
-	if (!ret)
+	if (!ret) {
 		castkms_audio_notify_eld(castkmsdev, connector);
+		castkms_cec_core_refresh_connector(connector);
+	}
 
 	return ret;
 }

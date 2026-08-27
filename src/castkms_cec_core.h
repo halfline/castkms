@@ -101,6 +101,7 @@ struct castkms_cec_state {
 
 int castkms_cec_core_init(struct drm_device *dev);
 int castkms_cec_core_connector_init(struct castkms_connector *connector);
+void castkms_cec_core_refresh_connector(struct drm_connector *connector);
 void castkms_cec_core_suspend_connector(struct drm_connector *connector);
 
 int castkms_cec_core_bind(struct castkms_cec_output *output,
