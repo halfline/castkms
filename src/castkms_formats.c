@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/kernel.h>
+#include <linux/iosys-map.h>
 #include <linux/limits.h>
 #include <linux/minmax.h>
 #include <linux/slab.h>
 #include <linux/unaligned.h>
 
 #include <drm/drm_blend.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_rect.h>
 #include <drm/drm_fixed.h>
 

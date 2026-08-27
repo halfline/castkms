@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include "castkms_config.h"
-#include "castkms_connector.h"
-#include "castkms_drv.h"
-#include "castkms_topology.h"
-#include "castkms_writeback.h"
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
+
+#include "castkms_config.h"
+#include "castkms_connector.h"
+#include "castkms_crtc.h"
+#include "castkms_device.h"
+#include "castkms_output.h"
+#include "castkms_plane.h"
+#include "castkms_topology.h"
+#include "castkms_writeback.h"
 
 int castkms_topology_init(struct castkms_device *castkmsdev)
 {

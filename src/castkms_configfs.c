@@ -4,10 +4,11 @@
 #include <linux/mutex.h>
 #include <linux/slab.h>
 
-#include "castkms_drv.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_connector.h"
+#include "castkms_device.h"
+#include "castkms_limits.h"
 
 /* To avoid registering configfs more than once or unregistering on error */
 static bool is_configfs_registered;
@@ -792,7 +793,7 @@ static struct config_group *make_device_group(struct config_group *group,
 	struct castkms_configfs_device *dev;
 	int ret;
 
-	if (strcmp(name, DEFAULT_DEVICE_NAME) == 0)
+	if (strcmp(name, CASTKMS_DEFAULT_DEVICE_NAME) == 0)
 		return ERR_PTR(-EINVAL);
 
 	dev = kzalloc_obj(*dev);

@@ -3,6 +3,7 @@
 #include <kunit/test.h>
 
 #include "../castkms_config.h"
+#include "../castkms_limits.h"
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 

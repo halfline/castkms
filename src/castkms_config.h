@@ -8,8 +8,13 @@
 #include <linux/xarray.h>
 
 #include <drm/drm_connector.h>
+#include <drm/drm_plane.h>
 
-#include "castkms_drv.h"
+struct castkms_connector;
+struct castkms_device;
+struct castkms_output;
+struct castkms_plane;
+struct drm_encoder;
 
 /**
  * struct castkms_config - General configuration for CASTKMS driver

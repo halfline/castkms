@@ -17,7 +17,7 @@
 #include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
 #include "castkms_connector.h"
-#include "castkms_drv.h"
+#include "castkms_device.h"
 #include "castkms_output.h"
 
 /**

@@ -11,6 +11,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/device/faux.h>
 #include <linux/dma-mapping.h>
 
@@ -19,6 +20,7 @@
 #include <drm/drm_gem.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_connector.h>
 #include <drm/drm_colorop.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_fbdev_shmem.h>
@@ -30,6 +32,7 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_vblank.h>
+#include <drm/drm_writeback.h>
 
 #include <drm/castkms_drm.h>
 
@@ -45,11 +48,13 @@
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_crc.h"
-#include "castkms_drv.h"
+#include "castkms_crtc.h"
+#include "castkms_device.h"
 #include "castkms_file.h"
 #include "castkms_framebuffer.h"
 #include "castkms_grant.h"
 #include "castkms_ioctl_policy.h"
+#include "castkms_limits.h"
 #include "castkms_topology.h"
 #include "castkms_uapi_device.h"
 
@@ -361,13 +366,13 @@ static int castkms_modeset_init(struct castkms_device *castkmsdev)
 		return ret;
 
 	dev->mode_config.funcs = &castkms_mode_funcs;
-	dev->mode_config.min_width = XRES_MIN;
-	dev->mode_config.min_height = YRES_MIN;
-	dev->mode_config.max_width = XRES_MAX;
-	dev->mode_config.max_height = YRES_MAX;
+	dev->mode_config.min_width = CASTKMS_MIN_WIDTH;
+	dev->mode_config.min_height = CASTKMS_MIN_HEIGHT;
+	dev->mode_config.max_width = CASTKMS_MAX_WIDTH;
+	dev->mode_config.max_height = CASTKMS_MAX_HEIGHT;
 	dev->mode_config.normalize_zpos = true;
-	dev->mode_config.cursor_width = 512;
-	dev->mode_config.cursor_height = 512;
+	dev->mode_config.cursor_width = CASTKMS_MAX_CURSOR_WIDTH;
+	dev->mode_config.cursor_height = CASTKMS_MAX_CURSOR_HEIGHT;
 	/*
 	 * FIXME: There's a confusion between bpp and depth between this and
 	 * fbdev helpers. We have to go with 0, meaning "pick the default",

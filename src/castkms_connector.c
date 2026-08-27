@@ -3,7 +3,9 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_encoder.h>
 #include <drm/drm_managed.h>
+#include <drm/drm_modes.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_property.h>
 #include <drm/drm_sysfs.h>
@@ -15,6 +17,8 @@
 #include "castkms_cec_core.h"
 #include "castkms_config.h"
 #include "castkms_connector.h"
+#include "castkms_device.h"
+#include "castkms_limits.h"
 
 static enum drm_connector_status castkms_connector_detect(struct drm_connector *connector,
 						       bool force)
@@ -70,8 +74,8 @@ static int castkms_conn_get_modes(struct drm_connector *connector)
 
 	count = drm_edid_connector_add_modes(connector);
 	if (!count) {
-		count = drm_add_modes_noedid(connector, XRES_MAX, YRES_MAX);
-		drm_set_preferred_mode(connector, XRES_DEF, YRES_DEF);
+		count = drm_add_modes_noedid(connector, CASTKMS_MAX_WIDTH, CASTKMS_MAX_HEIGHT);
+		drm_set_preferred_mode(connector, CASTKMS_DEFAULT_WIDTH, CASTKMS_DEFAULT_HEIGHT);
 	}
 
 	return count;

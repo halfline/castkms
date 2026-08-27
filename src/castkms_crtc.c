@@ -24,7 +24,7 @@
 #include "castkms_capture.h"
 #include "castkms_capture_owner.h"
 #include "castkms_crtc.h"
-#include "castkms_drv.h"
+#include "castkms_output.h"
 #include "castkms_frame_dispatch.h"
 #include "castkms_framebuffer.h"
 #include "castkms_plane.h"

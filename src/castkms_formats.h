@@ -3,7 +3,9 @@
 #ifndef _CASTKMS_FORMATS_H_
 #define _CASTKMS_FORMATS_H_
 
-#include "castkms_drv.h"
+#include <drm/drm_color_mgmt.h>
+
+#include "castkms_frame.h"
 
 int castkms_plane_formats_alloc(u32 **formats);
 

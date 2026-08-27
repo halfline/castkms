@@ -8,6 +8,8 @@
 #include <kunit/visibility.h>
 
 #include "castkms_config.h"
+#include "castkms_device.h"
+#include "castkms_limits.h"
 
 struct castkms_config *castkms_config_create(const char *dev_name)
 {
@@ -41,7 +43,7 @@ unsigned int castkms_config_default_max_outputs(bool enable_cursor,
 	unsigned int planes_per_output = enable_cursor ? 2 : 1;
 
 	if (enable_overlay)
-		plane_budget -= NUM_OVERLAY_PLANES;
+		plane_budget -= CASTKMS_NUM_OVERLAY_PLANES;
 	max_outputs = min(max_outputs, plane_budget / planes_per_output);
 	if (enable_writeback)
 		max_outputs = min(max_outputs,
@@ -71,7 +73,7 @@ struct castkms_config *castkms_config_default_create_outputs(bool enable_cursor,
 							 enable_overlay))
 		return ERR_PTR(-EINVAL);
 
-	config = castkms_config_create(DEFAULT_DEVICE_NAME);
+	config = castkms_config_create(CASTKMS_DEFAULT_DEVICE_NAME);
 	if (IS_ERR(config))
 		return config;
 
@@ -137,7 +139,7 @@ struct castkms_config *castkms_config_default_create_outputs(bool enable_cursor,
 	}
 
 	if (enable_overlay) {
-		for (n = 0; n < NUM_OVERLAY_PLANES; n++) {
+		for (n = 0; n < CASTKMS_NUM_OVERLAY_PLANES; n++) {
 			plane_cfg = castkms_config_create_plane(config);
 			if (IS_ERR(plane_cfg)) {
 				ret = PTR_ERR(plane_cfg);

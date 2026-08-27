@@ -3,10 +3,13 @@
 #ifndef _CASTKMS_CONNECTOR_H_
 #define _CASTKMS_CONNECTOR_H_
 
-#include "castkms_drv.h"
+#include <linux/container_of.h>
+
+#include <drm/drm_connector.h>
 
 struct castkms_capture_authority;
 struct castkms_cec_output;
+struct castkms_device;
 struct drm_edid;
 
 #define drm_connector_to_castkms_connector(target) \

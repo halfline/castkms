@@ -23,7 +23,7 @@
 #include "castkms_audio.h"
 #include "castkms_config.h"
 #include "castkms_connector.h"
-#include "castkms_drv.h"
+#include "castkms_device.h"
 
 struct castkms_audio_runtime {
 	struct castkms_audio_output *output;

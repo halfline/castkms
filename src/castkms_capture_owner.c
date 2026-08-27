@@ -11,7 +11,7 @@
 
 #include "castkms_capture_owner.h"
 #include "castkms_crtc.h"
-#include "castkms_drv.h"
+#include "castkms_device.h"
 #include "castkms_output.h"
 
 bool castkms_capture_owner_is_current(

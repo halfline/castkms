@@ -14,7 +14,7 @@
 #include "castkms_capture_authority.h"
 #include "castkms_connector.h"
 #include "castkms_connector_uapi.h"
-#include "castkms_drv.h"
+#include "castkms_device.h"
 #include "castkms_grant.h"
 #include "castkms_limits.h"
 

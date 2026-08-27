@@ -16,7 +16,7 @@
 #include "../castkms_cec_core.h"
 #include "../castkms_config.h"
 #include "../castkms_connector.h"
-#include "../castkms_drv.h"
+#include "../castkms_device.h"
 #include "../castkms_output.h"
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");

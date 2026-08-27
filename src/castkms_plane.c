@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include "castkms_config.h"
 #include <linux/iosys-map.h>
 
 #include <drm/drm_atomic.h>
@@ -8,12 +7,17 @@
 #include <drm/drm_blend.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_gem_atomic_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
 
-#include "castkms_drv.h"
+#include "castkms_colorop.h"
+#include "castkms_config.h"
+#include "castkms_device.h"
 #include "castkms_formats.h"
+#include "castkms_limits.h"
+#include "castkms_plane.h"
 
 static struct castkms_plane_state *castkms_plane_state_alloc(void)
 {

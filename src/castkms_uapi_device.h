@@ -5,7 +5,7 @@
 
 #include <linux/container_of.h>
 
-#include "castkms_drv.h"
+#include "castkms_device.h"
 
 struct castkms_grant_registry;
 

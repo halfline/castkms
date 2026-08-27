@@ -25,7 +25,7 @@
 #include "../castkms_capture_owner.h"
 #include "../castkms_config.h"
 #include "../castkms_connector.h"
-#include "../castkms_drv.h"
+#include "../castkms_device.h"
 #include "../castkms_frame_dispatch.h"
 #include "../castkms_output.h"
 
