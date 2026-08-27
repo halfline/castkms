@@ -70,6 +70,12 @@ policy controls who may consume the published node. See the
 [`pw-castkms` reading guide](tools/pw-castkms/README.md) for the protocol
 and buffer-lifetime walkthrough.
 
+## HDMI audio
+
+When the kernel provides ALSA support, each CastKMS output has a playback-only
+virtual HDMI PCM endpoint. Its presentation clock supports pause, resume, and
+timestamps without retaining a second copy of samples for capture.
+
 ## VM smoke test
 
 The repository includes a reproducible QEMU/KVM guest for development on hosts

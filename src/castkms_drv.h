@@ -37,6 +37,7 @@
 
 struct castkms_config;
 struct castkms_config_plane;
+struct castkms_audio;
 struct drm_property;
 
 /**
@@ -54,6 +55,7 @@ struct drm_property;
  * @authorities_shutdown: Prevents new authorities during device teardown
  * @capture_owners: Device-global DRM ownership facts for composed content
  * @capture_active_prop: Connector property exposing active capture state
+ * @audio: Optional device-global HDMI audio presentation state
  * @attach_transition_lock: Serializes complete monitor state transitions
  * @attach_lock: Protects connector attachment state and ownership
  */
@@ -67,6 +69,7 @@ struct castkms_device {
 	bool authorities_shutdown;
 	struct castkms_capture_owner_state capture_owners;
 	struct drm_property *capture_active_prop;
+	struct castkms_audio *audio;
 	struct mutex attach_transition_lock; /* Serializes attach transitions. */
 	struct mutex attach_lock; /* Protects connector attach ownership. */
 };

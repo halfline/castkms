@@ -39,6 +39,7 @@
 #include "castkms_capture_owner.h"
 #include "castkms_capture_uapi.h"
 #include "castkms_connector_uapi.h"
+#include "castkms_audio.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_crc.h"
@@ -64,6 +65,10 @@ MODULE_PARM_DESC(enable_cursor, "Enable/Disable cursor support");
 static bool enable_writeback = true;
 module_param_named(enable_writeback, enable_writeback, bool, 0444);
 MODULE_PARM_DESC(enable_writeback, "Enable/Disable writeback connector support");
+
+static bool enable_audio = true;
+module_param_named(enable_audio, enable_audio, bool, 0444);
+MODULE_PARM_DESC(enable_audio, "Enable/Disable HDMI audio output support");
 
 static bool enable_crc;
 module_param_named(enable_crc, enable_crc, bool, 0444);
@@ -421,14 +426,22 @@ int castkms_create(struct castkms_config *config)
 
 	castkms_config_register_debugfs(castkms_device);
 
+	if (enable_audio) {
+		ret = castkms_audio_init(castkms_device);
+		if (ret)
+			goto out_devres;
+	}
+
 	ret = drm_dev_register(&castkms_device->drm, 0);
 	if (ret)
-		goto out_devres;
+		goto out_audio;
 
 	drm_client_setup(&castkms_device->drm, NULL);
 
 	return 0;
 
+out_audio:
+	castkms_audio_cleanup(castkms_device);
 out_devres:
 	castkms_config_clear_runtime_objects(config);
 	config->dev = NULL;
@@ -502,6 +515,7 @@ void castkms_destroy(struct castkms_config *config)
 	castkms_capture_authority_revoke_all(castkms_device, -ENODEV);
 	drm_dev_unplug(&castkms_device->drm);
 	drm_atomic_helper_shutdown(&castkms_device->drm);
+	castkms_audio_cleanup(castkms_device);
 	castkms_config_clear_runtime_objects(config);
 	castkms_device->config = NULL;
 	config->dev = NULL;

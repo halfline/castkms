@@ -32,4 +32,6 @@ castkms-y := \
 	src/castkms_luts.o \
 	src/castkms_snapshot.o
 
+castkms-$(CONFIG_SND) += src/castkms_audio.o
+
 ccflags-y += -I$(src)/src -I$(src)/include/uapi

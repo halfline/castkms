@@ -9,6 +9,9 @@ assembly src/castkms_file.h
 assembly src/castkms_topology.c
 assembly src/castkms_topology.h
 
+audio-core src/castkms_audio.c
+audio-core src/castkms_audio.h
+
 authority-core src/castkms_capture_authority.c
 authority-core src/castkms_capture_authority.h
 authority-core src/castkms_capture_owner.c

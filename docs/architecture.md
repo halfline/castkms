@@ -43,6 +43,12 @@ Writeback always retains the cursor. When writeback or frame checksums overlap
 a cursor-excluded capture, frame dispatch preserves the full composition for
 those consumers and renders a separate cursor-free capture result.
 
+## HDMI audio
+
+The optional ALSA device is a single device-global card with one playback-only
+PCM endpoint per virtual output. Its timer-backed presentation clock exposes
+pause, resume, and timestamps without retaining sample data for capture.
+
 ## Source layout
 
 The current specialized interfaces have explicit owners:
