@@ -30,6 +30,7 @@ reject 'plane layer owns color-operation snapshots' \
 
 test -f src/castkms_frame_dispatch.c
 test -f src/castkms_frame_dispatch_demand.h
+test -f src/castkms_crc.h
 test ! -e src/castkms_composer_demand.h
 
 printf '%s\n' 'architecture-dependencies=pass'

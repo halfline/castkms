@@ -15,6 +15,7 @@
 
 #include <kunit/visibility.h>
 
+#include "castkms_crc.h"
 #include "castkms_crtc.h"
 #include "castkms_drv.h"
 #include "castkms_frame_dispatch.h"
@@ -43,6 +44,7 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 {
 	struct castkms_output *output = drm_crtc_to_castkms_output(crtc);
 	struct castkms_crtc_state *state;
+	bool queue_dispatch = false;
 	bool ret, fence_cookie;
 
 	fence_cookie = dma_fence_begin_signalling();
@@ -52,28 +54,34 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 	if (!ret)
 		DRM_ERROR("castkms failure on handling vblank");
 
-	state = output->composer_state;
-	if (state && castkms_composer_demand_is_active(&output->composer_demand)) {
+	state = output->dispatch_state;
+	if (state && castkms_frame_dispatch_demand_is_active(
+			     &output->dispatch_demand)) {
 		u64 frame = drm_crtc_accurate_vblank_count(crtc);
 
-		/*
-		 * Update frame_start only if queued work has consumed the
-		 * preceding range.
-		 */
-		spin_lock(&output->composer_lock);
-		if (!state->crc_pending)
-			state->frame_start = frame;
-		else
-			DRM_DEBUG_DRIVER("crc worker falling behind, frame_start: %llu, frame_end: %llu\n",
-					 state->frame_start, frame);
-		state->frame_end = frame;
-		state->crc_pending = true;
-		spin_unlock(&output->composer_lock);
+		if (output->dispatch_demand.crc_enabled) {
+			/* Update frame_start only after the worker consumed it. */
+			spin_lock(&output->dispatch_lock);
+			if (!state->crc_pending)
+				state->frame_start = frame;
+			else
+				DRM_DEBUG_DRIVER("crc worker behind: start=%llu end=%llu\n",
+						 state->frame_start, frame);
+			state->frame_end = frame;
+			state->crc_pending = true;
+			spin_unlock(&output->dispatch_lock);
+			queue_dispatch = true;
+		}
 
-		ret = queue_work(output->composer_workq, &state->composer_work);
-		if (!ret)
-			DRM_DEBUG_DRIVER("Composer worker already queued\n");
+		if (queue_dispatch &&
+		    !queue_work(output->dispatch_workq, &state->dispatch_work))
+			DRM_DEBUG_DRIVER("Frame-dispatch worker already queued\n");
 	}
+
+	state = output->composer_state;
+	if (state && output->composer_demand.writeback_count &&
+	    !queue_work(output->composer_workq, &state->composer_work))
+		DRM_DEBUG_DRIVER("Composer worker already queued\n");
 	spin_unlock(&output->lock);
 
 	dma_fence_end_signalling(fence_cookie);
@@ -131,6 +139,15 @@ static void castkms_atomic_crtc_reset(struct drm_crtc *crtc)
 }
 
 static const struct drm_crtc_funcs castkms_crtc_funcs = {
+	.set_config             = drm_atomic_helper_set_config,
+	.page_flip              = drm_atomic_helper_page_flip,
+	.reset                  = castkms_atomic_crtc_reset,
+	.atomic_duplicate_state = castkms_atomic_crtc_duplicate_state,
+	.atomic_destroy_state   = castkms_atomic_crtc_destroy_state,
+	DRM_CRTC_VBLANK_TIMER_FUNCS,
+};
+
+static const struct drm_crtc_funcs castkms_crtc_crc_funcs = {
 	.set_config             = drm_atomic_helper_set_config,
 	.page_flip              = drm_atomic_helper_page_flip,
 	.reset                  = castkms_atomic_crtc_reset,
@@ -264,6 +281,7 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 	}
 
 	castkms_output->composer_state = to_castkms_crtc_state(crtc->state);
+	castkms_output->dispatch_state = to_castkms_crtc_state(crtc->state);
 	spin_unlock_irq(&castkms_output->lock);
 }
 
@@ -285,7 +303,9 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 
 	castkms_out = drmm_crtc_alloc_with_planes(dev, struct castkms_output, crtc,
 					       primary, cursor,
-					       &castkms_crtc_funcs,
+					       castkms_crc_enabled() ?
+						&castkms_crtc_crc_funcs :
+						&castkms_crtc_funcs,
 					       NULL);
 	if (IS_ERR(castkms_out)) {
 		DRM_DEV_ERROR(dev->dev, "Failed to init CRTC\n");

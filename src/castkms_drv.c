@@ -32,6 +32,7 @@
 
 #include "castkms_config.h"
 #include "castkms_configfs.h"
+#include "castkms_crc.h"
 #include "castkms_drv.h"
 
 #define DRIVER_NAME	"castkms"
@@ -49,6 +50,10 @@ static bool enable_writeback = true;
 module_param_named(enable_writeback, enable_writeback, bool, 0444);
 MODULE_PARM_DESC(enable_writeback, "Enable/Disable writeback connector support");
 
+static bool enable_crc;
+module_param_named(enable_crc, enable_crc, bool, 0444);
+MODULE_PARM_DESC(enable_crc, "Enable/Disable development CRTC CRC capture");
+
 static bool enable_overlay;
 module_param_named(enable_overlay, enable_overlay, bool, 0444);
 MODULE_PARM_DESC(enable_overlay, "Enable/Disable overlay support");
@@ -62,6 +67,11 @@ module_param_named(create_default_dev, create_default_dev, bool, 0444);
 MODULE_PARM_DESC(create_default_dev, "Create or not the default CASTKMS device");
 
 DEFINE_DRM_GEM_FOPS(castkms_driver_fops);
+
+bool castkms_crc_enabled(void)
+{
+	return enable_crc;
+}
 
 static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 {

@@ -7,6 +7,48 @@
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 
+static void castkms_frame_dispatch_test_crc_is_idempotent(struct kunit *test)
+{
+	struct castkms_frame_dispatch_demand demand = {};
+	bool put_vblank;
+	bool keep_vblank;
+	int ret;
+
+	ret = castkms_frame_dispatch_demand_get(&demand,
+					  CASTKMS_FRAME_DISPATCH_CLIENT_CRC,
+					  -EINVAL, &keep_vblank);
+	KUNIT_EXPECT_EQ(test, ret, -EINVAL);
+	KUNIT_EXPECT_FALSE(test, keep_vblank);
+	KUNIT_EXPECT_FALSE(test, castkms_frame_dispatch_demand_is_active(&demand));
+
+	ret = castkms_frame_dispatch_demand_get(&demand,
+					  CASTKMS_FRAME_DISPATCH_CLIENT_CRC,
+					  0, &keep_vblank);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_EXPECT_TRUE(test, keep_vblank);
+	KUNIT_EXPECT_TRUE(test, demand.crc_enabled);
+
+	ret = castkms_frame_dispatch_demand_get(&demand,
+					  CASTKMS_FRAME_DISPATCH_CLIENT_CRC,
+					  0, &keep_vblank);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	KUNIT_EXPECT_FALSE(test, keep_vblank);
+
+	ret = castkms_frame_dispatch_demand_get(&demand,
+					  CASTKMS_FRAME_DISPATCH_CLIENT_CRC,
+					  -EINVAL, &keep_vblank);
+	KUNIT_ASSERT_EQ(test, ret, -EINVAL);
+	KUNIT_EXPECT_FALSE(test, keep_vblank);
+	KUNIT_EXPECT_TRUE(test, demand.crc_enabled);
+
+	put_vblank = castkms_frame_dispatch_demand_put(&demand,
+						 CASTKMS_FRAME_DISPATCH_CLIENT_CRC);
+	KUNIT_EXPECT_TRUE(test, put_vblank);
+	put_vblank = castkms_frame_dispatch_demand_put(&demand,
+						 CASTKMS_FRAME_DISPATCH_CLIENT_CRC);
+	KUNIT_EXPECT_FALSE(test, put_vblank);
+}
+
 static void castkms_frame_dispatch_test_sorts_planes_by_zpos(struct kunit *test)
 {
 	struct castkms_frame_plane primary = {};
@@ -30,6 +72,7 @@ static void castkms_frame_dispatch_test_sorts_planes_by_zpos(struct kunit *test)
 }
 
 static struct kunit_case castkms_frame_dispatch_test_cases[] = {
+	KUNIT_CASE(castkms_frame_dispatch_test_crc_is_idempotent),
 	KUNIT_CASE(castkms_frame_dispatch_test_sorts_planes_by_zpos),
 	{}
 };

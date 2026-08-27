@@ -705,10 +705,7 @@ int castkms_compose_frame(const struct castkms_frame_stage *frame,
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_compose_frame);
 
-/*
- * Keep the legacy scheduler usable until its CRC and writeback clients move to
- * frame dispatch. The renderer itself still consumes only the immutable view.
- */
+/* Keep the legacy writeback scheduler usable until it moves to dispatch. */
 static int
 compose_active_planes(const struct castkms_output_buffer *destination,
 		      struct castkms_crtc_state *crtc_state, u32 *crc32)
@@ -718,128 +715,40 @@ compose_active_planes(const struct castkms_output_buffer *destination,
 }
 
 /**
- * castkms_composer_worker - ordered work_struct to compute CRC
- *
- * @work: work_struct
- *
- * Work handler for composing and computing CRCs. work_struct scheduled in
- * an ordered workqueue that's periodically scheduled by the vblank timer and
- * flushed at castkms_atomic_commit_tail().
+ * castkms_composer_worker - copy one frame for legacy writeback
+ * @work: CRTC-state work item
  */
 void castkms_composer_worker(struct work_struct *work)
 {
 	struct castkms_crtc_state *crtc_state = container_of(work,
 							  struct castkms_crtc_state,
 							  composer_work);
-	struct drm_crtc *crtc = crtc_state->base.crtc;
 	struct castkms_output_buffer *active_wb;
-	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
-	bool crc_pending, wb_pending;
-	u64 frame_start, frame_end;
+	struct castkms_output *out =
+		drm_crtc_to_castkms_output(crtc_state->base.crtc);
+	bool wb_pending;
 	u32 crc32 = 0;
 	int ret;
 
 	spin_lock_irq(&out->composer_lock);
-	frame_start = crtc_state->frame_start;
-	frame_end = crtc_state->frame_end;
-	crc_pending = crtc_state->crc_pending;
 	wb_pending = crtc_state->wb_pending;
 	active_wb = crtc_state->active_writeback;
-	crtc_state->frame_start = 0;
-	crtc_state->frame_end = 0;
-	crtc_state->crc_pending = false;
-
-	if (crtc_state->base.gamma_lut) {
-		s64 max_lut_index_fp;
-		s64 u16_max_fp = drm_int2fixp(0xffff);
-
-		crtc_state->frame.gamma_lut.base =
-			crtc_state->base.gamma_lut->data;
-		crtc_state->frame.gamma_lut.lut_length =
-			crtc_state->base.gamma_lut->length /
-			sizeof(struct drm_color_lut);
-		max_lut_index_fp =
-			drm_int2fixp(crtc_state->frame.gamma_lut.lut_length - 1);
-		crtc_state->frame.gamma_lut.channel_value2index_ratio =
-			drm_fixp_div(max_lut_index_fp, u16_max_fp);
-	} else {
-		crtc_state->frame.gamma_lut.base = NULL;
-		crtc_state->frame.gamma_lut.lut_length = 0;
-	}
-
 	spin_unlock_irq(&out->composer_lock);
 
-	/*
-	 * We raced with the vblank hrtimer and previous work already computed
-	 * the crc, nothing to do.
-	 */
-	if (!crc_pending && !wb_pending)
+	if (!wb_pending)
 		return;
 
-	if (WARN_ON(wb_pending && !active_wb))
+	if (WARN_ON(!active_wb))
 		ret = -EINVAL;
-	else if (wb_pending)
-		ret = compose_active_planes(active_wb, crtc_state, &crc32);
 	else
-		ret = compose_active_planes(NULL, crtc_state, &crc32);
+		ret = compose_active_planes(active_wb, crtc_state, &crc32);
 
-	if (wb_pending) {
-		spin_lock_irq(&out->composer_lock);
-		crtc_state->wb_pending = false;
-		crtc_state->active_writeback = NULL;
-		spin_unlock_irq(&out->composer_lock);
-		castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
-		drm_writeback_signal_completion(&out->wb_connector, ret);
-	}
-
-	if (ret || !crc_pending)
-		return;
-
-	/*
-	 * The worker can fall behind the vblank hrtimer, make sure we catch up.
-	 */
-	while (frame_start <= frame_end)
-		drm_crtc_add_crc_entry(crtc, true, frame_start++, &crc32);
-}
-
-static const char *const pipe_crc_sources[] = { "auto" };
-
-const char *const *castkms_get_crc_sources(struct drm_crtc *crtc,
-					    size_t *count)
-{
-	*count = ARRAY_SIZE(pipe_crc_sources);
-	return pipe_crc_sources;
-}
-
-static int castkms_crc_parse_source(const char *src_name, bool *enabled)
-{
-	int ret = 0;
-
-	if (!src_name) {
-		*enabled = false;
-	} else if (strcmp(src_name, "auto") == 0) {
-		*enabled = true;
-	} else {
-		*enabled = false;
-		ret = -EINVAL;
-	}
-
-	return ret;
-}
-
-int castkms_verify_crc_source(struct drm_crtc *crtc, const char *src_name,
-			      size_t *values_cnt)
-{
-	bool enabled;
-
-	if (castkms_crc_parse_source(src_name, &enabled) < 0) {
-		DRM_DEBUG_DRIVER("unknown source %s\n", src_name);
-		return -EINVAL;
-	}
-
-	*values_cnt = 1;
-
-	return 0;
+	spin_lock_irq(&out->composer_lock);
+	crtc_state->wb_pending = false;
+	crtc_state->active_writeback = NULL;
+	spin_unlock_irq(&out->composer_lock);
+	castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_WRITEBACK);
+	drm_writeback_signal_completion(&out->wb_connector, ret);
 }
 
 VISIBLE_IF_KUNIT int
@@ -935,22 +844,4 @@ void castkms_composer_put(struct castkms_output *out,
 
 	if (put_vblank)
 		drm_crtc_vblank_put(&out->crtc);
-}
-
-int castkms_set_crc_source(struct drm_crtc *crtc, const char *src_name)
-{
-	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
-	bool enabled = false;
-	int ret = 0;
-
-	ret = castkms_crc_parse_source(src_name, &enabled);
-	if (ret)
-		return ret;
-
-	if (enabled)
-		ret = castkms_composer_get(out, CASTKMS_COMPOSER_CLIENT_CRC);
-	else
-		castkms_composer_put(out, CASTKMS_COMPOSER_CLIENT_CRC);
-
-	return ret;
 }

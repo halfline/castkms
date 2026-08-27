@@ -18,6 +18,7 @@ config src/castkms_configfs.h
 
 drm-runtime src/castkms_connector.c
 drm-runtime src/castkms_connector.h
+drm-runtime src/castkms_crc.h
 drm-runtime src/castkms_crtc.c
 drm-runtime src/castkms_crtc.h
 drm-runtime src/castkms_frame_dispatch.c

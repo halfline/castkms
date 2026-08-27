@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/limits.h>
+#include <linux/string.h>
 #include <linux/workqueue.h>
 
 #include <drm/drm_crtc.h>
@@ -10,6 +11,7 @@
 #include <kunit/visibility.h>
 
 #include "castkms_composer.h"
+#include "castkms_crc.h"
 #include "castkms_crtc.h"
 #include "castkms_frame_dispatch.h"
 #include "castkms_output.h"
@@ -55,6 +57,46 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 
 	while (frame_start <= frame_end)
 		drm_crtc_add_crc_entry(crtc, true, frame_start++, &crc32);
+}
+
+static const char *const pipe_crc_sources[] = { "auto" };
+
+const char *const *castkms_get_crc_sources(struct drm_crtc *crtc,
+					    size_t *count)
+{
+	(void)crtc;
+	*count = ARRAY_SIZE(pipe_crc_sources);
+	return pipe_crc_sources;
+}
+
+static int castkms_crc_parse_source(const char *source_name, bool *enabled)
+{
+	if (!source_name) {
+		*enabled = false;
+		return 0;
+	}
+	if (!strcmp(source_name, "auto")) {
+		*enabled = true;
+		return 0;
+	}
+
+	*enabled = false;
+	return -EINVAL;
+}
+
+int castkms_verify_crc_source(struct drm_crtc *crtc,
+			      const char *source_name, size_t *values_count)
+{
+	bool enabled;
+
+	(void)crtc;
+	if (castkms_crc_parse_source(source_name, &enabled) < 0) {
+		DRM_DEBUG_DRIVER("unknown source %s\n", source_name);
+		return -EINVAL;
+	}
+
+	*values_count = 1;
+	return 0;
 }
 
 VISIBLE_IF_KUNIT int
@@ -154,3 +196,21 @@ void castkms_frame_dispatch_put(struct castkms_output *out,
 		drm_crtc_vblank_put(&out->crtc);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_frame_dispatch_put);
+
+int castkms_set_crc_source(struct drm_crtc *crtc, const char *source_name)
+{
+	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
+	bool enabled = false;
+	int ret;
+
+	ret = castkms_crc_parse_source(source_name, &enabled);
+	if (ret)
+		return ret;
+
+	if (enabled)
+		return castkms_frame_dispatch_get(out,
+					   CASTKMS_FRAME_DISPATCH_CLIENT_CRC);
+
+	castkms_frame_dispatch_put(out, CASTKMS_FRAME_DISPATCH_CLIENT_CRC);
+	return 0;
+}
