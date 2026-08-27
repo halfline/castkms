@@ -59,7 +59,8 @@ without ending its authority.
 `castkms_cec_uapi` performs DRM object lookup, checks grant rights,
 and translates the core snapshot into the public CEC structures.
 
-The audio/CEC build matrix also checks CEC's undefined-symbol set so a grant,
+`make check-architecture` enforces the header and dependency rules above. The
+audio/CEC build matrix also checks CEC's undefined-symbol set so a grant,
 DRM-file, or event dependency cannot appear in the core object.
 
 ## HDMI audio
@@ -86,6 +87,9 @@ The current specialized interfaces have explicit owners:
 | Captured cursor state and bitmap extraction | `castkms_capture_cursor.c` |
 | CEC transport state | `castkms_cec_core.c` |
 | CEC ioctl and DRM events | `castkms_cec_uapi.c` |
+
+The layering rule is: UAPI adapters may depend on core authority and capture
+interfaces; core interfaces must not depend on the grant-fd wrapper.
 
 `scripts/architecture-layers.txt` assigns every production C source and header
 to exactly one layer. The architecture check rejects stale, duplicate, or

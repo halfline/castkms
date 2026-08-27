@@ -58,6 +58,51 @@ if ! diff -u \
 	exit 1
 fi
 
+layer_files()
+{
+	local wanted_layer=$1
+	local path
+
+	for path in "${manifest_files[@]}"; do
+		if test "${source_layers[$path]}" = "$wanted_layer"; then
+			printf '%s\n' "$path"
+		fi
+	done
+}
+
+check_layer_dependencies()
+{
+	local dependency_header
+	local dependency_layer
+	local dependency_path
+	local path
+	local source_layer
+
+	for path in "${manifest_files[@]}"; do
+		source_layer=${source_layers[$path]}
+		while IFS= read -r dependency_header; do
+			dependency_path=src/$dependency_header
+			dependency_layer=${source_layers[$dependency_path]:-}
+			case "$source_layer:$dependency_layer" in
+			audio-core:grant-uapi|audio-core:capture-uapi|audio-core:cec-uapi|\
+			authority-core:grant-uapi|authority-core:capture-uapi|authority-core:cec-uapi|\
+			capture-core:grant-uapi|capture-core:capture-uapi|capture-core:cec-uapi|\
+			cec-core:grant-uapi|cec-core:capture-uapi|cec-core:cec-uapi|\
+			render-core:grant-uapi|render-core:capture-core|render-core:capture-uapi|render-core:cec-uapi)
+				printf 'architecture dependency violation: %s (%s) imports %s (%s)\n' \
+					"$path" "$source_layer" "$dependency_path" \
+					"$dependency_layer" >&2
+				exit 1
+				;;
+			esac
+		done < <(
+			sed -n \
+				's/^[[:space:]]*#include[[:space:]]*"\(castkms_[^"]*\.h\)".*/\1/p' \
+				"$path"
+		)
+	done
+}
+
 reject()
 {
 	local description=$1
@@ -71,6 +116,8 @@ reject()
 	fi
 }
 
+check_layer_dependencies
+
 reject 'output runtime header imports a complete subsystem API' \
 	'#include "castkms_(capture|composer|frame)\.h"' \
 	src/castkms_output.h
@@ -82,6 +129,16 @@ reject 'core device exposes grant-fd registry state' \
 reject 'CEC core depends on the CastKMS device layout' \
 	'castkms_device\.h|struct castkms_device' \
 	src/castkms_cec_core.c src/castkms_cec_core.h
+
+mapfile -t transport_core_files < <(
+	layer_files audio-core
+	layer_files authority-core
+	layer_files capture-core
+	layer_files cec-core
+)
+reject 'transport-neutral core imports grant, event, or public UAPI state' \
+	'castkms_grant|castkms_uapi_device|drm_pending_event|castkms_drm\.h' \
+	"${transport_core_files[@]}"
 
 reject 'grant adapter reaches into capture UAPI teardown' \
 	'castkms_capture_uapi|stop_authority_stream' \
