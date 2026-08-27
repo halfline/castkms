@@ -65,3 +65,4 @@ The current specialized interfaces have explicit owners:
 | Monitor attachment ioctl translation | `castkms_connector_uapi.c` |
 | Connector attachment and EDID state | `castkms_connector.c` |
 | Captured cursor state and bitmap extraction | `castkms_capture_cursor.c` |
+| CEC ioctl and DRM events | `castkms_cec_uapi.c` |

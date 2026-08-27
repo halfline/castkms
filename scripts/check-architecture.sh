@@ -27,6 +27,10 @@ reject 'core device exposes grant-fd registry state' \
 	'grant_registry|next_grant_id|struct xarray grants' \
 	src/castkms_drv.h
 
+reject 'CEC core depends on the CastKMS device layout' \
+	'castkms_device\.h|struct castkms_device' \
+	src/castkms_cec_core.c src/castkms_cec_core.h
+
 reject 'grant adapter reaches into capture UAPI teardown' \
 	'castkms_capture_uapi|stop_authority_stream' \
 	src/castkms_grant.c src/castkms_grant.h

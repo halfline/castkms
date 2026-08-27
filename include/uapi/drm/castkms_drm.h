@@ -763,6 +763,51 @@ struct drm_castkms_capture_read_cursor_bitmap {
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_GET_OUTPUT, \
 		 struct drm_castkms_get_output)
 
+/* --- CEC transport UAPI --- */
+
+#define DRM_CASTKMS_CEC_UAPI_MAJOR	0
+#define DRM_CASTKMS_CEC_UAPI_MINOR	1
+
+/* CEC capability flags */
+#define DRM_CASTKMS_CEC_CAP_ASYNC_TX		(1ULL << 0)
+#define DRM_CASTKMS_CEC_CAP_RX_INJECT		(1ULL << 1)
+#define DRM_CASTKMS_CEC_CAP_STATE_EVENTS	(1ULL << 2)
+#define DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE	(1ULL << 3)
+#define DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR	(1ULL << 4)
+
+/**
+ * struct drm_castkms_cec_query_caps - query CEC capabilities for a connector
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @uapi_major: CEC UAPI major version returned by the driver
+ * @uapi_minor: CEC UAPI minor version returned by the driver
+ * @capabilities: bitmask of DRM_CASTKMS_CEC_CAP_* values
+ * @max_msg_size: maximum CEC message size (16)
+ * @output_index: stable castkms output identity
+ * @has_adapter: 1 if a CEC adapter is registered for this connector
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_query_caps {
+	__u32 connector_id;
+	__u32 flags;
+	__u32 uapi_major;
+	__u32 uapi_minor;
+	__u64 capabilities;
+	__u32 max_msg_size;
+	__u32 output_index;
+	__u32 has_adapter;
+	__u32 reserved;
+};
+
+/* CEC DRM event types */
+#define DRM_CASTKMS_CEC_EVENT_STATE	0x80000002U
+
+/* CEC ioctl command numbers (after capture range 0x00-0x09) */
+#define DRM_CASTKMS_CEC_QUERY_CAPS		0x0a
+
+#define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
+		 struct drm_castkms_cec_query_caps)
 #if defined(__cplusplus)
 }
 #endif

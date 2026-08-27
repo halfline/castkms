@@ -44,5 +44,7 @@ castkms-y += src/castkms_audio.o
 ccflags-y += -DCASTKMS_HAVE_AUDIO=1
 endif
 endif
+castkms-y += src/castkms_cec_core.o src/castkms_cec_uapi.o
+ccflags-y += -DCASTKMS_HAVE_CEC=1
 
 ccflags-y += -I$(src)/src -I$(src)/include/uapi

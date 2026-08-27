@@ -35,3 +35,8 @@ CASTKMS_PRIVATE_IOCTL(CASTKMS_GET_GRANT,
 			     castkms_grant_get_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_GET_OUTPUT,
 			     castkms_get_output_ioctl, DENIED)
+
+#ifdef CASTKMS_HAVE_CEC
+CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_QUERY_CAPS,
+			     castkms_cec_query_caps_ioctl, ALLOWED)
+#endif

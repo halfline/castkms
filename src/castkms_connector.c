@@ -12,6 +12,7 @@
 
 #include "castkms_audio.h"
 #include "castkms_capture_authority.h"
+#include "castkms_cec_core.h"
 #include "castkms_config.h"
 #include "castkms_connector.h"
 
@@ -285,6 +286,7 @@ int castkms_connector_detach_monitor(
 	mutex_unlock(&castkmsdev->attach_lock);
 
 	castkms_audio_notify_disconnect(castkmsdev, connector);
+	castkms_cec_core_suspend_connector(connector);
 
 	castkms_connector_set_status(connector,
 				     connector_status_disconnected);

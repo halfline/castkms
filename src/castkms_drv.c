@@ -38,6 +38,8 @@
 #include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
 #include "castkms_capture_uapi.h"
+#include "castkms_cec_core.h"
+#include "castkms_cec_uapi.h"
 #include "castkms_connector_uapi.h"
 #include "castkms_audio.h"
 #include "castkms_config.h"
@@ -73,6 +75,10 @@ MODULE_PARM_DESC(enable_audio, "Enable/Disable HDMI audio output support");
 #else
 static const bool enable_audio;
 #endif
+
+static bool enable_cec;
+module_param_named(enable_cec, enable_cec, bool, 0444);
+MODULE_PARM_DESC(enable_cec, "Enable/Disable CEC adapter support");
 
 static bool enable_crc;
 module_param_named(enable_crc, enable_crc, bool, 0444);
@@ -436,6 +442,12 @@ int castkms_create(struct castkms_config *config)
 			goto out_devres;
 	}
 
+	if (enable_cec) {
+		ret = castkms_cec_core_init(&castkms_device->drm);
+		if (ret)
+			goto out_audio;
+	}
+
 	ret = drm_dev_register(&castkms_device->drm, 0);
 	if (ret)
 		goto out_audio;
@@ -549,3 +561,4 @@ MODULE_LICENSE("GPL");
 #ifdef CASTKMS_HAVE_AUDIO
 MODULE_SOFTDEP("pre: snd snd-pcm");
 #endif
+MODULE_SOFTDEP("pre: cec drm_display_helper");

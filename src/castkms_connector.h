@@ -6,6 +6,7 @@
 #include "castkms_drv.h"
 
 struct castkms_capture_authority;
+struct castkms_cec_output;
 struct drm_edid;
 
 #define drm_connector_to_castkms_connector(target) \
@@ -16,12 +17,14 @@ struct drm_edid;
  *
  * @base: Base DRM connector
  * @output_index: Stable non-writeback output identity, assigned at creation
+ * @cec: Transport-neutral CEC state, or NULL if CEC is unavailable
  * @attachment_authority: Core authority owning the attachment, or NULL
  * @monitor_attached: Whether a virtual monitor is attached
  */
 struct castkms_connector {
 	struct drm_connector base;
 	unsigned int output_index;
+	struct castkms_cec_output *cec;
 	struct castkms_capture_authority *attachment_authority;
 	bool monitor_attached;
 };

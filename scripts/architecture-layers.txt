@@ -30,6 +30,12 @@ capture-uapi src/castkms_capture_uapi.h
 capture-uapi src/castkms_connector_uapi.c
 capture-uapi src/castkms_connector_uapi.h
 
+cec-core src/castkms_cec_core.c
+cec-core src/castkms_cec_core.h
+
+cec-uapi src/castkms_cec_uapi.c
+cec-uapi src/castkms_cec_uapi.h
+
 config src/castkms_config.c
 config src/castkms_config.h
 config src/castkms_configfs.c
