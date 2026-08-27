@@ -3,6 +3,7 @@
 ccflags-y += -I$(src)/../../include/uapi
 
 castkms-kunit-tests-y := \
+	castkms_core_client_test.o \
 	castkms_config_test.o \
 	castkms_format_test.o \
 	castkms_color_test.o \

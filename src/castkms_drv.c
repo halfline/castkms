@@ -427,6 +427,7 @@ out_unregister:
 	faux_device_destroy(fdev);
 	return ret;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_create);
 
 static int __init castkms_init(void)
 {
@@ -484,6 +485,7 @@ void castkms_destroy(struct castkms_config *config)
 	devres_release_group(&fdev->dev, NULL);
 	faux_device_destroy(fdev);
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_destroy);
 
 static void __exit castkms_exit(void)
 {

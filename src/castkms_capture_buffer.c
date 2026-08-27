@@ -801,3 +801,4 @@ out_abort_submit:
 	castkms_capture_buffer_abort_submit(buffer);
 	return ret;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_capture_buffer_submit);

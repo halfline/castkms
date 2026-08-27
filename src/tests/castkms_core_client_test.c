@@ -25,7 +25,7 @@
 #include "../castkms_capture_owner.h"
 #include "../castkms_config.h"
 #include "../castkms_connector.h"
-#include "../castkms_device.h"
+#include "../castkms_drv.h"
 #include "../castkms_frame_dispatch.h"
 #include "../castkms_output.h"
 
@@ -440,6 +440,34 @@ static int castkms_core_client_test_init(struct kunit *test)
 	return ret;
 }
 
+static void castkms_core_client_request_revocation(struct kunit *test)
+{
+	struct castkms_core_client *client = test->priv;
+	struct castkms_capture_authority *authority = client->authority;
+
+	KUNIT_ASSERT_EQ(test, castkms_core_client_start_stream(client), 0);
+	KUNIT_ASSERT_EQ(test, castkms_core_client_create_buffer(client), 0);
+	KUNIT_ASSERT_EQ(test, castkms_core_client_submit(client), 0);
+	KUNIT_EXPECT_EQ(test, castkms_core_client_submit(client), -EBUSY);
+	KUNIT_EXPECT_EQ(test,
+		castkms_capture_buffer_remove(client->stream, client->buffer),
+		-EBUSY);
+
+	castkms_capture_authority_revoke(authority, -EKEYREVOKED);
+	KUNIT_EXPECT_EQ(test, client->stop_calls, 1U);
+	KUNIT_EXPECT_EQ(test, client->stop_status, -EKEYREVOKED);
+	KUNIT_EXPECT_EQ(test, client->request_calls, 1U);
+	KUNIT_EXPECT_EQ(test, client->result.status, -EKEYREVOKED);
+	KUNIT_EXPECT_FALSE(test, client->result.cancelled);
+	KUNIT_EXPECT_EQ(test, client->revoke_calls, 1U);
+	KUNIT_EXPECT_EQ(test, client->revoke_status, -EKEYREVOKED);
+	KUNIT_EXPECT_PTR_EQ(test, client->stream, NULL);
+
+	client->authority = NULL;
+	castkms_capture_authority_put(authority);
+	KUNIT_EXPECT_EQ(test, client->release_calls, 1U);
+}
+
 static void castkms_core_client_mode_change_cancellation(struct kunit *test)
 {
 	struct castkms_core_client *client = test->priv;
@@ -482,6 +510,42 @@ static void castkms_core_client_mode_change_cancellation(struct kunit *test)
 	client->buffer = NULL;
 	castkms_core_client_stop_stream(client, -ECANCELED);
 	KUNIT_EXPECT_EQ(test, client->stop_calls, 0U);
+}
+
+static void castkms_core_client_master_drop_cleans_stale_stream(
+	struct kunit *test)
+{
+	struct castkms_core_client *client = test->priv;
+	struct castkms_capture_owner_state *owners =
+		&client->config->dev->capture_owners;
+	u64 cleanup_sequence;
+	u64 current_cleanup_sequence;
+	unsigned long flags;
+
+	KUNIT_ASSERT_EQ(test, castkms_core_client_start_stream(client), 0);
+	KUNIT_ASSERT_EQ(test, castkms_core_client_create_buffer(client), 0);
+	KUNIT_ASSERT_EQ(test, castkms_core_client_submit(client), 0);
+
+	spin_lock_irqsave(&owners->lock, flags);
+	cleanup_sequence = owners->cleanup_sequence;
+	spin_unlock_irqrestore(&owners->lock, flags);
+	castkms_capture_owner_master_drop(&client->config->dev->drm,
+					  &client->owner_file);
+	flush_work(&owners->work);
+
+	spin_lock_irqsave(&owners->lock, flags);
+	current_cleanup_sequence = owners->cleanup_sequence;
+	spin_unlock_irqrestore(&owners->lock, flags);
+	KUNIT_EXPECT_EQ(test, current_cleanup_sequence, cleanup_sequence + 1);
+	KUNIT_EXPECT_EQ(test, client->stop_calls, 1U);
+	KUNIT_EXPECT_EQ(test, client->stop_status, -EAGAIN);
+	KUNIT_EXPECT_EQ(test, client->request_calls, 1U);
+	KUNIT_EXPECT_EQ(test, client->result.status, -EAGAIN);
+	KUNIT_EXPECT_FALSE(test, client->result.cancelled);
+	KUNIT_EXPECT_FALSE(test,
+		castkms_capture_authority_is_revoked(client->authority));
+	KUNIT_EXPECT_EQ(test, client->revoke_calls, 0U);
+	KUNIT_EXPECT_PTR_EQ(test, client->stream, NULL);
 }
 
 static void castkms_core_client_file_close_cleans_stale_stream(
@@ -529,7 +593,9 @@ static void castkms_core_client_file_close_cleans_stale_stream(
 }
 
 static struct kunit_case castkms_core_client_test_cases[] = {
+	KUNIT_CASE(castkms_core_client_request_revocation),
 	KUNIT_CASE(castkms_core_client_mode_change_cancellation),
+	KUNIT_CASE(castkms_core_client_master_drop_cleans_stale_stream),
 	KUNIT_CASE(castkms_core_client_file_close_cleans_stale_stream),
 	{}
 };
@@ -542,4 +608,5 @@ static struct kunit_suite castkms_core_client_test_suite = {
 
 kunit_test_suite(castkms_core_client_test_suite);
 
+MODULE_DESCRIPTION("KUnit client for the transport-neutral CastKMS capture core");
 MODULE_LICENSE("GPL");
