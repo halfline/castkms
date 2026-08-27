@@ -28,7 +28,7 @@ if test ! -e "$toolchain_stamp"; then
 	sudo touch "$toolchain_stamp"
 fi
 
-for package in kernel kernel-core kernel-modules-core kernel-modules kernel-devel; do
+for package in kernel kernel-core kernel-modules-core kernel-modules kernel-modules-internal kernel-devel; do
 	if ! rpm -q "$package-$target_release" >/dev/null 2>&1; then
 		kernel_ready=0
 	fi
@@ -36,7 +36,7 @@ done
 
 if test "$kernel_ready" -eq 0; then
 	mkdir -p "$rpm_dir"
-	for package in kernel kernel-core kernel-modules-core kernel-modules kernel-devel; do
+	for package in kernel kernel-core kernel-modules-core kernel-modules kernel-modules-internal kernel-devel; do
 		rpm_name=$package-$target_release.rpm
 		if test ! -f "$rpm_dir/$rpm_name"; then
 			curl --fail --location --show-error --continue-at - \

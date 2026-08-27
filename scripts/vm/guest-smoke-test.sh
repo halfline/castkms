@@ -3,6 +3,10 @@
 
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=module-dependencies.sh
+. "$script_dir/module-dependencies.sh"
+
 repo_dir=${1:-$HOME/castkms}
 expected_release=${2:?missing expected kernel release}
 result_dir=$repo_dir/test-results/vm-smoke
@@ -185,6 +189,8 @@ fi
 if ! mountpoint -q /sys/kernel/debug; then
 	sudo mount -t debugfs none /sys/kernel/debug
 fi
+
+load_module_dependencies ./castkms.ko
 
 sudo modprobe vkms create_default_dev=0
 stock_loaded=1
