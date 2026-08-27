@@ -92,6 +92,7 @@ Commands:
   test        Sync, build, load, and smoke-test castkms in the guest
   desktop-test        Sync, load castkms, attach a monitor, and check Mutter
   shell       Open an interactive shell in the guest
+  desktop-shell       Open a shell on the desktop instance
   status      Show VM and guest-kernel status
   desktop-status      Show desktop-instance status
   logs        Follow the guest serial console log
@@ -516,6 +517,11 @@ case "$command" in
 	desktop-test) run_desktop_tests ;;
 	shell)
 		vm_running || die 'VM is not running; run provision first'
+		ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1"
+		;;
+	desktop-shell)
+		apply_desktop_defaults
+		vm_running || die 'desktop VM is not running; run desktop-provision first'
 		ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1"
 		;;
 	status) show_status ;;
