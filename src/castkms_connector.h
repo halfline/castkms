@@ -12,9 +12,11 @@
  * struct castkms_connector - CASTKMS custom type wrapping around the DRM connector
  *
  * @base: Base DRM connector
+ * @monitor_attached: Whether a virtual monitor is attached
  */
 struct castkms_connector {
 	struct drm_connector base;
+	bool monitor_attached;
 };
 
 /**

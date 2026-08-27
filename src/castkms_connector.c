@@ -30,6 +30,11 @@ static enum drm_connector_status castkms_connector_detect(struct drm_connector *
 	if (!drm_dev_enter(dev, &idx))
 		return status;
 
+	if (READ_ONCE(castkms_connector->monitor_attached)) {
+		status = connector_status_connected;
+		goto out;
+	}
+
 	if (!castkmsdev->config)
 		goto out;
 
@@ -56,9 +61,11 @@ static int castkms_conn_get_modes(struct drm_connector *connector)
 {
 	int count;
 
-	/* Use the default modes list from DRM */
-	count = drm_add_modes_noedid(connector, XRES_MAX, YRES_MAX);
-	drm_set_preferred_mode(connector, XRES_DEF, YRES_DEF);
+	count = drm_edid_connector_add_modes(connector);
+	if (!count) {
+		count = drm_add_modes_noedid(connector, XRES_MAX, YRES_MAX);
+		drm_set_preferred_mode(connector, XRES_DEF, YRES_DEF);
+	}
 
 	return count;
 }
@@ -81,21 +88,25 @@ static const struct drm_connector_helper_funcs castkms_conn_helper_funcs = {
 struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsdev)
 {
 	struct drm_device *dev = &castkmsdev->drm;
-	struct castkms_connector *connector;
+	struct castkms_connector *castkms_connector;
+	struct drm_connector *connector;
 	int ret;
 
-	connector = drmm_kzalloc(dev, sizeof(*connector), GFP_KERNEL);
-	if (!connector)
+	castkms_connector = drmm_kzalloc(dev, sizeof(*castkms_connector),
+					 GFP_KERNEL);
+	if (!castkms_connector)
 		return ERR_PTR(-ENOMEM);
 
-	ret = drmm_connector_init(dev, &connector->base, &castkms_connector_funcs,
+	connector = &castkms_connector->base;
+	ret = drmm_connector_init(dev, connector, &castkms_connector_funcs,
 				  DRM_MODE_CONNECTOR_VIRTUAL, NULL);
 	if (ret)
 		return ERR_PTR(ret);
 
-	drm_connector_helper_add(&connector->base, &castkms_conn_helper_funcs);
+	drm_connector_helper_add(connector, &castkms_conn_helper_funcs);
+	drm_connector_attach_edid_property(connector);
 
-	return connector;
+	return castkms_connector;
 }
 
 void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev)
