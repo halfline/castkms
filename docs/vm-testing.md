@@ -164,6 +164,21 @@ Device-backed capture, grant, grant-launcher, and CEC clients share the small
 capture stream/buffer protocol operations. Scenario runners keep only their
 test-specific policy and sequencing.
 
+## Grant lifetime test
+
+The grant-specific kernel/UAPI tool can also be run independently after
+loading the module:
+
+```sh
+sudo ./tools/castkms-grant-test /dev/dri/cardN CONNECTOR-ID
+```
+
+It proves the grant contract on a live card: an ordinary fd cannot capture, a
+master can issue and pass a grant, missing rights are rejected, and a holder
+can attach and capture. It also covers delegated-helper lifetime, master
+drop/reacquire, residual-frame denial for a replacement compositor, and
+revocation including creator-close and final-holder cleanup.
+
 ## Graphical testing
 
 The VM includes a virtio VGA device. Set `CASTKMS_VM_VNC_DISPLAY` before

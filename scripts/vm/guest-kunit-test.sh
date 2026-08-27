@@ -133,4 +133,47 @@ kunit_tests_loaded=0
 sudo rmmod castkms
 cast_loaded=0
 
+make -C tools castkms-grant-test 2>&1 | tee "$result_dir/grant-build.log"
+
+sudo dmesg --clear
+load_module_dependencies ./castkms.ko
+sudo insmod ./castkms.ko enable_audio=0 enable_cec=1 enable_writeback=1 \
+	enable_crc=1 max_outputs=2
+cast_loaded=1
+
+card_path=
+for candidate in /sys/class/drm/card[0-9]*; do
+	device_path=$(readlink -f "$candidate/device" 2>/dev/null || true)
+	if test -n "$device_path" && test "${device_path##*/}" = castkms; then
+		card_path=/dev/dri/${candidate##*/}
+		card_name=${candidate##*/}
+		break
+	fi
+done
+test -n "$card_path"
+
+connector_ids=()
+for candidate in "/sys/class/drm/$card_name"-Virtual-*; do
+	if test -r "$candidate/connector_id"; then
+		read -r connector_id < "$candidate/connector_id"
+		connector_ids+=("$connector_id")
+	fi
+done
+test "${#connector_ids[@]}" -eq 2
+
+sudo ./tools/castkms-grant-test "$card_path" \
+	"${connector_ids[0]}" "${connector_ids[1]}" 2>&1 | \
+	tee "$result_dir/grant-live.log"
+grep -Fxq 'grant_lifecycle=pass' "$result_dir/grant-live.log"
+grep -Fxq 'grant_cross_connector_denied=pass' \
+	"$result_dir/grant-live.log"
+grep -Fxq 'grant_cross_connector_independent=pass' \
+	"$result_dir/grant-live.log"
+sudo rmmod castkms
+cast_loaded=0
+castkms_capture_kernel_log "$result_dir/grant-dmesg.txt"
+castkms_check_kernel_log "$result_dir/grant-dmesg.txt" \
+	"$result_dir/grant-kernel-errors.txt"
+
+printf '%s\n' 'grant-live=pass' | tee -a "$result_dir/summary.txt"
 printf '%s\n' 'result=pass' | tee -a "$result_dir/summary.txt"
