@@ -1,7 +1,8 @@
 # VM testing
 
-The VM harness provides a disposable environment for building and loading the
-driver without changing the host's boot or module-signing policy.
+This is the operational guide for the QEMU/KVM test guest. Use it when the
+host cannot load an unsigned module, or when you want a clean kernel that
+matches the VKMS baseline in `UPSTREAM.md`.
 
 It uses a checksum-pinned Fedora 43 cloud image, a qcow2 overlay, a dedicated
 local SSH key, QEMU user networking, and the Fedora `7.1.7-100.fc43.x86_64` kernel
