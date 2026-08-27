@@ -96,6 +96,7 @@ struct pw_castkms {
 	/* Selected connector and the compositor's active mode. */
 	uint32_t connector_id;
 	uint32_t crtc_id;
+	uint32_t output_index;
 	char connector_name[64];
 	uint32_t width;
 	uint32_t height;

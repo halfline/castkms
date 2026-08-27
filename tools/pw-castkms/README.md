@@ -9,6 +9,11 @@ stereo HDMI audio. An audio-enabled CastKMS build exposes the corresponding
 ALSA sink; a local agent can capture that sink's PipeWire monitor alongside
 this video source.
 
+Published nodes use the `Screen` media role and carry the CastKMS card,
+connector, CRTC, and stable output index as `api.castkms.*` properties.
+`api.castkms.capture=true` distinguishes these product capture sources from
+other DRM-backed video nodes.
+
 ## Reading order
 
 1. [`pw-castkms.c`](pw-castkms.c) is the application. Its `main()` shows the

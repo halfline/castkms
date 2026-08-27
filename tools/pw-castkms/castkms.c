@@ -174,6 +174,43 @@ static uint32_t first_compatible_crtc(int fd, const drmModeRes *resources,
 	return 0;
 }
 
+static int connector_output_index(int fd, uint32_t connector_id,
+				  uint32_t *output_index)
+{
+	drmModeObjectProperties *properties;
+	int status = -ENOENT;
+	uint32_t i;
+
+	properties = drmModeObjectGetProperties(fd, connector_id,
+						DRM_MODE_OBJECT_CONNECTOR);
+	if (!properties)
+		return errno ? -errno : -EIO;
+
+	for (i = 0; i < properties->count_props; i++) {
+		drmModePropertyRes *property =
+			drmModeGetProperty(fd, properties->props[i]);
+
+		if (!property)
+			continue;
+		if (!strcmp(property->name, "output_index")) {
+			uint64_t value = properties->prop_values[i];
+
+			if (value > UINT32_MAX) {
+				status = -EOVERFLOW;
+			} else {
+				*output_index = (uint32_t)value;
+				status = 0;
+			}
+			drmModeFreeProperty(property);
+			break;
+		}
+		drmModeFreeProperty(property);
+	}
+
+	drmModeFreeObjectProperties(properties);
+	return status;
+}
+
 static int describe_device_connector(struct pw_castkms *bridge,
 				     uint32_t preferred_crtc,
 				     uint32_t *candidate_crtc)
@@ -181,6 +218,8 @@ static int describe_device_connector(struct pw_castkms *bridge,
 	drmModeRes *resources = drmModeGetResources(bridge->drm_fd);
 	drmModeConnector *selected = NULL;
 	uint32_t selected_crtc = 0;
+	uint32_t output_index;
+	int status;
 	int i;
 
 	if (!resources) {
@@ -225,12 +264,22 @@ static int describe_device_connector(struct pw_castkms *bridge,
 		return -ENOENT;
 	}
 
-	bridge->connector_id = selected->connector_id;
-	*candidate_crtc = selected_crtc;
 	(void)snprintf(bridge->connector_name, sizeof(bridge->connector_name),
 		       "%s-%u",
 		       drmModeGetConnectorTypeName(selected->connector_type),
 		       selected->connector_type_id);
+	status = connector_output_index(bridge->drm_fd,
+					selected->connector_id, &output_index);
+	if (status) {
+		fprintf(stderr, "%s has no valid CastKMS output index\n",
+			bridge->connector_name);
+		drmModeFreeConnector(selected);
+		return status;
+	}
+
+	bridge->connector_id = selected->connector_id;
+	bridge->output_index = output_index;
+	*candidate_crtc = selected_crtc;
 	drmModeFreeConnector(selected);
 	return 0;
 }

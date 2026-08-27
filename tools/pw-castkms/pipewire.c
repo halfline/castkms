@@ -665,11 +665,15 @@ static struct pw_properties *create_node_properties(
 	const struct pw_castkms *bridge, const char *node_name)
 {
 	char crtc_id[16];
+	char output_index[16];
 
 	(void)snprintf(crtc_id, sizeof(crtc_id), "%u", bridge->crtc_id);
+	(void)snprintf(output_index, sizeof(output_index), "%u",
+		       bridge->output_index);
 
 	return pw_properties_new(
 		PW_KEY_MEDIA_CLASS, "Video/Source",
+		PW_KEY_MEDIA_ROLE, "Screen",
 		PW_KEY_NODE_NAME, node_name,
 		PW_KEY_NODE_DESCRIPTION, bridge->connector_name,
 		PW_KEY_NODE_EXCLUSIVE, "true",
@@ -678,6 +682,8 @@ static struct pw_properties *create_node_properties(
 		"api.castkms.card", bridge->card_label,
 		"api.castkms.crtc-id", crtc_id,
 		"api.castkms.connector", bridge->connector_name,
+		"api.castkms.output-index", output_index,
+		"api.castkms.capture", "true",
 		NULL);
 }
 
