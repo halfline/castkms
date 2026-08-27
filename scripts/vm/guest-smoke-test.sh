@@ -12,6 +12,7 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_dir=${1:-$HOME/castkms}
 expected_release=${2:?missing expected kernel release}
 scenario=${3:-all}
+fast_gate=${4:-run}
 result_dir=$repo_dir/test-results/vm-smoke
 stock_loaded=0
 cast_loaded=0
@@ -39,6 +40,15 @@ sink_capture_pid=
 audio_modeset_pid=
 audio_mode_gate_open=0
 audio_attach_gate_open=0
+
+case "$fast_gate" in
+	run|skip) ;;
+	*)
+		printf 'unknown fast-gate mode: %s\n' "$fast_gate" >&2
+		exit 2
+		;;
+esac
+
 # Scenario modules expose one run_*_scenario entrypoint each. The module graph
 # has one authoritative loader; common.sh owns validation and ordered dispatch.
 # shellcheck source=guest-smoke/modules.sh
@@ -173,12 +183,34 @@ running_release=$(uname -r)
 test "$running_release" = "$expected_release"
 printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
 printf 'selected_scenario=%s\n' "$scenario" | tee -a "$result_dir/summary.txt"
+printf 'fast_gate=%s\n' "$fast_gate" | tee -a "$result_dir/summary.txt"
 castkms_capture_guest_provenance "$result_dir"
 
-make clean
-test ! -e ./castkms.ko
-test ! -e ./src/tests/castkms-kunit-tests.ko
-make kunit W=1 2>&1 | tee "$result_dir/build.log"
+if test "$fast_gate" = run; then
+	fast_gate_status=0
+	rm -rf -- "$result_dir/fast-gate"
+	"$repo_dir/scripts/vm/guest-kunit-test.sh" \
+		"$repo_dir" "$expected_release" || fast_gate_status=$?
+	mkdir -p "$result_dir/fast-gate"
+	cp -a "$repo_dir/test-results/vm-kunit/." \
+		"$result_dir/fast-gate/"
+	if test "$fast_gate_status" -ne 0; then
+		exit "$fast_gate_status"
+	fi
+	grep -Fx 'result=pass' \
+		"$repo_dir/test-results/vm-kunit/summary.txt" >/dev/null
+	cp "$repo_dir/test-results/vm-kunit/summary.txt" \
+		"$result_dir/kunit-summary.txt"
+	cp "$repo_dir/test-results/vm-kunit/build.log" "$result_dir/build.log"
+	printf '%s\n' 'kunit_run=pass' | tee -a "$result_dir/summary.txt"
+else
+	make clean
+	test ! -e ./castkms.ko
+	test ! -e ./src/tests/castkms-kunit-tests.ko
+	make all W=1 2>&1 | tee "$result_dir/build.log"
+	printf '%s\n' 'product_build=pass' | tee -a "$result_dir/summary.txt"
+fi
+
 make tools 2>&1 | tee "$result_dir/tools-build.log"
 test -x ./tools/castkms-attach
 test -x ./tools/castkms-capture-test
@@ -189,23 +221,28 @@ test -x ./tools/pw-castkms/pw-castkms
 test -x ./tools/pw-castkms/pw-castkms-test
 printf '%s\n' 'smoke_tools_build=pass' | tee -a "$result_dir/summary.txt"
 
+# Product diagnostics begin after the fast gate or standalone product build.
+sudo dmesg --clear
+
 test "$(modinfo -F name ./castkms.ko)" = castkms
 case "$(modinfo -F vermagic ./castkms.ko)" in
 	"$expected_release "*) ;;
 	*) printf '%s\n' 'module vermagic does not match the guest kernel' >&2; exit 1 ;;
 esac
 
-test "$(modinfo -F name ./src/tests/castkms-kunit-tests.ko)" = \
-	castkms_kunit_tests
-case "$(modinfo -F vermagic ./src/tests/castkms-kunit-tests.ko)" in
-	"$expected_release "*) ;;
-	*) printf '%s\n' 'KUnit module vermagic does not match the guest kernel' >&2; exit 1 ;;
-esac
-case ",$(modinfo -F depends ./src/tests/castkms-kunit-tests.ko)," in
-	*,castkms,*kunit,*|*,kunit,*castkms,*) ;;
-	*) printf '%s\n' 'KUnit module dependencies are incomplete' >&2; exit 1 ;;
-esac
-printf '%s\n' 'kunit_build=pass' | tee -a "$result_dir/summary.txt"
+if test "$fast_gate" = run; then
+	test "$(modinfo -F name ./src/tests/castkms-kunit-tests.ko)" = \
+		castkms_kunit_tests
+	case "$(modinfo -F vermagic ./src/tests/castkms-kunit-tests.ko)" in
+		"$expected_release "*) ;;
+		*) printf '%s\n' 'KUnit module vermagic does not match the guest kernel' >&2; exit 1 ;;
+	esac
+	case ",$(modinfo -F depends ./src/tests/castkms-kunit-tests.ko)," in
+		*,castkms,*kunit,*|*,kunit,*castkms,*) ;;
+		*) printf '%s\n' 'KUnit module dependencies are incomplete' >&2; exit 1 ;;
+	esac
+	printf '%s\n' 'kunit_build=pass' | tee -a "$result_dir/summary.txt"
+fi
 
 if ! strings ./castkms.ko > "$result_dir/module-strings.txt"; then
 	printf '%s\n' 'could not inspect the module string table' >&2

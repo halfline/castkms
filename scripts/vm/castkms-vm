@@ -113,6 +113,7 @@ Environment:
                              the user-network SSH NIC remains available
   CASTKMS_VM_SCENARIO        Product scenario: all, configfs, capture, cursor,
                              or pipewire-audio (default: all)
+  CASTKMS_VM_FAST_GATE       Product preflight: run or skip (default: run)
 EOF
 }
 
@@ -398,14 +399,20 @@ sync_source()
 
 run_tests()
 {
+	local fast_gate=${CASTKMS_VM_FAST_GATE:-run}
 	local scenario=${CASTKMS_VM_SCENARIO:-all}
 	local status
+
+	case "$fast_gate" in
+		run|skip) ;;
+		*) die "unknown fast-gate mode: $fast_gate" ;;
+	esac
 
 	provision
 	sync_source
 	set +e
 	ssh_guest bash "$GUEST_REPO/scripts/vm/guest-smoke-test.sh" \
-		"$GUEST_REPO" "$KERNEL_RELEASE" "$scenario"
+		"$GUEST_REPO" "$KERNEL_RELEASE" "$scenario" "$fast_gate"
 	status=$?
 	set -e
 
