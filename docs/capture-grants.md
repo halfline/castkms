@@ -103,11 +103,11 @@ namespace.
 
 Rights are immutable and connector-scoped:
 
-| Right | Meaning |
+| Right | Operations |
 |---|---|
 | `CAPTURE_PIXELS` | Start streams and register or queue capture buffers. |
 | `MANAGE_ATTACHMENT` | Attach a remote monitor. |
-| `UPDATE_EDID` | Provide an EDID while attaching a remote monitor. |
+| `UPDATE_EDID` | Publish or clear the attached connector's EDID. |
 | `READ_CURSOR` | Include cursor pixels or receive cursor metadata/bitmaps. |
 | `MANAGE_CEC` | Bind and operate HDMI-CEC (the HDMI command channel) on the connector. |
 
@@ -173,6 +173,7 @@ The direct operation errors are:
 - `-EKEYREVOKED`: terminal revocation;
 - `-EAGAIN`: temporary master suspension or an obsolete capture stream;
 - `-ESTALE`: unsafe content ownership or a stale mode generation;
+- `-ENOTCONN`: the connector is not attached;
 - `-ENOLINK`: the connector is attached but has no active routed output;
 - `-ENODEV`: device teardown or unplug.
 
@@ -221,7 +222,7 @@ stream      bound to one CRTC and mode generation
 buffers     bound to one stream generation and dimensions
 ```
 
-Resolution, refresh, timing, blank/unblank, and CRTC reassignment never
+Resolution, refresh, timing, EDID, blank/unblank, and CRTC reassignment never
 revoke the grant. A modeset increments `mode_generation`, returns queued work
 with `-ESTALE` and `MODE_CHANGED`, and requires a replacement stream and
 mode-sized buffers on the same grant fd.
@@ -283,11 +284,14 @@ generation predates the observed cleanup sequence, so a replacement stream
 created after reacquisition cannot be collected by an older work item.
 
 Authority checks are repeated in the vblank path so revocation racing stream
-startup cannot disclose a later frame. Complete attachment transitions are
-serialized through their hotplug, audio, and CEC side effects.
+startup cannot disclose a later frame. Complete attachment and EDID
+transitions are serialized through their hotplug, audio, and CEC side effects.
 CEC teardown blocks replacement binding until any transport callback that is
 preparing a request has retired. The DRM adapter owns event reservation and
-publication; CEC core owns only the publish-or-cancel decision.
+publication; CEC core owns only the publish-or-cancel decision. Attachment
+ioctls acquire the transition lock before the holder grant lock, so an
+attachment operation cannot deadlock against an EDID operation from another
+grant on that connector.
 
 `GET_GRANT` reads connector routing under the interruptible connection mutex
 rather than locking the complete modeset object set. Grant `fdinfo` does not

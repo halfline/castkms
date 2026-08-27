@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include "castkms-test-drm.h"
+#include "virtualscreen-edid.h"
 
 #ifndef DRM_MODE_CONNECTED
 #define DRM_MODE_CONNECTED 1
@@ -42,6 +43,8 @@ static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
 	      "capture unregister ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48,
 	      "capture queue ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24,
+	      "capture set-output-edid ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24,
 	      "capture attach-monitor ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
@@ -212,6 +215,28 @@ static int queue_capture_buffer(int fd, uint32_t stream_id,
 		ready_point, reuse_point);
 }
 
+#define TEST_EDID_BLOCK CASTKMS_EDID_BLOCK
+
+static int fill_named_edid(uint8_t edid[TEST_EDID_BLOCK], const char *name)
+{
+	return castkms_fill_named_edid(edid, name);
+}
+
+static int set_output_edid(int fd, uint32_t connector_id, const void *edid,
+			   uint32_t size)
+{
+	struct drm_castkms_capture_set_output_edid args = {
+		.connector_id = connector_id,
+		.edid_size = size,
+		.edid_ptr = (uint64_t)(uintptr_t)edid,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_SET_OUTPUT_EDID, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
 static int attach_monitor(int fd, uint32_t connector_id, const void *edid,
 			  uint32_t size)
 {
@@ -325,6 +350,69 @@ static int find_display_connector(int fd, uint32_t crtc_id,
 	}
 
 	return -1;
+}
+
+static int read_connector_edid(int fd, uint32_t connector_id, uint8_t *edid,
+			       uint32_t capacity, uint32_t *size)
+{
+	struct drm_mode_get_connector conn = {
+		.connector_id = connector_id,
+	};
+	uint32_t *props = NULL;
+	uint64_t *values = NULL;
+	uint32_t prop_capacity;
+	uint32_t i;
+	int ret = -1;
+
+	*size = 0;
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0)
+		return -1;
+	if (!conn.count_props)
+		return 0;
+	prop_capacity = conn.count_props;
+	props = calloc(prop_capacity, sizeof(*props));
+	values = calloc(prop_capacity, sizeof(*values));
+	if (!props || !values)
+		goto out;
+	conn.count_modes = 0;
+	conn.count_encoders = 0;
+	conn.props_ptr = (uint64_t)(uintptr_t)props;
+	conn.prop_values_ptr = (uint64_t)(uintptr_t)values;
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0 ||
+	    conn.count_props > prop_capacity)
+		goto out;
+	for (i = 0; i < conn.count_props; i++) {
+		struct drm_mode_get_property prop = {
+			.prop_id = props[i],
+		};
+		struct drm_mode_get_blob blob = {
+			.blob_id = (uint32_t)values[i],
+		};
+
+		if (ioctl(fd, DRM_IOCTL_MODE_GETPROPERTY, &prop) < 0)
+			goto out;
+		if (strcmp((const char *)prop.name, "EDID"))
+			continue;
+		if (!blob.blob_id) {
+			ret = 0;
+			goto out;
+		}
+		if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) < 0 ||
+		    blob.length > capacity)
+			goto out;
+		blob.data = (uint64_t)(uintptr_t)edid;
+		if (ioctl(fd, DRM_IOCTL_MODE_GETPROPBLOB, &blob) < 0)
+			goto out;
+		*size = blob.length;
+		ret = 0;
+		goto out;
+	}
+	ret = 0;
+
+out:
+	free(props);
+	free(values);
+	return ret;
 }
 
 static int
@@ -1283,6 +1371,7 @@ static int run_cursor_test(const char *device, int inherited_fd,
 	uint32_t buffer_id = 0;
 	uint32_t second_buffer_id = 0;
 	uint32_t width, height;
+	uint8_t edid[TEST_EDID_BLOCK];
 	uint32_t first_serial;
 	uint32_t last_visible_serial;
 	uint64_t sequence = 0;
@@ -1294,6 +1383,7 @@ static int run_cursor_test(const char *device, int inherited_fd,
 	grant_fd = open_capture_grant(inherited_fd,
 		DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
 		DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT |
+		DRM_CASTKMS_GRANT_UPDATE_EDID |
 		DRM_CASTKMS_GRANT_READ_CURSOR, false);
 	if (grant_fd < 0)
 		return EXIT_FAILURE;
@@ -1307,7 +1397,9 @@ static int run_cursor_test(const char *device, int inherited_fd,
 
 	if (find_display_connector(grant_fd, crtc_id, &connector_id))
 		goto out;
-	ioctl_ret = attach_monitor(grant_fd, connector_id, NULL, 0);
+	if (fill_named_edid(edid, "CursorTest"))
+		goto out;
+	ioctl_ret = attach_monitor(grant_fd, connector_id, edid, sizeof(edid));
 	if (ioctl_ret && ioctl_ret != -EBUSY) {
 		errno = -ioctl_ret;
 		perror("ATTACH_MONITOR");
@@ -1811,6 +1903,7 @@ int main(int argc, char **argv)
 	fd = open_capture_grant(inherited_fd,
 		DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
 		DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT |
+		DRM_CASTKMS_GRANT_UPDATE_EDID |
 		DRM_CASTKMS_GRANT_READ_CURSOR, true);
 	if (fd < 0)
 		return EXIT_FAILURE;
@@ -1869,9 +1962,16 @@ int main(int argc, char **argv)
 	printf("capture_plain_fd_denied=pass\n");
 
 	{
+		uint8_t edid[TEST_EDID_BLOCK];
+		uint8_t observed[512];
 		uint32_t connector_id;
 		uint32_t connection;
+		uint32_t observed_size;
 
+		if (fill_named_edid(edid, "CastKMS Test")) {
+			fprintf(stderr, "failed to build test EDID\n");
+			goto out_close;
+		}
 		if (find_display_connector(fd, crtc_id, &connector_id)) {
 			fprintf(stderr, "failed to find display connector\n");
 			goto out_close;
@@ -1880,6 +1980,14 @@ int main(int argc, char **argv)
 		    connection != DRM_MODE_DISCONNECTED) {
 			fprintf(stderr,
 				"display connector is not disconnected at rest\n");
+			goto out_close;
+		}
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
+					    sizeof(edid));
+		if (ioctl_ret != -ENOTCONN) {
+			fprintf(stderr,
+				"EDID without attach returned %d, expected %d\n",
+				ioctl_ret, -ENOTCONN);
 			goto out_close;
 		}
 		ioctl_ret = attach_monitor(fd, connector_id, NULL, 0);
@@ -1928,6 +2036,70 @@ int main(int argc, char **argv)
 				ioctl_ret, -ENOENT);
 			goto out_close;
 		}
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
+					    sizeof(edid));
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("set output EDID");
+			goto out_close;
+		}
+		if (read_connector_edid(fd, connector_id, observed,
+					sizeof(observed), &observed_size) ||
+		    observed_size != sizeof(edid) ||
+		    memcmp(observed, edid, sizeof(edid))) {
+			fprintf(stderr,
+				"published EDID was not visible on the connector\n");
+			goto out_close;
+		}
+		edid[TEST_EDID_BLOCK - 1] ^= 0xff;
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
+					    sizeof(edid));
+		if (ioctl_ret != -EINVAL) {
+			fprintf(stderr,
+				"bad EDID checksum returned %d, expected %d\n",
+				ioctl_ret, -EINVAL);
+			goto out_close;
+		}
+		if (fill_named_edid(edid, "CastKMS Test")) {
+			fprintf(stderr, "failed to rebuild test EDID\n");
+			goto out_close;
+		}
+		ioctl_ret = set_output_edid(fd, connector_id, edid, 100);
+		if (ioctl_ret != -EINVAL) {
+			fprintf(stderr,
+				"bad EDID size returned %d, expected %d\n",
+				ioctl_ret, -EINVAL);
+			goto out_close;
+		}
+		ioctl_ret = set_output_edid(competitor_fd, connector_id, edid,
+					    sizeof(edid));
+		if (ioctl_ret != -EACCES) {
+			fprintf(stderr,
+				"ordinary-fd EDID set returned %d, expected %d\n",
+				ioctl_ret, -EACCES);
+			goto out_close;
+		}
+		ioctl_ret = set_output_edid(fd, connector_id, NULL, 0);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("clear output EDID");
+			goto out_close;
+		}
+		if (read_connector_edid(fd, connector_id, observed,
+					sizeof(observed), &observed_size) ||
+		    observed_size) {
+			fprintf(stderr,
+				"cleared EDID remained on the connector\n");
+			goto out_close;
+		}
+		ioctl_ret = set_output_edid(fd, connector_id, edid,
+					    sizeof(edid));
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("restore output EDID");
+			goto out_close;
+		}
+		printf("capture_output_edid=pass\n");
 	}
 
 	ioctl_ret = start_capture(fd, crtc_id, &second_stream);
@@ -2565,6 +2737,25 @@ int main(int argc, char **argv)
 	printf("capture_buffer_stop_cleanup=pass\n");
 
 	{
+		uint8_t observed[512];
+		uint8_t edid[TEST_EDID_BLOCK];
+		uint32_t connector_id;
+		uint32_t observed_size;
+
+		if (fill_named_edid(edid, "CastKMS Test")) {
+			fprintf(stderr, "failed to rebuild stop-check EDID\n");
+			goto out_close;
+		}
+		if (find_display_connector(fd, crtc_id, &connector_id) ||
+		    read_connector_edid(fd, connector_id, observed,
+					sizeof(observed), &observed_size) ||
+		    observed_size != sizeof(edid) ||
+		    memcmp(observed, edid, sizeof(edid))) {
+			fprintf(stderr,
+				"output EDID did not remain after stream stop\n");
+			goto out_close;
+		}
+
 		ioctl_ret = start_capture(fd, crtc_id, &second_stream);
 		if (ioctl_ret) {
 			errno = -ioctl_ret;

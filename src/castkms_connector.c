@@ -304,6 +304,23 @@ int castkms_connector_require_authority_attached(
 	return ret;
 }
 
+int castkms_connector_update_authority_edid(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority,
+	const struct drm_edid *drm_edid)
+{
+	struct castkms_device *castkmsdev =
+		drm_device_to_castkms_device(connector->dev);
+	int ret;
+
+	lockdep_assert_held(&castkmsdev->attach_transition_lock);
+	ret = castkms_connector_require_authority_attached(connector, authority);
+	if (ret)
+		return ret;
+
+	return castkms_connector_publish_edid(connector, drm_edid);
+}
+
 bool castkms_connector_detach_authority(
 	struct castkms_capture_authority *authority)
 {

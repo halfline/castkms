@@ -48,6 +48,10 @@ int castkms_connector_attach_monitor(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority,
 	const struct drm_edid *drm_edid);
+int castkms_connector_update_authority_edid(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority,
+	const struct drm_edid *drm_edid);
 int castkms_connector_detach_monitor(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority);

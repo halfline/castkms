@@ -18,6 +18,7 @@
 #include "castkms_grant.h"
 #include "castkms_limits.h"
 
+static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24);
 static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24);
 static_assert(CASTKMS_MAX_EDID_SIZE == DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE);
 
@@ -52,6 +53,50 @@ static int castkms_connector_uapi_edid_from_user(
 
 	*drm_edid = parsed;
 	return 0;
+}
+
+int castkms_capture_set_output_edid_ioctl(struct drm_device *dev, void *data,
+					  struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_set_output_edid *args = data;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_capture_authority *authority;
+	struct drm_connector *connector;
+	const struct drm_edid *drm_edid = NULL;
+	int ret;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	ret = castkms_connector_uapi_edid_from_user(
+		args->edid_size, args->edid_ptr, &drm_edid);
+	if (ret)
+		return ret;
+
+	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
+	if (!connector) {
+		ret = -ENOENT;
+		goto out_free_edid;
+	}
+
+	mutex_lock(&castkmsdev->attach_transition_lock);
+	ret = castkms_grant_begin(file_priv, connector,
+				  CASTKMS_CAPTURE_AUTHORITY_UPDATE_EDID,
+				  &authority);
+	if (ret)
+		goto out_unlock_transition;
+
+	ret = castkms_connector_update_authority_edid(connector, authority,
+						      drm_edid);
+	castkms_grant_end(authority);
+out_unlock_transition:
+	mutex_unlock(&castkmsdev->attach_transition_lock);
+	drm_connector_put(connector);
+out_free_edid:
+	if (drm_edid)
+		drm_edid_free(drm_edid);
+
+	return ret;
 }
 
 int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,

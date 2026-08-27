@@ -855,6 +855,9 @@ static int expect_plain_capture_denied(int fd, uint32_t connector_id)
 	struct drm_castkms_capture_attach_monitor attach = {
 		.connector_id = connector_id,
 	};
+	struct drm_castkms_capture_set_output_edid edid = {
+		.connector_id = connector_id,
+	};
 	struct drm_castkms_capture_register_buffer register_buffer = {
 		.stream_id = 1,
 		.fb_id = 1,
@@ -870,6 +873,8 @@ static int expect_plain_capture_denied(int fd, uint32_t connector_id)
 			       ENODATA, "plain-fd GET_GRANT") ||
 	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
 			       &attach, EACCES, "plain-fd ATTACH_MONITOR") ||
+	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_SET_OUTPUT_EDID,
+			       &edid, EACCES, "plain-fd SET_OUTPUT_EDID") ||
 	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER,
 			       &register_buffer, EACCES,
 			       "plain-fd REGISTER_BUFFER") ||

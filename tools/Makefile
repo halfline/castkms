@@ -11,6 +11,7 @@ all: castkms-capture-test castkms-grant-test castkms-attach
 
 castkms-capture-test: castkms-capture-test.c \
 		castkms-test-drm.c castkms-test-drm.h \
+		virtualscreen-edid.h \
 		../include/uapi/drm/castkms_drm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ \
 		castkms-capture-test.c castkms-test-drm.c
