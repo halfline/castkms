@@ -34,6 +34,10 @@ static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16,
 	      "cec set transport state ABI size changed");
 static_assert(sizeof(struct drm_castkms_cec_tx_complete) == 32,
 	      "cec tx complete ABI size changed");
+static_assert(sizeof(struct drm_castkms_cec_receive) == 40,
+	      "cec receive ABI size changed");
+static_assert(offsetof(struct drm_castkms_cec_receive, pad0) == 35,
+	      "cec receive ABI layout changed");
 static_assert(sizeof(struct drm_castkms_cec_event_tx) == 72,
 	      "cec event tx ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
@@ -205,6 +209,25 @@ static int cec_tx_complete(int fd, uint32_t connector_id,
 	};
 
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CEC_TX_COMPLETE, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
+static int cec_receive(int fd, uint32_t connector_id,
+		       uint32_t transport_id, uint64_t generation,
+		       const uint8_t *msg, uint8_t length)
+{
+	struct drm_castkms_cec_receive args = {
+		.connector_id = connector_id,
+		.transport_id = transport_id,
+		.transport_generation = generation,
+		.length = length,
+	};
+	if (length <= sizeof(args.msg))
+		memcpy(args.msg, msg, length);
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CEC_RECEIVE, &args) < 0)
 		return -errno;
 
 	return 0;
@@ -396,6 +419,7 @@ static void test_query_caps(int fd, uint32_t connector_id)
 	PASS("query_caps_msg_size");
 
 	uint64_t expected_caps = DRM_CASTKMS_CEC_CAP_ASYNC_TX |
+				 DRM_CASTKMS_CEC_CAP_RX_INJECT |
 				 DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE |
 				 DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR;
 	if (caps.capabilities != expected_caps) {
@@ -567,6 +591,110 @@ static void test_set_transport_online(int fd, uint32_t connector_id)
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
 
+
+static void test_receive_inject(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("receive_inject", "bind failed: %s", strerror(-ret));
+		return;
+	}
+
+	ret = cec_set_online(fd, connector_id, bind.transport_id, true);
+	if (ret) {
+		FAIL("receive_inject", "set_online failed: %s", strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	/* Inject a CEC <Give Physical Address> from TV (addr 0) to us */
+	uint8_t msg[] = { 0x04, 0x83 }; /* 0->4: Give Physical Address */
+	ret = cec_receive(fd, connector_id, bind.transport_id,
+			  bind.transport_generation, msg, sizeof(msg));
+	if (ret) {
+		FAIL("receive_inject", "ioctl failed: %s", strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+	PASS("receive_inject");
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
+static void test_receive_offline_reject(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("receive_offline_reject", "bind failed: %s",
+		     strerror(-ret));
+		return;
+	}
+
+	/* Transport is offline by default - receive should fail */
+	uint8_t msg[] = { 0x04, 0x83 };
+	ret = cec_receive(fd, connector_id, bind.transport_id,
+			  bind.transport_generation, msg, sizeof(msg));
+	if (ret != -ENONET) {
+		FAIL("receive_offline_reject",
+		     "expected ENONET, got %s",
+		     ret ? strerror(-ret) : "success");
+	} else {
+		PASS("receive_offline_reject");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
+static void test_receive_bad_length(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("receive_bad_length", "bind failed: %s", strerror(-ret));
+		return;
+	}
+
+	ret = cec_set_online(fd, connector_id, bind.transport_id, true);
+	if (ret) {
+		FAIL("receive_bad_length", "set_online failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	/* Length 0 should be rejected */
+	uint8_t msg[16] = { 0x04 };
+	ret = cec_receive(fd, connector_id, bind.transport_id,
+			  bind.transport_generation, msg, 0);
+	if (ret != -EINVAL) {
+		FAIL("receive_length_zero",
+		     "expected EINVAL, got %s",
+		     ret ? strerror(-ret) : "success");
+	} else {
+		PASS("receive_length_zero");
+	}
+
+	/* Length 17 should be rejected */
+	ret = cec_receive(fd, connector_id, bind.transport_id,
+			  bind.transport_generation, msg, 17);
+	if (ret != -EINVAL) {
+		FAIL("receive_length_too_large",
+		     "expected EINVAL, got %s",
+		     ret ? strerror(-ret) : "success");
+	} else {
+		PASS("receive_length_too_large");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
 
 static void test_real_cec_transmit(int fd, uint32_t connector_id)
 {
@@ -754,6 +882,41 @@ static void test_tx_complete_bad_status(int fd, uint32_t connector_id)
 }
 
 
+static void test_stale_generation_reject(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("stale_generation_reject", "bind failed: %s",
+		     strerror(-ret));
+		return;
+	}
+
+	ret = cec_set_online(fd, connector_id, bind.transport_id, true);
+	if (ret) {
+		FAIL("stale_generation_reject", "set_online failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	/* RX with stale generation should fail with ESTALE */
+	uint8_t msg[] = { 0x04, 0x83 };
+	ret = cec_receive(fd, connector_id, bind.transport_id,
+			  bind.transport_generation - 1, msg, sizeof(msg));
+	if (ret != -ESTALE) {
+		FAIL("stale_generation_reject",
+		     "expected ESTALE, got %s",
+		     ret ? strerror(-ret) : "success");
+	} else {
+		PASS("stale_generation_reject");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
 static void usage(const char *program)
 {
 	fprintf(stderr, "usage: %s [--grant-fd FD]\n", program);
@@ -809,9 +972,13 @@ int main(int argc, char **argv)
 	test_double_bind(fd, connector_id);
 	test_unbind_wrong_owner(fd, connector_id);
 	test_set_transport_online(fd, connector_id);
+	test_receive_inject(fd, connector_id);
+	test_receive_offline_reject(fd, connector_id);
+	test_receive_bad_length(fd, connector_id);
 	test_real_cec_transmit(fd, connector_id);
 	test_tx_complete_no_pending(fd, connector_id);
 	test_tx_complete_bad_status(fd, connector_id);
+	test_stale_generation_reject(fd, connector_id);
 	detach_monitor(fd, connector_id);
 
 	printf("\n%d/%d tests passed\n", tests_pass, tests_run);

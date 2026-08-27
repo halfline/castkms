@@ -65,6 +65,7 @@ struct castkms_cec_transport {
  * @stats_tx_nack: NACK transmit completions
  * @stats_tx_error: Other transmit errors
  * @stats_tx_timeout: Timed-out transactions
+ * @stats_rx: Messages injected by the transport
  * @stats_invalid: Rejected transport requests
  */
 struct castkms_cec_output {
@@ -95,6 +96,7 @@ struct castkms_cec_output {
 	u64 stats_tx_nack;
 	u64 stats_tx_error;
 	u64 stats_tx_timeout;
+	u64 stats_rx;
 	u64 stats_invalid;
 
 #if IS_ENABLED(CONFIG_KUNIT)
@@ -367,6 +369,7 @@ static void castkms_cec_copy_state(struct castkms_cec_output *output,
 	state->stats_tx_nack = output->stats_tx_nack;
 	state->stats_tx_error = output->stats_tx_error;
 	state->stats_tx_timeout = output->stats_tx_timeout;
+	state->stats_rx = output->stats_rx;
 	state->stats_invalid = output->stats_invalid;
 	state->phys_addr =
 		output->connector->base.display_info.source_physical_address;
@@ -659,6 +662,72 @@ out_unlock:
 	return ret;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_tx_complete);
+
+int castkms_cec_core_receive(struct castkms_cec_output *output,
+			     struct castkms_capture_authority *authority,
+			     u64 transport_generation, const u8 *message, u8 length)
+{
+	struct castkms_cec_transport *transport;
+	struct cec_msg msg = {};
+	unsigned long flags;
+	u8 initiator;
+	int ret = 0;
+
+	if (!output)
+		return -ENOENT;
+	if (!message || length < 1 || length > CEC_MAX_MSG_SIZE)
+		return -EINVAL;
+
+	spin_lock_irqsave(&output->lock, flags);
+	transport = output->transport;
+	if (!transport || transport->authority != authority) {
+		output->stats_invalid++;
+		ret = -EACCES;
+		goto out_unlock;
+	}
+	if (transport->generation != transport_generation) {
+		output->stats_invalid++;
+		ret = -ESTALE;
+		goto out_unlock;
+	}
+	if (!output->transport_online) {
+		output->stats_invalid++;
+		ret = -ENONET;
+		goto out_unlock;
+	}
+	if (!READ_ONCE(output->connector->monitor_attached)) {
+		output->stats_invalid++;
+		ret = -ENOTCONN;
+		goto out_unlock;
+	}
+
+	initiator = (message[0] >> 4) & 0x0f;
+	if (output->logical_addr_mask & BIT(initiator)) {
+		output->stats_invalid++;
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+	output->stats_rx++;
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	msg.len = length;
+	memcpy(msg.msg, message, length);
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (output->test_ops) {
+		if (output->test_ops->received)
+			output->test_ops->received(output->test_data,
+					       message, length);
+		return 0;
+	}
+#endif
+	drm_connector_hdmi_cec_received_msg(&output->connector->base, &msg);
+	return 0;
+
+out_unlock:
+	spin_unlock_irqrestore(&output->lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_receive);
 
 int castkms_cec_core_get_state(struct castkms_cec_output *output,
 			       struct castkms_capture_authority *authority,

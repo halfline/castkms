@@ -889,6 +889,27 @@ struct drm_castkms_cec_tx_complete {
 	__u8 reserved[3];
 };
 
+/**
+ * struct drm_castkms_cec_receive - inject a received CEC message
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @transport_generation: generation from bind
+ * @length: message length (1-16)
+ * @flags: must be zero
+ * @msg: CEC message bytes
+ * @reserved: must be zero
+ * @pad0: must be zero; explicit padding for a stable cross-architecture layout
+ */
+struct drm_castkms_cec_receive {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u64 transport_generation;
+	__u8 length;
+	__u8 flags;
+	__u8 msg[16];
+	__u8 reserved;
+	__u8 pad0[5];
+};
 
 /* CEC DRM event types */
 #define DRM_CASTKMS_CEC_EVENT_TX	0x80000001U
@@ -931,6 +952,7 @@ struct drm_castkms_cec_event_tx {
 #define DRM_CASTKMS_CEC_UNBIND_TRANSPORT	0x0c
 #define DRM_CASTKMS_CEC_SET_TRANSPORT_STATE	0x0d
 #define DRM_CASTKMS_CEC_TX_COMPLETE		0x0e
+#define DRM_CASTKMS_CEC_RECEIVE			0x0f
 
 #define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
@@ -947,6 +969,9 @@ struct drm_castkms_cec_event_tx {
 #define DRM_IOCTL_CASTKMS_CEC_TX_COMPLETE \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_TX_COMPLETE, \
 		struct drm_castkms_cec_tx_complete)
+#define DRM_IOCTL_CASTKMS_CEC_RECEIVE \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_RECEIVE, \
+		struct drm_castkms_cec_receive)
 #if defined(__cplusplus)
 }
 #endif

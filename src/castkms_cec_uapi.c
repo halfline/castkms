@@ -46,6 +46,8 @@ static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44);
 static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16);
 static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16);
 static_assert(sizeof(struct drm_castkms_cec_tx_complete) == 32);
+static_assert(sizeof(struct drm_castkms_cec_receive) == 40);
+static_assert(offsetof(struct drm_castkms_cec_receive, pad0) == 35);
 static_assert(sizeof(struct drm_castkms_cec_event_tx) == 72);
 
 static struct castkms_cec_output *
@@ -235,6 +237,7 @@ int castkms_cec_query_caps_ioctl(struct drm_device *dev, void *data,
 	args->uapi_major = DRM_CASTKMS_CEC_UAPI_MAJOR;
 	args->uapi_minor = DRM_CASTKMS_CEC_UAPI_MINOR;
 	args->capabilities = DRM_CASTKMS_CEC_CAP_ASYNC_TX |
+			     DRM_CASTKMS_CEC_CAP_RX_INJECT |
 			     DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE |
 			     DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR;
 	args->max_msg_size = CASTKMS_CEC_MAX_MSG_SIZE;
@@ -412,6 +415,45 @@ int castkms_cec_tx_complete_ioctl(struct drm_device *dev, void *data,
 						   args->nack_cnt,
 						   args->low_drive_cnt,
 						   args->error_cnt);
+
+	castkms_grant_end(authority);
+	drm_connector_put(connector);
+out_dev:
+	drm_dev_exit(idx);
+	return ret;
+}
+
+int castkms_cec_receive_ioctl(struct drm_device *dev, void *data,
+			      struct drm_file *file_priv)
+{
+	struct drm_castkms_cec_receive *args = data;
+	struct castkms_capture_authority *authority;
+	struct castkms_cec_state state;
+	struct castkms_cec_output *output;
+	struct drm_connector *connector;
+	int idx;
+	int ret;
+
+	if (args->flags || args->reserved ||
+	    memchr_inv(args->pad0, 0, sizeof(args->pad0)) ||
+	    args->length < 1 ||
+	    args->length > CASTKMS_CEC_MAX_MSG_SIZE)
+		return -EINVAL;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
+	output = cec_uapi_lookup_granted(dev, file_priv, args->connector_id,
+					 &connector, &authority);
+	if (IS_ERR(output)) {
+		ret = PTR_ERR(output);
+		goto out_dev;
+	}
+	ret = castkms_cec_uapi_get_transport(output, authority,
+					     args->transport_id, &state);
+	if (!ret)
+		ret = castkms_cec_core_receive(output, authority,
+					       args->transport_generation,
+					       args->msg, args->length);
 
 	castkms_grant_end(authority);
 	drm_connector_put(connector);

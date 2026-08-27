@@ -73,6 +73,7 @@ struct castkms_cec_transport_ops {
  * @stats_tx_nack: NACK transmit completions
  * @stats_tx_error: Other transmit errors
  * @stats_tx_timeout: Timed-out transactions
+ * @stats_rx: Messages injected by the transport
  * @stats_invalid: Rejected transport requests
  * @phys_addr: Current EDID-derived physical address
  * @logical_addr_mask: Logical addresses assigned by the CEC core
@@ -89,6 +90,7 @@ struct castkms_cec_state {
 	u64 stats_tx_nack;
 	u64 stats_tx_error;
 	u64 stats_tx_timeout;
+	u64 stats_rx;
 	u64 stats_invalid;
 	u16 phys_addr;
 	u16 logical_addr_mask;
@@ -116,6 +118,9 @@ int castkms_cec_core_tx_complete(struct castkms_cec_output *output,
 				 u64 transport_generation, u64 cookie, u8 status,
 				 u8 arb_lost_cnt, u8 nack_cnt, u8 low_drive_cnt,
 				 u8 error_cnt);
+int castkms_cec_core_receive(struct castkms_cec_output *output,
+			     struct castkms_capture_authority *authority,
+			     u64 transport_generation, const u8 *msg, u8 length);
 int castkms_cec_core_get_state(struct castkms_cec_output *output,
 			       struct castkms_capture_authority *authority,
 			       struct castkms_cec_state *state);
@@ -124,10 +129,12 @@ int castkms_cec_core_get_state(struct castkms_cec_output *output,
 /**
  * struct castkms_cec_test_ops - notifications observed by the fake CEC sink
  * @tx_done: A transaction completed, timed out, or was aborted
+ * @received: A transport injected a received message
  */
 struct castkms_cec_test_ops {
 	void (*tx_done)(void *data, u8 status, u8 arb_lost_cnt, u8 nack_cnt,
 			u8 low_drive_cnt, u8 error_cnt);
+	void (*received)(void *data, const u8 *message, u8 length);
 };
 
 struct castkms_cec_output *
