@@ -212,6 +212,30 @@ static bool castkms_capture_syncobjs_are_available(
 	return true;
 }
 
+void castkms_capture_uapi_file_fini(struct drm_file *file_priv)
+{
+	struct castkms_file *file_state = file_priv->driver_priv;
+	struct castkms_capture_uapi_stream *uapi_stream;
+	unsigned long id = 0;
+	bool put_mapping;
+
+	for (;;) {
+		mutex_lock(&file_state->capture_lock);
+		uapi_stream = xa_find(&file_state->capture_streams, &id,
+				      ULONG_MAX, XA_PRESENT);
+		put_mapping = uapi_stream &&
+			castkms_capture_uapi_unpublish_stream(uapi_stream);
+		mutex_unlock(&file_state->capture_lock);
+		if (!uapi_stream)
+			break;
+
+		castkms_capture_uapi_stream_stop(uapi_stream, -ECANCELED);
+		if (put_mapping)
+			castkms_capture_uapi_stream_put(uapi_stream);
+		id = 0;
+	}
+}
+
 int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 				     struct drm_file *file_priv)
 {

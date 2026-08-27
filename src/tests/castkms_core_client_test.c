@@ -484,8 +484,53 @@ static void castkms_core_client_mode_change_cancellation(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, client->stop_calls, 0U);
 }
 
+static void castkms_core_client_file_close_cleans_stale_stream(
+	struct kunit *test)
+{
+	struct castkms_core_client *client = test->priv;
+	struct castkms_capture_owner_state *owners =
+		&client->config->dev->capture_owners;
+	struct drm_file *master_file;
+	u64 cleanup_sequence;
+	u64 current_cleanup_sequence;
+	unsigned long flags;
+	bool master_active;
+
+	KUNIT_ASSERT_EQ(test, castkms_core_client_start_stream(client), 0);
+	KUNIT_ASSERT_EQ(test, castkms_core_client_create_buffer(client), 0);
+	KUNIT_ASSERT_EQ(test, castkms_core_client_submit(client), 0);
+
+	spin_lock_irqsave(&owners->lock, flags);
+	cleanup_sequence = owners->cleanup_sequence;
+	spin_unlock_irqrestore(&owners->lock, flags);
+	castkms_capture_owner_file_close(&client->config->dev->drm,
+					&client->owner_file);
+	/* A repeated close must not advance or re-notify the same epoch. */
+	castkms_capture_owner_file_close(&client->config->dev->drm,
+					&client->owner_file);
+	flush_work(&owners->work);
+
+	spin_lock_irqsave(&owners->lock, flags);
+	current_cleanup_sequence = owners->cleanup_sequence;
+	master_file = owners->master_file;
+	master_active = owners->master_active;
+	spin_unlock_irqrestore(&owners->lock, flags);
+	KUNIT_EXPECT_EQ(test, current_cleanup_sequence, cleanup_sequence + 1);
+	KUNIT_EXPECT_PTR_EQ(test, master_file, NULL);
+	KUNIT_EXPECT_FALSE(test, master_active);
+	KUNIT_EXPECT_EQ(test, client->stop_calls, 1U);
+	KUNIT_EXPECT_EQ(test, client->stop_status, -EAGAIN);
+	KUNIT_EXPECT_EQ(test, client->request_calls, 1U);
+	KUNIT_EXPECT_EQ(test, client->result.status, -EAGAIN);
+	KUNIT_EXPECT_FALSE(test,
+		castkms_capture_authority_is_revoked(client->authority));
+	KUNIT_EXPECT_EQ(test, client->revoke_calls, 0U);
+	KUNIT_EXPECT_PTR_EQ(test, client->stream, NULL);
+}
+
 static struct kunit_case castkms_core_client_test_cases[] = {
 	KUNIT_CASE(castkms_core_client_mode_change_cancellation),
+	KUNIT_CASE(castkms_core_client_file_close_cleans_stale_stream),
 	{}
 };
 

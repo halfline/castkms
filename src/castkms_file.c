@@ -7,6 +7,7 @@
 #include <drm/drm_file.h>
 
 #include "castkms_capture_owner.h"
+#include "castkms_capture_uapi.h"
 #include "castkms_file.h"
 #include "castkms_grant.h"
 #include "castkms_grant_file.h"
@@ -37,6 +38,7 @@ void castkms_file_postclose(struct drm_device *dev,
 	if (WARN_ON(!file_state))
 		return;
 	castkms_grant_uapi_file_fini(dev, file_priv);
+	castkms_capture_uapi_file_fini(file_priv);
 
 	xa_destroy(&file_state->capture_streams);
 	xa_destroy(&file_state->revocable_grants);
