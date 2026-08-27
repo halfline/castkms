@@ -11,6 +11,8 @@ struct castkms_connector;
 struct drm_connector;
 struct drm_device;
 
+#ifdef CASTKMS_HAVE_CEC
+
 #define CASTKMS_CEC_MAX_MSG_SIZE 16
 
 /**
@@ -151,4 +153,29 @@ int castkms_cec_core_test_transmit(struct castkms_cec_output *output,
 void castkms_cec_core_test_timeout(struct castkms_cec_output *output);
 #endif
 
+#else /* !CASTKMS_HAVE_CEC */
+
+static inline int castkms_cec_core_init(struct drm_device *dev)
+{
+	(void)dev;
+	return 0;
+}
+
+static inline int
+castkms_cec_core_connector_init(struct castkms_connector *connector)
+{
+	return 0;
+}
+
+static inline void
+castkms_cec_core_refresh_connector(struct drm_connector *connector)
+{
+}
+
+static inline void
+castkms_cec_core_suspend_connector(struct drm_connector *connector)
+{
+}
+
+#endif /* CASTKMS_HAVE_CEC */
 #endif /* _CASTKMS_CEC_CORE_H_ */

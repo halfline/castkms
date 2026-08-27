@@ -13,4 +13,12 @@ castkms-kunit-tests-y := \
 	castkms_grant_test.o
 
 obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += castkms-kunit-tests.o
+
+ifeq ($(CASTKMS_BUILD_CEC),y)
+ifneq ($(wildcard $(srctree)/include/drm/display/drm_hdmi_cec_helper.h),)
+ifneq ($(filter y m,$(CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER)),)
 castkms-kunit-tests-y += castkms_cec_test.o
+ccflags-y += -DCASTKMS_HAVE_CEC=1
+endif
+endif
+endif

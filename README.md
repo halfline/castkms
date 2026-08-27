@@ -77,12 +77,16 @@ virtual HDMI PCM endpoint. Its presentation clock supports pause, resume, and
 timestamps without retaining a second copy of samples for capture.
 
 HDMI audio and HDMI-CEC compile in when the kernel provides their
-dependencies.
+dependencies. A package that wants neither can omit them:
 
-`make build-matrix W=1` checks kernel-disabled audio and the explicit
-audio-off and audio-on builds while CEC is enabled. The CEC cases need
-`CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER` and its helper header; the audio-on
-case also needs `CONFIG_SND`.
+```sh
+make CASTKMS_BUILD_AUDIO=n CASTKMS_BUILD_CEC=n W=1
+```
+
+`make build-matrix W=1` builds all four inclusion combinations plus the
+fallback where both kernel options are disabled. The enabled cases need a
+kernel with `CONFIG_SND` and `CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER`, and the
+HDMI CEC helper header must be present.
 
 ## VM smoke test
 

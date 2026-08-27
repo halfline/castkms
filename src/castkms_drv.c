@@ -80,6 +80,8 @@ static const bool enable_audio;
 static bool enable_cec = true;
 module_param_named(enable_cec, enable_cec, bool, 0444);
 MODULE_PARM_DESC(enable_cec, "Enable/Disable CEC adapter support");
+#else
+static const bool enable_cec;
 #endif
 
 static bool enable_crc;

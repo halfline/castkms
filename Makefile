@@ -32,10 +32,26 @@ kunit:
 
 build-matrix:
 	$(MAKE) module-clean
-	$(MAKE) all CONFIG_SND=n
+	$(MAKE) all CONFIG_SND=n \
+		CONFIG_DRM_DISPLAY_HDMI_CEC_HELPER=n
 	test ! -e src/castkms_audio.o
+	test ! -e src/castkms_cec_core.o
+	test ! -e src/castkms_cec_uapi.o
 	case "$$(modinfo -F depends ./castkms.ko)" in *snd*) false;; esac
-	case "$$(modinfo -F softdep ./castkms.ko)" in *snd*) false;; esac
+	case "$$(modinfo -F softdep ./castkms.ko)" in *snd*|*cec*) false;; esac
+	$(MAKE) module-clean
+	$(MAKE) all CASTKMS_BUILD_AUDIO=n CASTKMS_BUILD_CEC=n
+	test ! -e src/castkms_audio.o
+	test ! -e src/castkms_cec_core.o
+	test ! -e src/castkms_cec_uapi.o
+	case "$$(modinfo -F depends ./castkms.ko)" in *snd*) false;; esac
+	case "$$(modinfo -F softdep ./castkms.ko)" in *snd*|*cec*) false;; esac
+	$(MAKE) module-clean
+	$(MAKE) all CASTKMS_BUILD_AUDIO=y CASTKMS_BUILD_CEC=n
+	test -e src/castkms_audio.o
+	test ! -e src/castkms_cec_core.o
+	test ! -e src/castkms_cec_uapi.o
+	case "$$(modinfo -F softdep ./castkms.ko)" in *cec*) false;; esac
 	$(MAKE) module-clean
 	$(MAKE) all CASTKMS_BUILD_AUDIO=n CASTKMS_BUILD_CEC=y
 	test ! -e src/castkms_audio.o
