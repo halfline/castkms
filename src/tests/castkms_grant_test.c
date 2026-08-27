@@ -200,13 +200,15 @@ static void castkms_grant_creation_policy(struct kunit *test)
 static void castkms_grant_id_access_policy(struct kunit *test)
 {
 	KUNIT_EXPECT_TRUE(test,
-		castkms_grant_id_access_allowed(true, false, false));
+		castkms_grant_id_access_allowed(true, false, false, false));
 	KUNIT_EXPECT_TRUE(test,
-		castkms_grant_id_access_allowed(false, true, true));
+		castkms_grant_id_access_allowed(false, true, false, false));
+	KUNIT_EXPECT_TRUE(test,
+		castkms_grant_id_access_allowed(false, false, true, true));
 	KUNIT_EXPECT_FALSE(test,
-		castkms_grant_id_access_allowed(false, true, false));
+		castkms_grant_id_access_allowed(false, false, true, false));
 	KUNIT_EXPECT_FALSE(test,
-		castkms_grant_id_access_allowed(false, false, true));
+		castkms_grant_id_access_allowed(false, false, false, true));
 }
 
 static void castkms_master_cleanup_preserves_current_streams(struct kunit *test)

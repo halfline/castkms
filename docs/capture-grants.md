@@ -21,7 +21,7 @@ That is what keeps a Flatpak with DRI device access from capturing the
 virtual monitor.
 
 The boundary does not protect against root, kernel compromise, a compromised
-grant creator, or a creator that deliberately passes its grant to
+grant creator or revoker, or a creator that deliberately passes its grant to
 an untrusted recipient. PipeWire publication is a separate boundary: a capture
 producer must keep its audio and video nodes private or assign per-client
 permissions.
@@ -32,13 +32,13 @@ permissions.
 the compositor.
 
 - Writing a compositor that owns the output? Create a **normal** grant. No
-  root helper is required. The grant remains bound to that compositor's DRM
-  master identity.
+  root helper is required. Closing the compositor's DRM file revokes it.
 - Writing a one-shot root helper that should outlive the helper but die with
   that compositor? Create a **delegated** grant. The helper can exit; the
   grant stays bound to the current compositor's master identity.
 - Writing a lab or diagnostic tool that should follow whichever compositor is
-  current? Create an **administrative** grant.
+  current? Create an **administrative** grant. Keep the creating file open as
+  the revoker.
 
 `DRM_IOCTL_CASTKMS_CREATE_GRANT` encodes those forms as follows. The two
 creation flags are mutually exclusive. A privileged caller that is not the
@@ -49,9 +49,9 @@ root, not a container).
 
 | Creation flags | Required caller | Master binding | Creator-file close |
 |---|---|---|---|
-| none | Current top-level DRM owner master | Caller's `drm_master` | No effect |
+| none | Current top-level DRM owner master | Caller's `drm_master` | Revokes |
 | `CREATE_DELEGATED` | Host root, not current master | Current top-level owner master | No effect |
-| `CREATE_ADMIN` | Host root | None; follows current safe owner | No effect |
+| `CREATE_ADMIN` | Host root | None; follows current safe owner | Revokes |
 
 Delegated creation returns `-EAGAIN` if there is no current owner master or
 the caller is itself current. Opening a masterless card implicitly makes the
@@ -64,23 +64,24 @@ grant would promise authority the driver cannot represent.
 
 A delegated grant retains a reference to that exact `drm_master`. It cannot
 activate for a later login session or a restarted compositor with a new
-master identity. The current compositor may query delegated grants bound to
-itself, so it does not depend on the helper remaining alive. Host root may
-query any grant by its live ID.
+master identity. The current compositor may query and revoke delegated grants
+bound to itself, so it does not depend on the helper remaining alive. Host
+root may query or revoke any grant by its live ID.
 
 An administrative grant follows safe content across compositor handoffs. Root
 may create it while the device is masterless; the grant is then dormant until
 a current master establishes capture-safe content. Because opening a
 masterless card makes the opener master, an administrative helper must drop
-that accidental master immediately.
+that accidental master immediately while retaining the same file as revoker.
 
 Grant-creation policy flags and returned-file flags use separate fields.
 `flags` accepts either `DRM_CASTKMS_GRANT_CREATE_DELEGATED` or
 `DRM_CASTKMS_GRANT_CREATE_ADMIN`; `fd_flags` accepts only `O_NONBLOCK`.
 Close-on-exec is unconditional and is not requested through either field.
 
-No creating file retains a lifetime association after the ioctl returns. The
-returned grant file owns the grant's lifetime.
+The creator file for a normal or administrative grant retains revocation
+authority even while its DRM master is inactive. A delegated creator retains
+no association after the ioctl returns.
 
 ## The grant file
 
@@ -111,8 +112,16 @@ rights are rejected.
 
 Permanent validity and temporary pixel activation are separate.
 
-A grant remains valid until final holder-file close or connector/device
-teardown or unplug. Closing its creating file does not affect that lifetime.
+A grant remains valid until one of these terminal events:
+
+- explicit revoker-file or administrative revocation;
+- creator/revoker DRM file close for a normal or administrative grant;
+- final holder-file close;
+- connector/device teardown or unplug.
+
+A delegated grant omits the second event. Its terminal lifetime is holder
+close, explicit revocation by its bound current owner or root, or device
+teardown.
 
 `GET_GRANT.state` reports whether pixel capture may proceed. Several states
 turn on *capture-safe content*, pixels the current master owns and may safely
@@ -203,17 +212,17 @@ revoke the grant. A modeset increments `mode_generation`, returns queued work
 with `-ESTALE` and `MODE_CHANGED`, and requires a replacement stream and
 mode-sized buffers on the same grant fd.
 
-## Grant termination
+## Revocation
 
-Terminal teardown first makes the grant permanently unable to authorize
-another attachment, EDID, capture, cursor, or CEC operation. The authority
-keeps one list of the capture streams and CEC bindings that must be cleaned. It
-walks that list in registration order, so clients must not rely on capture
-cleanup happening before or after CEC cleanup. Cleaning a stream cancels
-queued and in-flight work and places an error on each producer fence. Cleaning
-a CEC binding aborts and unbinds its transport work. A grant fd that remains
-open during device teardown stays usable for state queries, ordinary DRM
-resource release, and close, but can never regain authority.
+Revocation first makes the grant permanently unable to authorize another
+attachment, EDID, capture, cursor, or CEC operation. The authority keeps one
+list of the capture streams and CEC bindings that must be cleaned. It walks
+that list in registration order, so clients must not rely on capture cleanup
+happening before or after CEC cleanup. Cleaning a stream cancels queued and
+in-flight work and places an error on each producer fence. Cleaning a CEC
+binding aborts and unbinds its transport work. A revoked fd remains usable for
+state queries, ordinary DRM resource release, and close, but can never regain
+authority.
 
 Temporary foreign-content states leave the stream allocated; queue and vblank
 eligibility checks return or suppress `-ESTALE` work until the composition
@@ -224,9 +233,9 @@ becomes safe again.
 The fd is an adapter around a kernel-native capture authority. The authority
 contains connector scope, rights, and revocation state, and evaluates them
 against snapshots supplied by the DRM/content ownership tracker. The adapter
-contains only UAPI concerns: grant ID, holder DRM file, and fd lifetime.
-Capture streams, connector attachments, and CEC transports retain the
-authority rather than the adapter.
+contains only UAPI concerns: grant ID, optional close-to-revoke file, holder
+DRM file, and fd lifetime. Capture streams, connector attachments, and CEC
+transports retain the authority rather than the adapter.
 
 Trusted code linked into the driver may create an authority directly and use
 the same core lifecycle without fabricating a `drm_file`. The constructor is

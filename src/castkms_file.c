@@ -20,6 +20,7 @@ int castkms_file_open(struct drm_device *dev, struct drm_file *file_priv)
 	if (!file_state)
 		return -ENOMEM;
 
+	xa_init_flags(&file_state->revocable_grants, XA_FLAGS_ALLOC);
 	file_priv->driver_priv = file_state;
 
 	return 0;
@@ -35,6 +36,7 @@ void castkms_file_postclose(struct drm_device *dev,
 		return;
 	castkms_grant_uapi_file_fini(dev, file_priv);
 
+	xa_destroy(&file_state->revocable_grants);
 	kfree(file_state);
 	file_priv->driver_priv = NULL;
 }

@@ -70,7 +70,8 @@ extern "C" {
  * Create a holder-lived normal grant bound to the device's current top-level
  * DRM owner master. This flag requires CAP_SYS_ADMIN in the initial user
  * namespace and cannot be combined with DRM_CASTKMS_GRANT_CREATE_ADMIN. The
- * caller must not itself be a current DRM master.
+ * caller must not itself be a current DRM master. Closing the creating file
+ * does not revoke a delegated grant.
  */
 #define DRM_CASTKMS_GRANT_CREATE_DELEGATED	(1U << 1)
 
@@ -95,8 +96,8 @@ extern "C" {
  * @fd_flags: flags for the returned file; only O_NONBLOCK is accepted
  *
  * With no creation flags, this operation requires the device's current
- * top-level DRM owner master and creates a normal grant bound to it. A DRM
- * lease master cannot create such a grant.
+ * top-level DRM owner master and creates a normal grant revoked when that
+ * creating file closes. A DRM lease master cannot create such a grant.
  * DRM_CASTKMS_GRANT_CREATE_DELEGATED requires CAP_SYS_ADMIN in the initial
  * user namespace and creates a holder-lived normal grant bound to the current
  * owner master; it returns -EAGAIN when the caller is current or no owner
@@ -108,9 +109,9 @@ extern "C" {
  * grant is suspended while another DRM master is current and revivifies when
  * its bound master returns and owns capture-safe connector content. An
  * administrative grant follows current safe content across master changes.
- * Closing the final holder reference permanently ends every grant. The
- * creating file has no association with the returned grant after this ioctl
- * completes. The kernel always creates @fd with close-on-exec set,
+ * Closing the final holder reference permanently revokes every grant. Closing
+ * the creating file also revokes normal and administrative grants, but not a
+ * delegated grant. The kernel always creates @fd with close-on-exec set,
  * independently of @fd_flags.
  */
 struct drm_castkms_create_grant {
@@ -122,6 +123,24 @@ struct drm_castkms_create_grant {
 	__u32 fd_flags;
 };
 
+/**
+ * struct drm_castkms_revoke_grant - permanently revoke a live grant
+ * @grant_id: identifier returned by DRM_IOCTL_CASTKMS_CREATE_GRANT
+ * @flags: must be zero
+ * @reserved: must be zero
+ *
+ * A grant's revoker file may revoke it even while its DRM master is inactive.
+ * The current top-level owner master may revoke a delegated grant bound to
+ * that exact drm_master, including after its privileged creator has closed.
+ * A caller with CAP_SYS_ADMIN in the initial user namespace may revoke any
+ * live grant on the device.
+ */
+struct drm_castkms_revoke_grant {
+	__u32 grant_id;
+	__u32 flags;
+	__u64 reserved;
+};
+
 #define DRM_CASTKMS_GRANT_STATE_PENDING			0
 #define DRM_CASTKMS_GRANT_STATE_ACTIVE			1
 #define DRM_CASTKMS_GRANT_STATE_SUSPENDED_NO_MASTER	2
@@ -130,8 +149,8 @@ struct drm_castkms_create_grant {
 #define DRM_CASTKMS_GRANT_STATE_REVOKED			5
 
 /**
- * struct drm_castkms_get_grant - query a held or otherwise accessible grant
- * @grant_id: holder input zero/output identity; other caller input identifier
+ * struct drm_castkms_get_grant - query a held or revocable grant
+ * @grant_id: holder input zero/output identity; revoker input grant identifier
  * @connector_id: output authorized connector ID
  * @rights: output DRM_CASTKMS_GRANT_* mask
  * @state: output DRM_CASTKMS_GRANT_STATE_* value
@@ -139,10 +158,10 @@ struct drm_castkms_create_grant {
  * @reserved: must be zero on input and is zero on output
  * @reserved2: must be zero on input and is zero on output
  *
- * A holder queries its own grant with @grant_id zero. The current top-level
- * owner master may query a delegated grant bound to its exact drm_master, and
- * initial-user-namespace CAP_SYS_ADMIN may query any live grant by ID; another
- * ordinary DRM file returns -ENODATA. A
+ * A holder queries its own grant with @grant_id zero. A revoker file queries a
+ * grant by ID. The current top-level owner master may query a delegated grant
+ * bound to its exact drm_master, and initial-user-namespace CAP_SYS_ADMIN may
+ * query any live grant by ID; another ordinary DRM file returns -ENODATA. A
  * normal or delegated suspended grant becomes active again whenever its bound
  * DRM master returns and reestablishes a capture-safe composition, even after
  * an intervening owner. A delegated holder reports
@@ -161,11 +180,15 @@ struct drm_castkms_get_grant {
 };
 
 #define DRM_CASTKMS_CREATE_GRANT			0x11
+#define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13
 
 #define DRM_IOCTL_CASTKMS_CREATE_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
 		 struct drm_castkms_create_grant)
+#define DRM_IOCTL_CASTKMS_REVOKE_GRANT \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_REVOKE_GRANT, \
+		struct drm_castkms_revoke_grant)
 #define DRM_IOCTL_CASTKMS_GET_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_GET_GRANT, \
 		 struct drm_castkms_get_grant)

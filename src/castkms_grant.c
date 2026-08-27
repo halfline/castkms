@@ -29,7 +29,7 @@
 
 /**
  * struct castkms_grant_registry - Device-local grant-fd UAPI namespace
- * @lock: Serializes IDs and wrapper lifetime
+ * @lock: Serializes IDs and revoker associations
  * @grants: Live grant wrappers retained through holder final close
  * @next_id: Cyclic allocation cursor for device-unique UAPI grant IDs
  *
@@ -55,6 +55,8 @@ castkms_grant_registry(struct drm_device *dev)
  * @lock: Protects UAPI file associations and reported state
  * @id: Device-unique UAPI grant ID
  * @reported_state: Latest state reported through the grant fd
+ * @revoker_file: Optional close-to-revoke file state, protected by the
+ * grant-registry lock
  * @holder_file: Fresh DRM file carrying this grant, valid through cleanup
  * @delegated: Grant is holder-lived and bound to a master selected by an
  * administrator
@@ -69,10 +71,12 @@ struct castkms_capture_grant {
 	u32 id;
 	enum castkms_capture_authority_state reported_state;
 	bool delegated;
+	struct castkms_file *revoker_file;
 	struct drm_file *holder_file;
 };
 
 static_assert(sizeof(struct drm_castkms_create_grant) == 24);
+static_assert(sizeof(struct drm_castkms_revoke_grant) == 16);
 static_assert(sizeof(struct drm_castkms_get_grant) == 32);
 
 static u32 castkms_grant_state_to_uapi(
@@ -140,9 +144,11 @@ castkms_grant_from_file(struct drm_file *file_priv)
 }
 
 VISIBLE_IF_KUNIT bool castkms_grant_id_access_allowed(
-	bool privileged, bool delegated, bool caller_is_bound_owner)
+	bool owns_revoker, bool privileged, bool delegated,
+	bool caller_is_bound_owner)
 {
-	return privileged || (delegated && caller_is_bound_owner);
+	return owns_revoker || privileged ||
+		(delegated && caller_is_bound_owner);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_grant_id_access_allowed);
 
@@ -161,24 +167,30 @@ static struct drm_master *castkms_grant_caller_owner_master_get(
 }
 
 static struct castkms_capture_grant *castkms_grant_lookup_by_id(
-	struct drm_device *dev, struct drm_file *file_priv, u32 grant_id)
+	struct drm_device *dev, struct castkms_file *file_state,
+	struct drm_file *file_priv, u32 grant_id)
 {
 	struct castkms_grant_registry *registry = castkms_grant_registry(dev);
 	struct drm_master *caller_master;
 	struct castkms_capture_grant *grant;
 	bool privileged;
+	bool owns_revoker;
 	bool bound_owner;
 
 	privileged = ns_capable(&init_user_ns, CAP_SYS_ADMIN);
 	caller_master = castkms_grant_caller_owner_master_get(dev, file_priv);
 
 	mutex_lock(&registry->lock);
-	grant = xa_load(&registry->grants, grant_id);
+	grant = xa_load(&file_state->revocable_grants, grant_id);
+	owns_revoker = !!grant;
+	if (!grant)
+		grant = xa_load(&registry->grants, grant_id);
 	bound_owner = grant && caller_master &&
 		castkms_capture_authority_is_bound_to_master(
 			grant->authority, caller_master);
 	if (grant && !castkms_grant_id_access_allowed(
-			     privileged, grant->delegated, bound_owner))
+			     owns_revoker, privileged, grant->delegated,
+			     bound_owner))
 		grant = NULL;
 	if (grant)
 		castkms_capture_authority_get(grant->authority);
@@ -329,8 +341,10 @@ void castkms_grant_end(struct castkms_capture_authority *authority)
 
 static int castkms_grant_register(
 	struct castkms_grant_registry *registry,
-	struct castkms_capture_grant *grant)
+	struct castkms_capture_grant *grant,
+	struct castkms_file *revoker_file)
 {
+	void *old;
 	int ret;
 
 	mutex_lock(&registry->lock);
@@ -348,6 +362,19 @@ static int castkms_grant_register(
 		goto out_unlock;
 	}
 
+	if (revoker_file) {
+		old = xa_store(&revoker_file->revocable_grants, grant->id,
+			       grant, GFP_KERNEL);
+		ret = xa_err(old);
+		if (ret) {
+			xa_erase(&registry->grants, grant->id);
+			castkms_capture_authority_put(grant->authority);
+			grant->id = 0;
+			goto out_unlock;
+		}
+	}
+	grant->revoker_file = revoker_file;
+
 out_unlock:
 	mutex_unlock(&grant->lock);
 	mutex_unlock(&registry->lock);
@@ -361,6 +388,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	struct castkms_device *core_device = drm_device_to_castkms_device(dev);
 	struct castkms_grant_registry *registry = castkms_grant_registry(dev);
 	struct castkms_file *creator_file = file_priv->driver_priv;
+	struct castkms_file *revoker_file;
 	struct castkms_file *holder_file_state = NULL;
 	struct castkms_capture_grant *grant;
 	struct castkms_capture_authority *authority;
@@ -393,6 +421,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 		return ret;
 	administrative = args->flags & DRM_CASTKMS_GRANT_CREATE_ADMIN;
 	delegated = args->flags & DRM_CASTKMS_GRANT_CREATE_DELEGATED;
+	revoker_file = delegated ? NULL : creator_file;
 
 	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
 	if (!connector) {
@@ -457,7 +486,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	holder_ref = true;
 	holder_file_state->holder_grant = grant;
 
-	ret = castkms_grant_register(registry, grant);
+	ret = castkms_grant_register(registry, grant, revoker_file);
 	if (ret)
 		goto out_clear_holder;
 
@@ -492,6 +521,28 @@ out_put_master:
 	return ret;
 }
 
+int castkms_grant_revoke_ioctl(struct drm_device *dev, void *data,
+			       struct drm_file *file_priv)
+{
+	struct drm_castkms_revoke_grant *args = data;
+	struct castkms_file *revoker_file = file_priv->driver_priv;
+	struct castkms_capture_grant *grant;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+	if (!revoker_file || revoker_file->holder_grant)
+		return -EACCES;
+
+	grant = castkms_grant_lookup_by_id(dev, revoker_file, file_priv,
+					  args->grant_id);
+	if (!grant)
+		return -ENOENT;
+
+	castkms_capture_authority_revoke(grant->authority, -EKEYREVOKED);
+	castkms_capture_authority_put(grant->authority);
+	return 0;
+}
+
 int castkms_grant_get_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file_priv)
 {
@@ -513,7 +564,7 @@ int castkms_grant_get_ioctl(struct drm_device *dev, void *data,
 			return -ENOENT;
 		castkms_capture_authority_get(grant->authority);
 	} else if (args->grant_id) {
-		grant = castkms_grant_lookup_by_id(dev, file_priv,
+		grant = castkms_grant_lookup_by_id(dev, file_state, file_priv,
 						  args->grant_id);
 	} else {
 		grant = NULL;
@@ -549,6 +600,34 @@ int castkms_grant_get_ioctl(struct drm_device *dev, void *data,
 	return 0;
 }
 
+static void castkms_grant_close_revoker(
+	struct castkms_grant_registry *registry,
+	struct castkms_file *revoker_file)
+{
+	struct castkms_capture_grant *grant;
+	unsigned long id;
+
+	for (;;) {
+		id = 0;
+		mutex_lock(&registry->lock);
+		grant = xa_find(&revoker_file->revocable_grants, &id, ULONG_MAX,
+				XA_PRESENT);
+		if (grant) {
+			xa_erase(&revoker_file->revocable_grants, id);
+			if (grant->revoker_file == revoker_file)
+				grant->revoker_file = NULL;
+			castkms_capture_authority_get(grant->authority);
+		}
+		mutex_unlock(&registry->lock);
+		if (!grant)
+			break;
+
+		castkms_capture_authority_revoke(grant->authority,
+						 -EKEYREVOKED);
+		castkms_capture_authority_put(grant->authority);
+	}
+}
+
 void castkms_grant_uapi_file_fini(struct drm_device *dev,
 				  struct drm_file *file_priv)
 {
@@ -557,6 +636,8 @@ void castkms_grant_uapi_file_fini(struct drm_device *dev,
 	struct castkms_capture_grant *grant;
 	struct castkms_capture_authority *authority;
 	bool put_registry = false;
+
+	castkms_grant_close_revoker(registry, file_state);
 
 	grant = file_state->holder_grant;
 	if (!grant)
@@ -569,6 +650,10 @@ void castkms_grant_uapi_file_fini(struct drm_device *dev,
 	mutex_unlock(&grant->lock);
 
 	mutex_lock(&registry->lock);
+	if (grant->revoker_file) {
+		xa_erase(&grant->revoker_file->revocable_grants, grant->id);
+		grant->revoker_file = NULL;
+	}
 	if (xa_load(&registry->grants, grant->id) == grant) {
 		xa_erase(&registry->grants, grant->id);
 		put_registry = true;

@@ -21,6 +21,8 @@
 
 static_assert(sizeof(struct drm_castkms_create_grant) == 24,
 	      "create-grant ABI size changed");
+static_assert(sizeof(struct drm_castkms_revoke_grant) == 16,
+	      "revoke-grant ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
 struct test_display {
@@ -247,23 +249,40 @@ static int expect_holder_state(int grant_fd, uint32_t grant_id,
 	return 0;
 }
 
-static int query_delegated_as_unprivileged_owner(int owner_fd,
-					 uint32_t grant_id)
+static int revoke_grant(int issuer_fd, uint32_t grant_id)
+{
+	struct drm_castkms_revoke_grant revoke = {
+		.grant_id = grant_id,
+	};
+
+	if (ioctl(issuer_fd, DRM_IOCTL_CASTKMS_REVOKE_GRANT, &revoke) < 0) {
+		perror("DRM_IOCTL_CASTKMS_REVOKE_GRANT");
+		return -1;
+	}
+	return 0;
+}
+
+static int revoke_delegated_as_unprivileged_owner(int owner_fd,
+					  uint32_t grant_id)
 {
 	pid_t child;
 	int status;
 
 	child = fork();
 	if (child < 0) {
-		perror("fork delegated owner query");
+		perror("fork delegated owner revoker");
 		return -1;
 	}
 	if (!child) {
 		struct drm_castkms_get_grant query = {
 			.grant_id = grant_id,
 		};
+		struct drm_castkms_revoke_grant revoke = {
+			.grant_id = grant_id,
+		};
+
 		if (setgid(65534) || setuid(65534)) {
-			perror("drop delegated query privileges");
+			perror("drop delegated revoker privileges");
 			_exit(EXIT_FAILURE);
 		}
 		if (ioctl(owner_fd, DRM_IOCTL_CASTKMS_GET_GRANT, &query) < 0) {
@@ -276,18 +295,33 @@ static int query_delegated_as_unprivileged_owner(int owner_fd,
 				"unprivileged owner queried unexpected grant metadata\n");
 			_exit(EXIT_FAILURE);
 		}
+		if (ioctl(owner_fd, DRM_IOCTL_CASTKMS_REVOKE_GRANT, &revoke) < 0) {
+			perror("unprivileged owner REVOKE_GRANT");
+			_exit(EXIT_FAILURE);
+		}
 		_exit(EXIT_SUCCESS);
 	}
 
 	if (waitpid(child, &status, 0) != child) {
-		perror("waitpid delegated owner query");
+		perror("waitpid delegated owner revoker");
 		return -1;
 	}
 	if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
-		fprintf(stderr, "unprivileged delegated owner query failed\n");
+		fprintf(stderr, "unprivileged delegated owner revoker failed\n");
 		return -1;
 	}
 	return 0;
+}
+
+static int expect_revoke_grant_errno(int issuer_fd, uint32_t grant_id,
+				     int expected, const char *operation)
+{
+	struct drm_castkms_revoke_grant revoke = {
+		.grant_id = grant_id,
+	};
+
+	return expect_ioctl_errno(issuer_fd, DRM_IOCTL_CASTKMS_REVOKE_GRANT,
+				  &revoke, expected, operation);
 }
 
 static int pass_fd(int source_fd)
@@ -656,21 +690,18 @@ int main(int argc, char **argv)
 	printf("grant_master_revivify=pass\n");
 	printf("grant_delegated_master_revivify=pass\n");
 
-	if (query_delegated_as_unprivileged_owner(issuer, delegated_id) ||
+	if (revoke_delegated_as_unprivileged_owner(issuer, delegated_id) ||
 	    expect_holder_state(delegated_fd, delegated_id,
-				DRM_CASTKMS_GRANT_STATE_ACTIVE,
+				DRM_CASTKMS_GRANT_STATE_REVOKED,
 				DRM_CASTKMS_GRANT_FLAG_DELEGATED))
 		goto out;
 	close(delegated_fd);
 	delegated_fd = -1;
-	issuer_query = (struct drm_castkms_get_grant) {
-		.grant_id = delegated_id,
-	};
-	if (expect_ioctl_errno(issuer, DRM_IOCTL_CASTKMS_GET_GRANT,
-			       &issuer_query, ENODATA,
-			       "GET_GRANT after delegated holder close"))
+	if (expect_revoke_grant_errno(
+		    issuer, delegated_id, ENOENT,
+		    "root REVOKE_GRANT after delegated holder close"))
 		goto out;
-	printf("grant_delegated_owner_query=pass\n");
+	printf("grant_delegated_owner_revoke=pass\n");
 
 	delegated_creator = open(argv[1], O_RDWR | O_CLOEXEC);
 	if (delegated_creator < 0) {
@@ -691,15 +722,17 @@ int main(int argc, char **argv)
 		goto out;
 	close(detached_delegated_fd);
 	detached_delegated_fd = -1;
-	issuer_query = (struct drm_castkms_get_grant) {
-		.grant_id = detached_delegated_id,
-	};
-	if (expect_ioctl_errno(issuer, DRM_IOCTL_CASTKMS_GET_GRANT,
-			       &issuer_query, ENODATA,
-			       "GET_GRANT after final delegated holder close"))
+	if (expect_revoke_grant_errno(
+		    issuer, detached_delegated_id, ENOENT,
+		    "root REVOKE_GRANT after final delegated holder close"))
 		goto out;
 	printf("grant_delegated_final_holder_close=pass\n");
 
+	if (revoke_grant(issuer, normal_id) ||
+	    expect_holder_state(normal_fd, normal_id,
+				DRM_CASTKMS_GRANT_STATE_REVOKED, 0))
+		goto out;
+	printf("grant_explicit_revoke=pass\n");
 	close(normal_fd);
 	normal_fd = -1;
 	close(admin_fd);
@@ -730,10 +763,10 @@ int main(int argc, char **argv)
 	close(issuer2);
 	issuer2 = -1;
 	if (expect_holder_state(issuer_close_holder, issuer_close_id,
-				DRM_CASTKMS_GRANT_STATE_PENDING,
+				DRM_CASTKMS_GRANT_STATE_REVOKED,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN))
 		goto out;
-	printf("grant_creator_close_survives=pass\n");
+	printf("grant_issuer_close_revoke=pass\n");
 
 	printf("grant_lifecycle=pass\n");
 	ret = EXIT_SUCCESS;

@@ -17,6 +17,8 @@ struct drm_printer;
 /* Grant-fd UAPI entry points. */
 int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 			       struct drm_file *file_priv);
+int castkms_grant_revoke_ioctl(struct drm_device *dev, void *data,
+			       struct drm_file *file_priv);
 int castkms_grant_get_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file_priv);
 
@@ -40,7 +42,8 @@ int castkms_grant_creation_status(
 	u32 flags, bool privileged, bool caller_current_master,
 	bool caller_owner_master, bool current_owner_master);
 bool castkms_grant_id_access_allowed(
-	bool privileged, bool delegated, bool caller_is_bound_owner);
+	bool owns_revoker, bool privileged, bool delegated,
+	bool caller_is_bound_owner);
 #endif
 
 #endif /* _CASTKMS_GRANT_H_ */
