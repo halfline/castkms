@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # shellcheck shell=bash
+#
+# Sourced by modules.sh. Scenario modules intentionally share the
+# runner's lifecycle state so its single EXIT trap can clean up partial runs.
+# Shared state assignments are consumed by that trap after this file returns.
+# shellcheck disable=SC2154
 
 run_configfs_scenario()
 {

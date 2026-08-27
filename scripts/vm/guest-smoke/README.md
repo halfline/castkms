@@ -20,3 +20,13 @@ To add a scenario:
 
 `scripts/check-smoke-modules.sh` rejects malformed, duplicate, or missing
 registry entries without booting the VM.
+
+`guest-smoke-test.sh` owns setup, teardown, result collection, and the single
+`EXIT` cleanup trap for the VM product test. The files in this directory keep
+the individual product scenarios out of that lifecycle code.
+
+Scenario functions intentionally share lifecycle variables with the runner.
+Any new shared process, file descriptor, mount, or loaded module must have its
+state initialized in `guest-smoke-test.sh`, handled by `cleanup`, and cleared
+after normal teardown. This keeps cleanup safe when a scenario exits partway
+through.
