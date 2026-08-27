@@ -1,0 +1,32 @@
+name: VM integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: vm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  userspace:
+    name: Userspace / protocol and entrypoints
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install userspace build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential libasound2-dev libdrm-dev libgtk-4-dev \
+            libpipewire-0.3-dev pkg-config ripgrep shellcheck
+
+      - name: Run userspace gate
+        run: make check
