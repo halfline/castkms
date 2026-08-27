@@ -55,11 +55,12 @@ static int expect_ioctl_errno(int fd, unsigned long request, void *arg,
 }
 
 static int create_grant(int issuer_fd, uint32_t connector_id, uint32_t rights,
-			int *grant_fd, uint32_t *grant_id)
+			uint32_t flags, int *grant_fd, uint32_t *grant_id)
 {
 	struct drm_castkms_create_grant create = {
 		.connector_id = connector_id,
 		.rights = rights,
+		.flags = flags,
 		.fd_flags = O_NONBLOCK,
 	};
 
@@ -309,11 +310,18 @@ int main(int argc, char **argv)
 		DRM_CASTKMS_GRANT_MANAGE_CEC;
 	struct castkms_test_framebuffer master_b_source = {};
 	struct test_display display = {};
+	uint32_t masterless_admin_id = 0;
+	uint32_t issuer_close_id = 0;
 	uint32_t master_b_grant_id = 0;
 	uint32_t normal_id = 0;
+	uint32_t admin_id = 0;
 	uint32_t connector_id;
+	int masterless_admin_fd = -1;
+	int issuer_close_holder = -1;
 	int master_b_grant_fd = -1;
+	int admin_fd = -1;
 	int normal_fd = -1;
+	int issuer2 = -1;
 	int issuer = -1;
 	int master_b = -1;
 	int created_fd = -1;
@@ -342,7 +350,7 @@ int main(int argc, char **argv)
 		goto out;
 	printf("grant_flag_namespaces=pass\n");
 
-	if (create_grant(issuer, connector_id, full_rights,
+	if (create_grant(issuer, connector_id, full_rights, 0,
 			 &created_fd, &normal_id))
 		goto out;
 	normal_fd = pass_fd(created_fd);
@@ -357,11 +365,26 @@ int main(int argc, char **argv)
 	printf("grant_scm_rights=pass\n");
 	if (setup_display(issuer, connector_id, &display))
 		goto out;
+	if (create_grant(issuer, connector_id,
+			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+			 DRM_CASTKMS_GRANT_READ_CURSOR,
+			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
+			 &admin_fd, &admin_id))
+		goto out;
 
 	if (ioctl(issuer, DRM_IOCTL_DROP_MASTER, 0) < 0) {
 		perror("issuer DRM_IOCTL_DROP_MASTER");
 		goto out;
 	}
+	if (create_grant(issuer, connector_id,
+			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
+			 &masterless_admin_fd, &masterless_admin_id))
+		goto out;
+	close(masterless_admin_fd);
+	masterless_admin_fd = -1;
+	printf("grant_admin_masterless_create=pass\n");
+
 	master_b = open(argv[1], O_RDWR | O_CLOEXEC);
 	if (master_b < 0) {
 		perror("open replacement master");
@@ -369,7 +392,7 @@ int main(int argc, char **argv)
 	}
 	if (create_grant(master_b, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
-			 DRM_CASTKMS_GRANT_READ_CURSOR,
+			 DRM_CASTKMS_GRANT_READ_CURSOR, 0,
 			 &master_b_grant_fd, &master_b_grant_id))
 		goto out;
 
@@ -379,16 +402,11 @@ int main(int argc, char **argv)
 				    &master_b_source))
 		goto out;
 
+	close(master_b_grant_fd);
+	master_b_grant_fd = -1;
 	close(master_b);
 	master_b = -1;
 	master_b_source = (struct castkms_test_framebuffer) {};
-	if (expect_holder_cannot_create_grant(master_b_grant_fd,
-					      connector_id) ||
-	    expect_holder_cannot_become_master(master_b_grant_fd))
-		goto out;
-	printf("grant_creator_close_survives=pass\n");
-	close(master_b_grant_fd);
-	master_b_grant_fd = -1;
 
 	if (ioctl(issuer, DRM_IOCTL_SET_MASTER, 0) < 0) {
 		perror("issuer master reacquire");
@@ -400,6 +418,26 @@ int main(int argc, char **argv)
 
 	close(normal_fd);
 	normal_fd = -1;
+	close(admin_fd);
+	admin_fd = -1;
+
+	issuer2 = open(argv[1], O_RDWR | O_CLOEXEC);
+	if (issuer2 < 0) {
+		perror("open secondary issuer");
+		goto out;
+	}
+	if (create_grant(issuer2, connector_id,
+			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
+			 &issuer_close_holder, &issuer_close_id))
+		goto out;
+	close(issuer2);
+	issuer2 = -1;
+	if (expect_holder_cannot_create_grant(issuer_close_holder,
+					      connector_id) ||
+	    expect_holder_cannot_become_master(issuer_close_holder))
+		goto out;
+	printf("grant_creator_close_survives=pass\n");
 
 	printf("grant_lifecycle=pass\n");
 	ret = EXIT_SUCCESS;
@@ -407,6 +445,10 @@ int main(int argc, char **argv)
 out:
 	if (created_fd >= 0)
 		close(created_fd);
+	if (masterless_admin_fd >= 0)
+		close(masterless_admin_fd);
+	if (issuer_close_holder >= 0)
+		close(issuer_close_holder);
 	if (master_b_grant_fd >= 0)
 		close(master_b_grant_fd);
 	if (master_b >= 0)
@@ -415,6 +457,10 @@ out:
 		close(master_b);
 	if (normal_fd >= 0)
 		close(normal_fd);
+	if (admin_fd >= 0)
+		close(admin_fd);
+	if (issuer2 >= 0)
+		close(issuer2);
 	if (issuer >= 0)
 		destroy_test_framebuffer(issuer, &display.source);
 	if (issuer >= 0)

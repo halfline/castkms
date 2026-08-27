@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/build_bug.h>
+#include <linux/capability.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/limits.h>
 #include <linux/slab.h>
+#include <linux/user_namespace.h>
 #include <linux/xarray.h>
 
 #include <drm/castkms_drm.h>
@@ -147,15 +149,23 @@ castkms_grant_master_is_owner(const struct drm_master *master)
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_grant_master_is_owner);
 
-VISIBLE_IF_KUNIT int castkms_grant_creation_status(bool caller_owner_master)
+VISIBLE_IF_KUNIT int castkms_grant_creation_status(
+	u32 flags, bool privileged, bool caller_owner_master)
 {
+	bool administrative = flags & DRM_CASTKMS_GRANT_CREATE_ADMIN;
+
+	if (flags & ~DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK)
+		return -EINVAL;
+	if (administrative)
+		return privileged ? 0 : -EACCES;
+
 	return caller_owner_master ? 0 : -EACCES;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_grant_creation_status);
 
 static int castkms_grant_select_master(
-	struct drm_device *dev, struct drm_file *file_priv,
-	struct drm_master **bound_master_out)
+	struct drm_device *dev, struct drm_file *file_priv, u32 flags,
+	bool privileged, struct drm_master **bound_master_out)
 {
 	struct drm_master *bound_master = NULL;
 	bool caller_owner_master;
@@ -167,8 +177,9 @@ static int castkms_grant_select_master(
 		file_priv->master &&
 		castkms_grant_master_is_owner(file_priv->master) &&
 		dev->master == file_priv->master;
-	ret = castkms_grant_creation_status(caller_owner_master);
-	if (!ret)
+	ret = castkms_grant_creation_status(flags, privileged,
+					    caller_owner_master);
+	if (!ret && !(flags & DRM_CASTKMS_GRANT_CREATE_ADMIN))
 		bound_master = drm_master_get(file_priv->master);
 	mutex_unlock(&dev->master_mutex);
 
@@ -264,13 +275,15 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	struct drm_file *holder_file;
 	struct file *grant_file = NULL;
 	bool holder_ref = false;
+	bool administrative;
+	bool privileged;
 	int fd = -1;
 	int ret;
 
 	args->fd = -1;
 	args->grant_id = 0;
 	if (!args->rights || (args->rights & ~DRM_CASTKMS_GRANT_RIGHTS_MASK) ||
-	    args->flags ||
+	    (args->flags & ~DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK) ||
 	    (args->fd_flags & ~O_NONBLOCK))
 		return -EINVAL;
 	if (!creator_file || creator_file->holder_grant)
@@ -278,9 +291,12 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	if (!drm_is_primary_client(file_priv))
 		return -EACCES;
 
-	ret = castkms_grant_select_master(dev, file_priv, &bound_master);
+	privileged = ns_capable(&init_user_ns, CAP_SYS_ADMIN);
+	ret = castkms_grant_select_master(dev, file_priv, args->flags,
+					 privileged, &bound_master);
 	if (ret)
 		return ret;
+	administrative = args->flags & DRM_CASTKMS_GRANT_CREATE_ADMIN;
 
 	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
 	if (!connector) {
@@ -301,7 +317,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	authority = castkms_capture_authority_create(
 		core_device, connector, bound_master,
 		castkms_grant_rights_from_uapi(args->rights),
-		false, &castkms_grant_authority_ops, grant);
+		administrative, &castkms_grant_authority_ops, grant);
 	if (IS_ERR(authority)) {
 		ret = PTR_ERR(authority);
 		mutex_destroy(&grant->lock);
@@ -451,6 +467,7 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 	u32 connector_id;
 	u32 grant_id;
 	u32 rights;
+	bool administrative;
 	bool attached = false;
 
 	if (!grant)
@@ -462,6 +479,8 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 	connector_id = castkms_capture_authority_connector(authority)->base.id;
 	rights = castkms_grant_rights_to_uapi(
 		castkms_capture_authority_rights(authority));
+	administrative =
+		castkms_capture_authority_is_administrative(authority);
 	state = castkms_capture_authority_is_revoked(authority) ?
 		CASTKMS_CAPTURE_AUTHORITY_REVOKED : grant->reported_state;
 	mutex_unlock(&grant->lock);
@@ -482,6 +501,8 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 	drm_printf(p, "castkms-grant-id:\t%u\n", grant_id);
 	drm_printf(p, "castkms-grant-connector:\t%u\n", connector_id);
 	drm_printf(p, "castkms-grant-rights:\t0x%x\n", rights);
+	drm_printf(p, "castkms-grant-administrative:\t%s\n",
+		   administrative ? "yes" : "no");
 	drm_printf(p, "castkms-grant-state:\t%s\n", state_name);
 	drm_printf(p, "castkms-grant-attached:\t%s\n",
 		   attached ? "yes" : "no");

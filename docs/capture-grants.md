@@ -34,23 +34,35 @@ the compositor.
 - Writing a compositor that owns the output? Create a **normal** grant. No
   root helper is required. The grant remains bound to that compositor's DRM
   master identity.
+- Writing a lab or diagnostic tool that should follow whichever compositor is
+  current? Create an **administrative** grant.
 
-`DRM_IOCTL_CASTKMS_CREATE_GRANT` requires the current top-level owner master. A
-privileged caller that is not the current master is denied rather than being
-given broader authority implicitly.
+`DRM_IOCTL_CASTKMS_CREATE_GRANT` encodes those forms as follows. A privileged
+caller that is not the current master, and passes no flag, is denied, rather
+than silently being handed an administrative grant that follows whichever
+compositor is current. Host root here means `CAP_SYS_ADMIN` in the initial user
+namespace (true host root, not a container).
 
 | Creation flags | Required caller | Master binding | Creator-file close |
 |---|---|---|---|
 | none | Current top-level DRM owner master | Caller's `drm_master` | No effect |
+| `CREATE_ADMIN` | Host root | None; follows current safe owner | No effect |
 
 A DRM **lease** master is a client given only a subset of the card's
 resources. It cannot create a normal grant, even for a connector included in
 its lease. Capture-safe content ownership is device-global, so a nested lease
 grant would promise authority the driver cannot represent.
 
+An administrative grant follows safe content across compositor handoffs. Root
+may create it while the device is masterless; the grant is then dormant until
+a current master establishes capture-safe content. Because opening a
+masterless card makes the opener master, an administrative helper must drop
+that accidental master immediately.
+
 Grant-creation policy flags and returned-file flags use separate fields.
-`flags` must be zero; `fd_flags` accepts only `O_NONBLOCK`. Close-on-exec is
-unconditional and is not requested through either field.
+`flags` accepts `DRM_CASTKMS_GRANT_CREATE_ADMIN`; `fd_flags` accepts only
+`O_NONBLOCK`. Close-on-exec is unconditional and is not requested through
+either field.
 
 No creating file retains a lifetime association after the ioctl returns. The
 returned grant file owns the grant's lifetime.
@@ -93,7 +105,13 @@ synchronously. If the same master returns, or returns after an intervening
 master, the durable grant can become active again after it owns a safe
 composition. A compositor restart creates a new master identity and cannot
 revive the old grant. Every capture stream is canceled on master loss and must
-be created again.
+be created again, including streams held by administrative grants.
+
+An administrative grant follows the current master's safe content across
+handoffs rather than suspending merely because the master changes. It still
+cannot capture while there is no current master or while the output contains
+residual foreign content. Non-pixel administrative rights, such as attachment
+or EDID management, remain authorized during a handoff or masterless interval.
 
 Grant `fdinfo` reports the most recently reconciled state.
 

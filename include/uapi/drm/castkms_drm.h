@@ -55,10 +55,22 @@ extern "C" {
 	 DRM_CASTKMS_GRANT_MANAGE_CEC)
 
 /**
+ * DRM_CASTKMS_GRANT_CREATE_ADMIN:
+ *
+ * Create a master-independent administrative grant. This flag requires
+ * CAP_SYS_ADMIN in the initial user namespace. An administrative grant is not
+ * suspended merely because DRM master changes, but pixel capture still waits
+ * until the current master owns capture-safe content on the connector.
+ */
+#define DRM_CASTKMS_GRANT_CREATE_ADMIN		(1U << 0)
+
+#define DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK DRM_CASTKMS_GRANT_CREATE_ADMIN
+
+/**
  * struct drm_castkms_create_grant - create a connector-scoped capability fd
  * @connector_id: DRM object ID of a non-writeback CastKMS connector
  * @rights: nonzero mask of DRM_CASTKMS_GRANT_* rights
- * @flags: must be zero
+ * @flags: DRM_CASTKMS_GRANT_CREATE_* flags
  * @fd: output file descriptor carrying the grant
  * @grant_id: output device-unique grant identifier
  * @fd_flags: flags for the returned file; only O_NONBLOCK is accepted
@@ -66,10 +78,14 @@ extern "C" {
  * With no creation flags, this operation requires the device's current
  * top-level DRM owner master and creates a normal grant bound to it. A DRM
  * lease master cannot create such a grant.
+ * DRM_CASTKMS_GRANT_CREATE_ADMIN requires CAP_SYS_ADMIN in the initial user
+ * namespace and explicitly asks for master-independent administrative
+ * semantics.
  * The returned file has a fresh DRM namespace, is neither master nor
  * authenticated, and may be passed with SCM_RIGHTS. A normal grant is
  * suspended while another DRM master is current and revivifies when its bound
- * master returns and owns capture-safe connector content.
+ * master returns and owns capture-safe connector content. An administrative
+ * grant follows current safe content across master changes.
  * Closing the final holder reference permanently ends every grant. The
  * creating file has no association with the returned grant after this ioctl
  * completes. The kernel always creates @fd with close-on-exec set,
