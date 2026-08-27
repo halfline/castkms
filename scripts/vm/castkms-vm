@@ -93,6 +93,7 @@ Commands:
   desktop-test        Sync, load castkms, attach a monitor, and check Mutter
   shell       Open an interactive shell in the guest
   status      Show VM and guest-kernel status
+  desktop-status      Show desktop-instance status
   logs        Follow the guest serial console log
   stop        Ask the guest to power off, with a bounded fallback
   reset       Stop and archive the disposable instance, then create a fresh one
@@ -518,6 +519,10 @@ case "$command" in
 		ssh "${SSH_OPTIONS[@]}" "$SSH_USER@127.0.0.1"
 		;;
 	status) show_status ;;
+	desktop-status)
+		apply_desktop_defaults
+		show_status
+		;;
 	logs)
 		test -f "$SERIAL_LOG" || die "serial log not found: $SERIAL_LOG"
 		tail -f "$SERIAL_LOG"

@@ -155,3 +155,11 @@ appear.
 Results are copied to `~/.cache/castkms-vm/results/desktop/`. Connect a VNC
 client to port `5909` to inspect the running GNOME session after a successful
 test.
+
+Useful desktop lifecycle commands:
+
+```sh
+./scripts/vm/castkms-vm desktop-status
+./scripts/vm/castkms-vm desktop-start
+./scripts/vm/castkms-vm desktop-attach
+```
