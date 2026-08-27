@@ -4,6 +4,8 @@
 
 assembly src/castkms_device.h
 assembly src/castkms_drv.c
+assembly src/castkms_file.c
+assembly src/castkms_file.h
 assembly src/castkms_topology.c
 assembly src/castkms_topology.h
 
@@ -36,6 +38,10 @@ drm-runtime src/castkms_plane.c
 drm-runtime src/castkms_plane.h
 drm-runtime src/castkms_writeback.c
 drm-runtime src/castkms_writeback.h
+
+grant-uapi src/castkms_grant_file.c
+grant-uapi src/castkms_grant_file.h
+grant-uapi src/castkms_uapi_device.h
 
 render-core src/castkms_colorop.c
 render-core src/castkms_colorop.h

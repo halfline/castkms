@@ -15,6 +15,7 @@
 #include <linux/dma-mapping.h>
 
 #include <drm/clients/drm_client_setup.h>
+#include <drm/drm_auth.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
@@ -36,7 +37,9 @@
 #include "castkms_configfs.h"
 #include "castkms_crc.h"
 #include "castkms_drv.h"
+#include "castkms_file.h"
 #include "castkms_framebuffer.h"
+#include "castkms_uapi_device.h"
 
 #define DRIVER_NAME	"castkms"
 #define DRIVER_DESC	"CASTKMS virtual display capture"
@@ -69,7 +72,21 @@ static bool create_default_dev = true;
 module_param_named(create_default_dev, create_default_dev, bool, 0444);
 MODULE_PARM_DESC(create_default_dev, "Create or not the default CASTKMS device");
 
-DEFINE_DRM_GEM_FOPS(castkms_driver_fops);
+static const struct file_operations castkms_driver_fops = {
+	.owner = THIS_MODULE,
+	.open = drm_open,
+	.release = castkms_file_release,
+	.unlocked_ioctl = drm_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = drm_compat_ioctl,
+#endif
+	.poll = drm_poll,
+	.read = drm_read,
+	.llseek = noop_llseek,
+	.get_unmapped_area = drm_gem_get_unmapped_area,
+	.mmap = drm_gem_mmap,
+	.fop_flags = FOP_UNSIGNED_OFFSET,
+};
 
 bool castkms_crc_enabled(void)
 {
@@ -107,6 +124,8 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 
 static const struct drm_driver castkms_driver = {
 	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM,
+	.open			= castkms_file_open,
+	.postclose		= castkms_file_postclose,
 	.master_set		= castkms_capture_owner_master_set,
 	.master_drop		= castkms_capture_owner_master_drop,
 	.fops			= &castkms_driver_fops,
@@ -184,6 +203,7 @@ int castkms_create(struct castkms_config *config)
 	int ret;
 	struct faux_device *fdev;
 	struct castkms_device *castkms_device;
+	struct castkms_uapi_device *uapi_device;
 	const char *dev_name;
 
 	if (config->dev)
@@ -199,12 +219,13 @@ int castkms_create(struct castkms_config *config)
 		goto out_unregister;
 	}
 
-	castkms_device = devm_drm_dev_alloc(&fdev->dev, &castkms_driver,
-					 struct castkms_device, drm);
-	if (IS_ERR(castkms_device)) {
-		ret = PTR_ERR(castkms_device);
+	uapi_device = devm_drm_dev_alloc(&fdev->dev, &castkms_driver,
+					 struct castkms_uapi_device, core.drm);
+	if (IS_ERR(uapi_device)) {
+		ret = PTR_ERR(uapi_device);
 		goto out_devres;
 	}
+	castkms_device = &uapi_device->core;
 	castkms_device->faux_dev = fdev;
 	castkms_device->config = config;
 	config->dev = castkms_device;
