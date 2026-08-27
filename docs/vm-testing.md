@@ -80,6 +80,10 @@ CASTKMS_VM_SSH_PORT=22223 \
 directory's `archive/` folder before creating a fresh overlay. The downloaded
 base image and SSH key are retained.
 
+On a host that can load the modules, `make kunit` builds the test module
+directly.
+
+
 ## Graphical testing
 
 The VM includes a virtio VGA device. Set `CASTKMS_VM_VNC_DISPLAY` before
