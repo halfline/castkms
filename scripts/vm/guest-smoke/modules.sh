@@ -7,5 +7,7 @@ _smoke_module_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 # shellcheck source=common.sh
 . "$_smoke_module_dir/common.sh"
+# shellcheck source=configfs.sh
+. "$_smoke_module_dir/configfs.sh"
 
 unset _smoke_module_dir

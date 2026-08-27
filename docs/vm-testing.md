@@ -120,12 +120,26 @@ directly.
 `test` performs module identification and teardown before running the selected
 product work.
 
+The product work is selectable:
+
+```sh
+CASTKMS_VM_SCENARIO=configfs ./scripts/vm/castkms-vm test
+```
+
+The available scenario is `configfs`. The default `all` runs it.
+
 The guest harness keeps lifecycle setup and the single failure-safe cleanup
 trap in `guest-smoke-test.sh`. Its product scenarios live in
 `scripts/vm/guest-smoke/`, with an explicit ordered registry in `common.sh`.
 `make check-smoke-modules` checks the registry and source layout without
 starting the VM; the module contract is documented in that directory's
 `README.md`.
+
+**configfs** loads stock `vkms` and `castkms` together with no default
+devices, checks that their configfs roots stay independent, and creates a
+device through configfs. It also confirms that removing a topology disables
+and unplugs the device before its configuration is detached, even when ioctl
+and debugfs calls fail on file descriptors left open across the removal.
 
 
 ## Graphical testing

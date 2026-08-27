@@ -5,8 +5,10 @@
 # shellcheck disable=SC2154
 
 declare -ar smoke_scenario_names=(
+	configfs
 )
 declare -Ar smoke_scenario_handlers=(
+	[configfs]=run_configfs_scenario
 )
 
 smoke_validate_scenario()
@@ -38,6 +40,10 @@ smoke_validate_registry()
 	if test "${#smoke_scenario_names[@]}" -ne \
 		"${#smoke_scenario_handlers[@]}"; then
 		printf '%s\n' 'smoke scenario registry has mismatched names and handlers' >&2
+		return 1
+	fi
+	if test "${#smoke_scenario_names[@]}" -eq 0; then
+		printf '%s\n' 'smoke scenario registry is empty' >&2
 		return 1
 	fi
 
