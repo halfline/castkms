@@ -11,8 +11,8 @@ overlay, a dedicated local SSH key, QEMU user networking, and the Fedora
 enforce Secure Boot module signatures, which is what lets it load the
 unsigned module. Userspace packages are resolved from the Fedora repositories
 when an overlay is provisioned; every run records the exact installed NEVRAs
-in `guest-packages.txt`, plus the smaller desktop package manifest when
-applicable.
+in `guest-packages.txt`, plus the smaller toolchain and desktop package
+manifests when applicable.
 
 ## Quick start
 
