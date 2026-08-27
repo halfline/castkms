@@ -76,6 +76,20 @@ CASTKMS_VM_SSH_PORT=22223 \
 ./scripts/vm/castkms-vm provision
 ```
 
+Tests that need discovery from a host network can add a second guest NIC while
+retaining the user-network NIC used for SSH:
+
+```sh
+CASTKMS_VM_LAN_BRIDGE=virbr0 ./scripts/vm/castkms-vm start
+```
+
+The named host bridge must already exist and be allowed by QEMU's bridge-helper
+policy. On a Wi-Fi host, use a routed or NATed bridge and reflect only the
+required multicast-DNS services between that bridge and the Wi-Fi interface;
+an ordinary Linux bridge cannot transparently carry a guest's second MAC over
+most station-mode Wi-Fi connections. This option is deliberately opt-in so
+kernel-only VM runs keep their isolated user network.
+
 `reset` stops the guest and moves its instance directory into the state
 directory's `archive/` folder before creating a fresh overlay. The downloaded
 base image and SSH key are retained.

@@ -63,6 +63,8 @@ Environment:
   CASTKMS_VM_MEMORY_MB       Guest memory in MiB (default: 4096)
   CASTKMS_VM_CPUS            Guest vCPU count (default: 4)
   CASTKMS_VM_VNC_DISPLAY     Optional localhost VNC display number
+  CASTKMS_VM_LAN_BRIDGE      Optional host bridge for a second guest NIC;
+                             the user-network SSH NIC remains available
 EOF
 }
 
@@ -146,8 +148,8 @@ prepare()
 
 start()
 {
-	local -a display_args
-	local memory_mb cpus vnc_display
+	local -a display_args network_args
+	local memory_mb cpus vnc_display lan_bridge
 
 	if vm_running; then
 		printf 'VM %s is already running (pid %s)\n' "$INSTANCE_NAME" "$(vm_pid)"
@@ -160,9 +162,22 @@ start()
 	memory_mb=${CASTKMS_VM_MEMORY_MB:-4096}
 	cpus=${CASTKMS_VM_CPUS:-4}
 	vnc_display=${CASTKMS_VM_VNC_DISPLAY:-}
+	lan_bridge=${CASTKMS_VM_LAN_BRIDGE:-}
 	display_args=(-display none)
 	if test -n "$vnc_display"; then
 		display_args+=(-vnc "127.0.0.1:$vnc_display")
+	fi
+	network_args=(
+		-device virtio-net-pci,netdev=net0
+		-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+	)
+	if test -n "$lan_bridge"; then
+		test -d "/sys/class/net/$lan_bridge" || \
+			die "host bridge does not exist: $lan_bridge"
+		network_args+=(
+			-device virtio-net-pci,netdev=lan0
+			-netdev "bridge,id=lan0,br=$lan_bridge"
+		)
 	fi
 
 	: > "$SERIAL_LOG"
@@ -176,8 +191,7 @@ start()
 		-m "$memory_mb" \
 		-drive "if=virtio,format=qcow2,file=$DISK_IMAGE,discard=unmap" \
 		-drive "if=virtio,format=raw,readonly=on,file=$SEED_ISO" \
-		-device virtio-net-pci,netdev=net0 \
-		-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" \
+		"${network_args[@]}" \
 		-vga virtio \
 		-serial "file:$SERIAL_LOG" \
 		"${display_args[@]}" \
@@ -187,6 +201,10 @@ start()
 
 	printf 'Started VM %s (pid %s, SSH port %s)\n' \
 		"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT"
+	if test -n "$lan_bridge"; then
+		printf 'Attached VM %s LAN NIC to host bridge %s\n' \
+			"$INSTANCE_NAME" "$lan_bridge"
+	fi
 }
 
 wait_for_ssh()
