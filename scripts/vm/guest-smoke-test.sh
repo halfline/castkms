@@ -235,7 +235,7 @@ sudo timeout --signal=TERM --kill-after=2s 15s \
 	"$lifetime_drm" "$lifetime_debugfs/castkms_config" \
 	<&7 > "$result_dir/configfs-open-fd.txt" 2>&1 &
 unplug_helper_pid=$!
-for attempt in $(seq 1 50); do
+for _ in $(seq 1 50); do
 	if grep -Fx 'ready=castkms' "$result_dir/configfs-open-fd.txt" \
 			>/dev/null; then
 		break
@@ -357,7 +357,7 @@ sudo timeout --signal=TERM --kill-after=2s 45s \
 	<&8 > "$result_dir/mode-holder.txt" 2>&1 &
 mode_holder_pid=$!
 mode_active=0
-for attempt in $(seq 1 50); do
+for _ in $(seq 1 50); do
 	if ! kill -0 "$mode_holder_pid" 2>/dev/null; then
 		cat "$result_dir/mode-holder.txt" >&2
 		exit 1
@@ -390,7 +390,7 @@ crc_pid=$CRC_CAPTURE_PID
 crc_fd=${CRC_CAPTURE[0]}
 : > "$result_dir/crc.txt"
 : > "$result_dir/crc-writeback.txt"
-for sample in 1 2 3; do
+for _ in 1 2 3; do
 	append_crc_record "$result_dir/crc.txt" baseline
 done
 printf '%s\n' 'composer_crc=pass' | tee -a "$result_dir/summary.txt"
@@ -417,7 +417,7 @@ while test "$drained" -lt 1024; do
 	drained=$((drained + 1))
 done
 test "$drained" -lt 1024
-for sample in 1 2 3; do
+for _ in 1 2 3; do
 	append_crc_record "$result_dir/crc-writeback.txt" \
 		'post-writeback cleanup'
 done
