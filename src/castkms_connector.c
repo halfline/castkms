@@ -10,6 +10,7 @@
 
 #include <kunit/visibility.h>
 
+#include "castkms_audio.h"
 #include "castkms_capture_authority.h"
 #include "castkms_config.h"
 #include "castkms_connector.h"
@@ -247,6 +248,8 @@ int castkms_connector_attach_monitor(
 			connector, connector_status_disconnected);
 	}
 
+	if (!ret)
+		castkms_audio_notify_eld(castkmsdev, connector);
 	return ret;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_connector_attach_monitor);
@@ -280,6 +283,8 @@ int castkms_connector_detach_monitor(
 	WRITE_ONCE(castkms_connector->monitor_attached, false);
 	castkms_connector->attachment_authority = NULL;
 	mutex_unlock(&castkmsdev->attach_lock);
+
+	castkms_audio_notify_disconnect(castkmsdev, connector);
 
 	castkms_connector_set_status(connector,
 				     connector_status_disconnected);
@@ -344,7 +349,11 @@ int castkms_connector_update_authority_edid(
 	if (ret)
 		return ret;
 
-	return castkms_connector_publish_edid(connector, drm_edid);
+	ret = castkms_connector_publish_edid(connector, drm_edid);
+	if (!ret)
+		castkms_audio_notify_eld(castkmsdev, connector);
+
+	return ret;
 }
 
 bool castkms_connector_detach_authority(
