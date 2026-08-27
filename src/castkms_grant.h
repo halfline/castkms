@@ -35,7 +35,8 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file);
 #if IS_ENABLED(CONFIG_KUNIT)
 bool castkms_grant_master_is_owner(const struct drm_master *master);
 int castkms_grant_creation_status(
-	u32 flags, bool privileged, bool caller_owner_master);
+	u32 flags, bool privileged, bool caller_current_master,
+	bool caller_owner_master, bool current_owner_master);
 #endif
 
 #endif /* _CASTKMS_GRANT_H_ */

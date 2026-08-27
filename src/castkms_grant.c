@@ -56,6 +56,8 @@ castkms_grant_registry(struct drm_device *dev)
  * @id: Device-unique UAPI grant ID
  * @reported_state: Latest state reported through the grant fd
  * @holder_file: Fresh DRM file carrying this grant, valid through cleanup
+ * @delegated: Grant is holder-lived and bound to a master selected by an
+ * administrator
  *
  * Capture streams, connector attachments, and CEC transports retain only
  * @authority.  This wrapper translates file descriptors and IDs
@@ -66,6 +68,7 @@ struct castkms_capture_grant {
 	struct mutex lock; /* Protects UAPI associations and reported state. */
 	u32 id;
 	enum castkms_capture_authority_state reported_state;
+	bool delegated;
 	struct drm_file *holder_file;
 };
 
@@ -150,14 +153,25 @@ castkms_grant_master_is_owner(const struct drm_master *master)
 EXPORT_SYMBOL_IF_KUNIT(castkms_grant_master_is_owner);
 
 VISIBLE_IF_KUNIT int castkms_grant_creation_status(
-	u32 flags, bool privileged, bool caller_owner_master)
+	u32 flags, bool privileged, bool caller_current_master,
+	bool caller_owner_master, bool current_owner_master)
 {
 	bool administrative = flags & DRM_CASTKMS_GRANT_CREATE_ADMIN;
+	bool delegated = flags & DRM_CASTKMS_GRANT_CREATE_DELEGATED;
 
 	if (flags & ~DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK)
 		return -EINVAL;
+	if (administrative && delegated)
+		return -EINVAL;
 	if (administrative)
 		return privileged ? 0 : -EACCES;
+	if (delegated) {
+		if (!privileged)
+			return -EACCES;
+		if (caller_current_master || !current_owner_master)
+			return -EAGAIN;
+		return 0;
+	}
 
 	return caller_owner_master ? 0 : -EACCES;
 }
@@ -168,19 +182,28 @@ static int castkms_grant_select_master(
 	bool privileged, struct drm_master **bound_master_out)
 {
 	struct drm_master *bound_master = NULL;
+	bool caller_current_master;
 	bool caller_owner_master;
+	bool current_owner_master;
 	int ret;
 
 	*bound_master_out = NULL;
 	mutex_lock(&dev->master_mutex);
-	caller_owner_master = drm_is_current_master(file_priv) &&
-		file_priv->master &&
+	caller_current_master = drm_is_current_master(file_priv);
+	caller_owner_master = caller_current_master && file_priv->master &&
 		castkms_grant_master_is_owner(file_priv->master) &&
 		dev->master == file_priv->master;
-	ret = castkms_grant_creation_status(flags, privileged,
-					    caller_owner_master);
-	if (!ret && !(flags & DRM_CASTKMS_GRANT_CREATE_ADMIN))
-		bound_master = drm_master_get(file_priv->master);
+	current_owner_master =
+		castkms_grant_master_is_owner(dev->master);
+	ret = castkms_grant_creation_status(
+		flags, privileged, caller_current_master, caller_owner_master,
+		current_owner_master);
+	if (!ret && !(flags & DRM_CASTKMS_GRANT_CREATE_ADMIN)) {
+		if (flags & DRM_CASTKMS_GRANT_CREATE_DELEGATED)
+			bound_master = drm_master_get(dev->master);
+		else
+			bound_master = drm_master_get(file_priv->master);
+	}
 	mutex_unlock(&dev->master_mutex);
 
 	*bound_master_out = bound_master;
@@ -276,6 +299,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	struct file *grant_file = NULL;
 	bool holder_ref = false;
 	bool administrative;
+	bool delegated;
 	bool privileged;
 	int fd = -1;
 	int ret;
@@ -297,6 +321,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	if (ret)
 		return ret;
 	administrative = args->flags & DRM_CASTKMS_GRANT_CREATE_ADMIN;
+	delegated = args->flags & DRM_CASTKMS_GRANT_CREATE_DELEGATED;
 
 	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
 	if (!connector) {
@@ -314,6 +339,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 		goto out_put_connector;
 	}
 	mutex_init(&grant->lock);
+	grant->delegated = delegated;
 	authority = castkms_capture_authority_create(
 		core_device, connector, bound_master,
 		castkms_grant_rights_from_uapi(args->rights),
@@ -468,6 +494,7 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 	u32 grant_id;
 	u32 rights;
 	bool administrative;
+	bool delegated;
 	bool attached = false;
 
 	if (!grant)
@@ -481,6 +508,7 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 		castkms_capture_authority_rights(authority));
 	administrative =
 		castkms_capture_authority_is_administrative(authority);
+	delegated = grant->delegated;
 	state = castkms_capture_authority_is_revoked(authority) ?
 		CASTKMS_CAPTURE_AUTHORITY_REVOKED : grant->reported_state;
 	mutex_unlock(&grant->lock);
@@ -503,6 +531,8 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 	drm_printf(p, "castkms-grant-rights:\t0x%x\n", rights);
 	drm_printf(p, "castkms-grant-administrative:\t%s\n",
 		   administrative ? "yes" : "no");
+	drm_printf(p, "castkms-grant-delegated:\t%s\n",
+		   delegated ? "yes" : "no");
 	drm_printf(p, "castkms-grant-state:\t%s\n", state_name);
 	drm_printf(p, "castkms-grant-attached:\t%s\n",
 		   attached ? "yes" : "no");

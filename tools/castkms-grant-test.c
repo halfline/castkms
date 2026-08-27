@@ -85,6 +85,31 @@ static int create_grant(int issuer_fd, uint32_t connector_id, uint32_t rights,
 	return 0;
 }
 
+static int expect_create_grant_errno(int issuer_fd, uint32_t connector_id,
+				     uint32_t flags, int expected,
+				     const char *operation)
+{
+	struct drm_castkms_create_grant create = {
+		.connector_id = connector_id,
+		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+		.flags = flags,
+	};
+
+	if (ioctl(issuer_fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create) == 0) {
+		fprintf(stderr, "%s unexpectedly succeeded\n", operation);
+		if (create.fd >= 0)
+			close(create.fd);
+		return -1;
+	}
+	if (errno != expected) {
+		fprintf(stderr, "%s returned %s, expected %s\n", operation,
+			strerror(errno), strerror(expected));
+		return -1;
+	}
+
+	return 0;
+}
+
 static int create_test_framebuffer(int fd, uint32_t width, uint32_t height,
 				   struct castkms_test_framebuffer *buffer)
 {
@@ -287,6 +312,15 @@ static int expect_create_flag_namespaces(int fd, uint32_t connector_id)
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
 			       EINVAL, "CREATE_GRANT open flag in grant flags"))
 		return -1;
+	create = (struct drm_castkms_create_grant) {
+		.connector_id = connector_id,
+		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+		.flags = DRM_CASTKMS_GRANT_CREATE_ADMIN |
+			 DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+	};
+	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
+			       EINVAL, "CREATE_GRANT conflicting grant flags"))
+		return -1;
 
 	create = (struct drm_castkms_create_grant) {
 		.connector_id = connector_id,
@@ -312,12 +346,15 @@ int main(int argc, char **argv)
 	struct test_display display = {};
 	uint32_t masterless_admin_id = 0;
 	uint32_t issuer_close_id = 0;
+	uint32_t delegated_id = 0;
 	uint32_t master_b_grant_id = 0;
 	uint32_t normal_id = 0;
 	uint32_t admin_id = 0;
 	uint32_t connector_id;
 	int masterless_admin_fd = -1;
 	int issuer_close_holder = -1;
+	int delegated_creator = -1;
+	int delegated_fd = -1;
 	int master_b_grant_fd = -1;
 	int admin_fd = -1;
 	int normal_fd = -1;
@@ -365,6 +402,41 @@ int main(int argc, char **argv)
 	printf("grant_scm_rights=pass\n");
 	if (setup_display(issuer, connector_id, &display))
 		goto out;
+	delegated_creator = open(argv[1], O_RDWR | O_CLOEXEC);
+	if (delegated_creator < 0) {
+		perror("open delegated grant creator");
+		goto out;
+	}
+	if (expect_create_grant_errno(
+		    delegated_creator, connector_id, 0, EACCES,
+		    "privileged non-master CREATE_GRANT without DELEGATED") ||
+	    expect_create_grant_errno(
+		    issuer, connector_id, DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+		    EAGAIN, "current master CREATE_GRANT with DELEGATED") ||
+	    create_grant(delegated_creator, connector_id,
+			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+			 DRM_CASTKMS_GRANT_READ_CURSOR,
+			 DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+			 &delegated_fd, &delegated_id))
+		goto out;
+	close(delegated_creator);
+	delegated_creator = -1;
+	if (expect_holder_cannot_create_grant(delegated_fd, connector_id) ||
+	    expect_holder_cannot_become_master(delegated_fd))
+		goto out;
+	printf("grant_delegated_creator_close=pass\n");
+	if (ioctl(issuer, DRM_IOCTL_DROP_MASTER, 0) < 0) {
+		perror("issuer DRM_IOCTL_DROP_MASTER for delegated grant");
+		goto out;
+	}
+	if (expect_create_grant_errno(
+		    issuer, connector_id, DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+		    EAGAIN, "masterless CREATE_GRANT with DELEGATED"))
+		goto out;
+	if (ioctl(issuer, DRM_IOCTL_SET_MASTER, 0) < 0) {
+		perror("issuer DRM_IOCTL_SET_MASTER after delegated grant");
+		goto out;
+	}
 	if (create_grant(issuer, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
 			 DRM_CASTKMS_GRANT_READ_CURSOR,
@@ -415,6 +487,8 @@ int main(int argc, char **argv)
 	if (set_display_framebuffer(issuer, connector_id, &display,
 				    &display.source))
 		goto out;
+	close(delegated_fd);
+	delegated_fd = -1;
 
 	close(normal_fd);
 	normal_fd = -1;
@@ -449,6 +523,10 @@ out:
 		close(masterless_admin_fd);
 	if (issuer_close_holder >= 0)
 		close(issuer_close_holder);
+	if (delegated_creator >= 0)
+		close(delegated_creator);
+	if (delegated_fd >= 0)
+		close(delegated_fd);
 	if (master_b_grant_fd >= 0)
 		close(master_b_grant_fd);
 	if (master_b >= 0)

@@ -147,22 +147,53 @@ static void castkms_grant_rejects_lease_master(struct kunit *test)
 static void castkms_grant_creation_policy(struct kunit *test)
 {
 	KUNIT_EXPECT_EQ(test,
-		castkms_grant_creation_status(0, false, true),
+		castkms_grant_creation_status(0, false, true, true, true),
 		0);
 	KUNIT_EXPECT_EQ(test,
-		castkms_grant_creation_status(0, true, false),
+		castkms_grant_creation_status(0, true, false, false, true),
+		-EACCES);
+	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(0, true, true, false, true),
 		-EACCES);
 
 	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(
+			DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+			true, false, false, true),
+		0);
+	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(
+			DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+			false, false, false, true),
+		-EACCES);
+	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(
+			DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+			true, true, true, true),
+		-EAGAIN);
+	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(
+			DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+			true, false, false, false),
+		-EAGAIN);
+
+	KUNIT_EXPECT_EQ(test,
 		castkms_grant_creation_status(DRM_CASTKMS_GRANT_CREATE_ADMIN,
-					      true, false),
+					      true, false, false, false),
 		0);
 	KUNIT_EXPECT_EQ(test,
 		castkms_grant_creation_status(DRM_CASTKMS_GRANT_CREATE_ADMIN,
-					      false, false),
+					      false, false, false, true),
 		-EACCES);
 	KUNIT_EXPECT_EQ(test,
-		castkms_grant_creation_status(BIT(31), true, false),
+		castkms_grant_creation_status(
+			DRM_CASTKMS_GRANT_CREATE_ADMIN |
+			DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+			true, false, false, true),
+		-EINVAL);
+	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(BIT(31), true, false, false,
+					      true),
 		-EINVAL);
 }
 

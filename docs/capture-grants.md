@@ -34,24 +34,37 @@ the compositor.
 - Writing a compositor that owns the output? Create a **normal** grant. No
   root helper is required. The grant remains bound to that compositor's DRM
   master identity.
+- Writing a one-shot root helper that should outlive the helper but die with
+  that compositor? Create a **delegated** grant. The helper can exit; the
+  grant stays bound to the current compositor's master identity.
 - Writing a lab or diagnostic tool that should follow whichever compositor is
   current? Create an **administrative** grant.
 
-`DRM_IOCTL_CASTKMS_CREATE_GRANT` encodes those forms as follows. A privileged
-caller that is not the current master, and passes no flag, is denied, rather
-than silently being handed an administrative grant that follows whichever
-compositor is current. Host root here means `CAP_SYS_ADMIN` in the initial user
-namespace (true host root, not a container).
+`DRM_IOCTL_CASTKMS_CREATE_GRANT` encodes those forms as follows. The two
+creation flags are mutually exclusive. A privileged caller that is not the
+current master, and passes no flag, is denied, rather than silently being
+handed an administrative grant that follows whichever compositor is current.
+Host root here means `CAP_SYS_ADMIN` in the initial user namespace (true host
+root, not a container).
 
 | Creation flags | Required caller | Master binding | Creator-file close |
 |---|---|---|---|
 | none | Current top-level DRM owner master | Caller's `drm_master` | No effect |
+| `CREATE_DELEGATED` | Host root, not current master | Current top-level owner master | No effect |
 | `CREATE_ADMIN` | Host root | None; follows current safe owner | No effect |
+
+Delegated creation returns `-EAGAIN` if there is no current owner master or
+the caller is itself current. Opening a masterless card implicitly makes the
+opener master, so a helper must not bind a grant to that accidental identity.
 
 A DRM **lease** master is a client given only a subset of the card's
 resources. It cannot create a normal grant, even for a connector included in
 its lease. Capture-safe content ownership is device-global, so a nested lease
 grant would promise authority the driver cannot represent.
+
+A delegated grant retains a reference to that exact `drm_master`. It cannot
+activate for a later login session or a restarted compositor with a new
+master identity.
 
 An administrative grant follows safe content across compositor handoffs. Root
 may create it while the device is masterless; the grant is then dormant until
@@ -60,9 +73,9 @@ masterless card makes the opener master, an administrative helper must drop
 that accidental master immediately.
 
 Grant-creation policy flags and returned-file flags use separate fields.
-`flags` accepts `DRM_CASTKMS_GRANT_CREATE_ADMIN`; `fd_flags` accepts only
-`O_NONBLOCK`. Close-on-exec is unconditional and is not requested through
-either field.
+`flags` accepts either `DRM_CASTKMS_GRANT_CREATE_DELEGATED` or
+`DRM_CASTKMS_GRANT_CREATE_ADMIN`; `fd_flags` accepts only `O_NONBLOCK`.
+Close-on-exec is unconditional and is not requested through either field.
 
 No creating file retains a lifetime association after the ioctl returns. The
 returned grant file owns the grant's lifetime.
@@ -99,13 +112,13 @@ Permanent validity and temporary pixel activation are separate.
 A grant remains valid until final holder-file close or connector/device
 teardown or unplug. Closing its creating file does not affect that lifetime.
 
-For a normal grant, pixel capture is usable only when its bound `drm_master` is
-current and owns safe content on the authorized connector. A drop suspends it
-synchronously. If the same master returns, or returns after an intervening
-master, the durable grant can become active again after it owns a safe
-composition. A compositor restart creates a new master identity and cannot
-revive the old grant. Every capture stream is canceled on master loss and must
-be created again, including streams held by administrative grants.
+For a normal or delegated grant, pixel capture is usable only when its bound
+`drm_master` is current and owns safe content on the authorized connector. A
+drop suspends it synchronously. If the same master returns, or returns after an
+intervening master, the durable grant can become active again after it owns a
+safe composition. A compositor restart creates a new master identity and
+cannot revive the old grant. Every capture stream is canceled on master loss
+and must be created again, including streams held by administrative grants.
 
 An administrative grant follows the current master's safe content across
 handoffs rather than suspending merely because the master changes. It still

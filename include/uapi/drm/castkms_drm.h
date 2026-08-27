@@ -64,7 +64,19 @@ extern "C" {
  */
 #define DRM_CASTKMS_GRANT_CREATE_ADMIN		(1U << 0)
 
-#define DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK DRM_CASTKMS_GRANT_CREATE_ADMIN
+/**
+ * DRM_CASTKMS_GRANT_CREATE_DELEGATED:
+ *
+ * Create a holder-lived normal grant bound to the device's current top-level
+ * DRM owner master. This flag requires CAP_SYS_ADMIN in the initial user
+ * namespace and cannot be combined with DRM_CASTKMS_GRANT_CREATE_ADMIN. The
+ * caller must not itself be a current DRM master.
+ */
+#define DRM_CASTKMS_GRANT_CREATE_DELEGATED	(1U << 1)
+
+#define DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK \
+	(DRM_CASTKMS_GRANT_CREATE_ADMIN | \
+	 DRM_CASTKMS_GRANT_CREATE_DELEGATED)
 
 /**
  * struct drm_castkms_create_grant - create a connector-scoped capability fd
@@ -78,14 +90,17 @@ extern "C" {
  * With no creation flags, this operation requires the device's current
  * top-level DRM owner master and creates a normal grant bound to it. A DRM
  * lease master cannot create such a grant.
- * DRM_CASTKMS_GRANT_CREATE_ADMIN requires CAP_SYS_ADMIN in the initial user
- * namespace and explicitly asks for master-independent administrative
- * semantics.
+ * DRM_CASTKMS_GRANT_CREATE_DELEGATED requires CAP_SYS_ADMIN in the initial
+ * user namespace and creates a holder-lived normal grant bound to the current
+ * owner master; it returns -EAGAIN when the caller is current or no owner
+ * master exists. DRM_CASTKMS_GRANT_CREATE_ADMIN requires the same capability
+ * and explicitly asks for master-independent administrative semantics. The
+ * two creation flags are mutually exclusive.
  * The returned file has a fresh DRM namespace, is neither master nor
- * authenticated, and may be passed with SCM_RIGHTS. A normal grant is
- * suspended while another DRM master is current and revivifies when its bound
- * master returns and owns capture-safe connector content. An administrative
- * grant follows current safe content across master changes.
+ * authenticated, and may be passed with SCM_RIGHTS. A normal or delegated
+ * grant is suspended while another DRM master is current and revivifies when
+ * its bound master returns and owns capture-safe connector content. An
+ * administrative grant follows current safe content across master changes.
  * Closing the final holder reference permanently ends every grant. The
  * creating file has no association with the returned grant after this ioctl
  * completes. The kernel always creates @fd with close-on-exec set,
