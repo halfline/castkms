@@ -30,7 +30,8 @@ into that kernel. Re-running it is safe and idempotent.
 
 `test` mirrors the current working tree into the guest and then:
 
-1. builds `castkms.ko` and the four-suite KUnit module with `W=1`;
+1. runs the warning-enabled build matrix, all nine KUnit suites, the live
+   grant gate, and the userspace protocol and PipeWire tool builds;
 2. verifies both modules' names, vermagic, dependencies, legacy strings, and
    exported symbols;
 3. loads stock `vkms` and `castkms` together without default devices;
@@ -47,13 +48,35 @@ into that kernel. Re-running it is safe and idempotent.
 9. records `modetest`, `drm_info`, CRC, writeback, and lifecycle output;
 10. unloads every module it loaded and verifies cleanup.
 
-`kunit-test` rebuilds all four audio/CEC inclusion combinations, builds the
-KUnit module with `W=1`, loads the Fedora KUnit support and CastKMS modules,
-and requires all nine CastKMS suites to pass. It also rejects kernel warnings
-and diagnostics, unloads both project modules, and copies its build log,
-kernel log, provenance, package manifests, and summary into the default result
-directory. The standalone `make kunit` target remains available for build-only
-coverage on a host that cannot load the modules.
+`kunit-test` builds the kernel-options-disabled fallback and all four
+audio/CEC inclusion combinations, builds the KUnit module with `W=1`, loads
+the Fedora KUnit support and CastKMS modules, and requires all nine CastKMS
+suites to pass. It then loads a normal two-output device and runs the live
+grant-fd lifecycle gate, including cross-connector isolation. It rejects
+kernel diagnostics from both phases, unloads the project modules, and copies
+its build log, kernel logs, provenance, package manifests, and summary into
+the default result directory. The standalone `make kunit` target remains
+available for build-only coverage on a host that cannot load the modules.
+
+The broader `test` command runs that fast gate first, archives its results
+under `fast-gate/`, reuses its kernel build, then builds the userspace
+protocol and PipeWire tools and runs the product scenarios. Setting
+`CASTKMS_VM_FAST_GATE=skip` skips the fast preflight and performs one
+warning-enabled production build instead. The CI product job uses that mode
+because the workflow has a separate fast lane for the matrix, KUnit, and
+grant checks.
+
+## Continuous integration
+
+The VM workflow runs on every pull request and push to `main`, and it can be
+dispatched manually. It has three independent lanes:
+
+- **Userspace / protocol and entrypoints**: `make check` on the host,
+  including the EDID suite and every available CLI entrypoint.
+- **Fast / KUnit and grant security**:
+  `./scripts/vm/castkms-vm kunit-test`.
+- **Product / full capture stack**:
+  `CASTKMS_VM_FAST_GATE=skip ./scripts/vm/castkms-vm test`.
 
 Results are copied to:
 
