@@ -119,4 +119,25 @@ struct castkms_color_lut {
 	s64 channel_value2index_ratio;
 };
 
+/**
+ * struct castkms_frame_stage - Complete renderer input for one frame
+ * @planes: Render planes in normalized z-order
+ * @num_planes: Number of entries in @planes
+ * @gamma_lut: Gamma look-up table applied after plane blending
+ * @width: Output width in pixels
+ * @height: Output height in pixels
+ * @background_color: Background fill color
+ *
+ * A frame stage contains no DRM atomic state. Live commits and owned capture
+ * snapshots both produce it, and the renderer consumes only this interface.
+ */
+struct castkms_frame_stage {
+	struct castkms_frame_plane **planes;
+	size_t num_planes;
+	struct castkms_color_lut gamma_lut;
+	u32 width;
+	u32 height;
+	u64 background_color;
+};
+
 #endif /* _CASTKMS_FRAME_H_ */
