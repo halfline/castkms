@@ -11,6 +11,7 @@
 
 #include <kunit/visibility.h>
 
+#include "castkms_capture.h"
 #include "castkms_capture_owner.h"
 #include "castkms_composer.h"
 #include "castkms_crc.h"
@@ -22,8 +23,8 @@
  * castkms_frame_dispatch_worker - service pending frame consumers
  * @work: CRTC-state work item
  *
- * Coordinates writeback and CRC consumers around the immutable frame stage
- * produced by atomic check. Pixel rendering itself remains in
+ * Coordinates capture, writeback, and CRC consumers around the immutable
+ * frame stage produced by atomic check. Pixel rendering itself remains in
  * castkms_composer.c.
  */
 void castkms_frame_dispatch_worker(struct work_struct *work)
@@ -32,9 +33,11 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 		work, struct castkms_crtc_state, dispatch_work);
 	struct drm_crtc *crtc = crtc_state->base.crtc;
 	struct castkms_output_buffer *active_wb;
+	struct castkms_capture_buffer *active_capture;
+	const struct castkms_output_buffer *capture_dest = NULL;
 	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
 	const struct castkms_frame_stage *frame = &crtc_state->frame;
-	bool crc_pending, wb_pending;
+	bool crc_pending, wb_pending, capture_pending;
 	u64 frame_start, frame_end;
 	u32 crc32 = 0;
 	int ret = 0;
@@ -44,26 +47,49 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 	frame_end = crtc_state->frame_end;
 	crc_pending = crtc_state->crc_pending;
 	wb_pending = crtc_state->wb_pending;
+	capture_pending = crtc_state->capture_pending;
 	active_wb = crtc_state->active_writeback;
+	active_capture = crtc_state->active_capture;
 	crtc_state->frame_start = 0;
 	crtc_state->frame_end = 0;
 	/*
 	 * crc_pending is cleared eagerly so the vblank timer can detect a slow
-	 * worker and accumulate frame_start/frame_end. The writeback flag also
-	 * guards its destination pointer, so it clears after rendering.
+	 * worker and accumulate frame_start/frame_end. Capture and writeback
+	 * flags also guard destination pointers, so they clear after rendering.
 	 */
 	crtc_state->crc_pending = false;
 	spin_unlock_irq(&out->dispatch_lock);
 
-	if (!crc_pending && !wb_pending)
+	if (!crc_pending && !wb_pending && !capture_pending)
 		return;
+
+	if (capture_pending) {
+		if (WARN_ON(!active_capture))
+			ret = -EINVAL;
+		else
+			capture_dest =
+				castkms_capture_buffer_output(active_capture);
+	}
 
 	if (WARN_ON(wb_pending && !active_wb))
 		ret = -EINVAL;
 	else if (!ret)
 		ret = castkms_compose_targets(
 			frame, wb_pending ? active_wb : NULL,
-			NULL, &crc32);
+			capture_dest, &crc32);
+
+	if (capture_pending) {
+		int capture_ret = active_capture ? ret : -EINVAL;
+
+		spin_lock_irq(&out->dispatch_lock);
+		crtc_state->capture_pending = false;
+		crtc_state->active_capture = NULL;
+		spin_unlock_irq(&out->dispatch_lock);
+		if (active_capture) {
+			castkms_capture_complete_frame(out, active_capture,
+						       capture_ret);
+		}
+	}
 
 	if (wb_pending) {
 		int wb_ret = active_wb ? ret : -EINVAL;
@@ -148,6 +174,11 @@ castkms_frame_dispatch_demand_get(
 			return -EOVERFLOW;
 		demand->writeback_count++;
 		break;
+	case CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE:
+		if (WARN_ON(demand->capture_count == UINT_MAX))
+			return -EOVERFLOW;
+		demand->capture_count++;
+		break;
 	default:
 		WARN_ON(1);
 		return -EINVAL;
@@ -175,6 +206,11 @@ castkms_frame_dispatch_demand_put(
 		if (WARN_ON(!demand->writeback_count))
 			return false;
 		demand->writeback_count--;
+		break;
+	case CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE:
+		if (WARN_ON(!demand->capture_count))
+			return false;
+		demand->capture_count--;
 		break;
 	default:
 		WARN_ON(1);

@@ -15,7 +15,9 @@ struct dma_fence;
 struct castkms_capture_buffer;
 struct castkms_capture_authority;
 struct castkms_capture_stream;
+struct castkms_crtc_state;
 struct castkms_output;
+struct castkms_output_buffer;
 
 #define CASTKMS_CAPTURE_MAX_BUFFERS 8
 
@@ -86,6 +88,14 @@ void castkms_capture_mode_changed(struct castkms_output *output,
 void castkms_capture_deliver_completion(
 	struct castkms_output *output,
 	struct castkms_capture_completion *completion);
+bool castkms_capture_prepare_frame(struct castkms_output *output,
+				   struct castkms_crtc_state *state,
+				   u64 sequence, ktime_t timestamp);
+const struct castkms_output_buffer *
+castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer);
+void castkms_capture_complete_frame(struct castkms_output *output,
+				    struct castkms_capture_buffer *buffer,
+				    int status);
 
 /* The caller must hold @authority through begin_output()/end(). */
 struct castkms_capture_stream *

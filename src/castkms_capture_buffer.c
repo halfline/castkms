@@ -16,7 +16,9 @@
 #include <kunit/visibility.h>
 
 #include "castkms_capture.h"
+#include "castkms_capture_authority.h"
 #include "castkms_capture_internal.h"
+#include "castkms_frame_dispatch.h"
 #include "castkms_output.h"
 #include "castkms_output_buffer.h"
 
@@ -210,6 +212,53 @@ static bool castkms_capture_fb_is_local(struct drm_framebuffer *fb)
 	 * consumers.
 	 */
 	return obj && !drm_gem_is_imported(obj);
+}
+
+const struct castkms_output_buffer *
+castkms_capture_buffer_output(const struct castkms_capture_buffer *buffer)
+{
+	return &buffer->output;
+}
+
+void castkms_capture_complete_frame(struct castkms_output *output,
+				    struct castkms_capture_buffer *buffer,
+				    int status)
+{
+	struct castkms_capture_output *capture = &output->capture;
+	struct castkms_capture_completion completion = {};
+	struct castkms_capture_authority *authority = buffer->stream->authority;
+	unsigned long flags;
+	u64 authority_generation = buffer->stream->authority_generation;
+	bool mode_changed = false;
+	int authority_status;
+
+	authority_status = castkms_capture_authority_check_stream_continuity(
+		authority, authority_generation);
+
+	spin_lock_irqsave(&capture->state_lock, flags);
+	if (WARN_ON(capture->in_flight_buffer != buffer ||
+		    buffer->state != CASTKMS_CAPTURE_BUFFER_IN_FLIGHT)) {
+		spin_unlock_irqrestore(&capture->state_lock, flags);
+		return;
+	}
+
+	if (buffer->stream->cancel_status) {
+		status = buffer->stream->cancel_status;
+	} else if (authority_status) {
+		status = authority_status;
+	} else if (buffer->mode_generation != capture->mode_generation) {
+		status = -ESTALE;
+		mode_changed = true;
+	}
+
+	capture->in_flight_buffer = NULL;
+	castkms_capture_buffer_finish(
+		buffer, &completion, status, false, mode_changed,
+		capture->mode_generation, buffer->sequence, buffer->timestamp);
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+
+	castkms_frame_dispatch_put(output, CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE);
+	castkms_capture_deliver_completion(output, &completion);
 }
 
 struct castkms_capture_buffer *

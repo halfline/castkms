@@ -62,7 +62,8 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 	state = output->dispatch_state;
 	if (state && castkms_frame_dispatch_demand_is_active(
 			     &output->dispatch_demand)) {
-		u64 frame = drm_crtc_accurate_vblank_count(crtc);
+		ktime_t frame_time;
+		u64 frame = drm_crtc_vblank_count_and_time(crtc, &frame_time);
 
 		if (output->dispatch_demand.crc_enabled &&
 		    castkms_capture_output_has_safe_content(output)) {
@@ -78,6 +79,10 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 			spin_unlock(&output->dispatch_lock);
 			queue_dispatch = true;
 		}
+
+		if (castkms_capture_prepare_frame(output, state, frame,
+						  frame_time))
+			queue_dispatch = true;
 
 		if (queue_dispatch &&
 		    !queue_work(output->dispatch_workq, &state->dispatch_work))

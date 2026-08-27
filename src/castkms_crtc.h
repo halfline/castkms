@@ -12,6 +12,7 @@
 
 #include "castkms_frame.h"
 
+struct castkms_capture_buffer;
 struct castkms_output;
 struct castkms_output_buffer;
 struct drm_master;
@@ -24,8 +25,10 @@ struct drm_plane;
  * @frame: Renderer input produced during atomic check
  * @capture_owner: Refcounted owner of the content in @frame
  * @active_writeback: Current writeback destination buffer
+ * @active_capture: Capture destination selected at vblank
  * @crc_pending: Whether CRC composition is pending
  * @wb_pending: Whether writeback composition is pending
+ * @capture_pending: Whether capture composition is pending
  * @frame_start: Frame number at the start of composition
  * @frame_end: Last requested frame number
  *
@@ -39,9 +42,11 @@ struct castkms_crtc_state {
 	struct castkms_frame_stage frame;
 	struct drm_master *capture_owner;
 	struct castkms_output_buffer *active_writeback;
+	struct castkms_capture_buffer *active_capture;
 
 	bool crc_pending;
 	bool wb_pending;
+	bool capture_pending;
 	u64 frame_start;
 	u64 frame_end;
 };

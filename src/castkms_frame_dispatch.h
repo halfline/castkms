@@ -14,6 +14,7 @@ struct work_struct;
 enum castkms_frame_dispatch_client {
 	CASTKMS_FRAME_DISPATCH_CLIENT_CRC,
 	CASTKMS_FRAME_DISPATCH_CLIENT_WRITEBACK,
+	CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE,
 };
 
 void castkms_frame_dispatch_worker(struct work_struct *work);

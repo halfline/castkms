@@ -16,6 +16,8 @@
 #include "castkms_capture_authority.h"
 #include "castkms_capture_internal.h"
 #include "castkms_connector.h"
+#include "castkms_crtc.h"
+#include "castkms_frame_dispatch.h"
 #include "castkms_output.h"
 
 int castkms_capture_output_init(struct drm_device *dev,
@@ -155,6 +157,7 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream,
 	unsigned long flags;
 	bool in_flight = false;
 	bool remove_callback = false;
+	bool put_dispatch = false;
 
 	/*
 	 * Serialize against vblank selection through output->lock. Once that
@@ -173,6 +176,7 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream,
 		castkms_capture_buffer_finish(
 			buffer, &completion, status, status == -ECANCELED,
 			false, capture->mode_generation, 0, ktime_get());
+		put_dispatch = true;
 	}
 
 	buffer = capture->in_flight_buffer;
@@ -184,6 +188,9 @@ static void castkms_capture_stream_cancel(struct castkms_capture_stream *stream,
 	if (remove_callback)
 		castkms_capture_buffer_remove_reuse_callback(
 			queued_buffer, completion.dependency);
+	if (put_dispatch)
+		castkms_frame_dispatch_put(
+			stream->output, CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE);
 	castkms_capture_deliver_completion(stream->output, &completion);
 	if (in_flight) {
 		flush_workqueue(stream->output->dispatch_workq);
@@ -239,4 +246,61 @@ void castkms_capture_mode_changed(struct castkms_output *output,
 	capture->width = state->active ? state->mode.hdisplay : 0;
 	capture->height = state->active ? state->mode.vdisplay : 0;
 	spin_unlock_irqrestore(&capture->state_lock, flags);
+}
+
+bool castkms_capture_prepare_frame(struct castkms_output *output,
+				   struct castkms_crtc_state *state,
+				   u64 sequence, ktime_t timestamp)
+{
+	struct castkms_capture_output *capture = &output->capture;
+	struct castkms_capture_buffer *buffer;
+	struct castkms_capture_authority *authority;
+	unsigned long flags;
+	u64 authority_generation;
+	int authority_status;
+
+	spin_lock_irqsave(&capture->state_lock, flags);
+	buffer = capture->queued_buffer;
+	if (!buffer) {
+		spin_unlock_irqrestore(&capture->state_lock, flags);
+		return false;
+	}
+	authority = buffer->stream->authority;
+	authority_generation = buffer->stream->authority_generation;
+	authority_status = castkms_capture_authority_evaluate_stream_status(
+		authority, output, authority_generation);
+	if (capture->in_flight_buffer ||
+	    buffer->state != CASTKMS_CAPTURE_BUFFER_QUEUED ||
+	    buffer->mode_generation != capture->mode_generation ||
+	    !capture->active || authority_status) {
+		if (buffer->dropped_frames != U32_MAX)
+			buffer->dropped_frames++;
+		spin_unlock_irqrestore(&capture->state_lock, flags);
+		return false;
+	}
+
+	capture->queued_buffer = NULL;
+	capture->in_flight_buffer = buffer;
+	buffer->sequence = sequence;
+	buffer->timestamp = timestamp;
+	castkms_capture_buffer_set_state(
+		buffer, CASTKMS_CAPTURE_BUFFER_IN_FLIGHT);
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+
+	spin_lock_irqsave(&output->dispatch_lock, flags);
+	if (WARN_ON(state->capture_pending || state->active_capture)) {
+		spin_unlock_irqrestore(&output->dispatch_lock, flags);
+		spin_lock_irqsave(&capture->state_lock, flags);
+		capture->in_flight_buffer = NULL;
+		capture->queued_buffer = buffer;
+		castkms_capture_buffer_set_state(
+			buffer, CASTKMS_CAPTURE_BUFFER_QUEUED);
+		spin_unlock_irqrestore(&capture->state_lock, flags);
+		return false;
+	}
+	state->active_capture = buffer;
+	state->capture_pending = true;
+	spin_unlock_irqrestore(&output->dispatch_lock, flags);
+
+	return true;
 }
