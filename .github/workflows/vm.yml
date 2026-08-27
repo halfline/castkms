@@ -30,3 +30,43 @@ jobs:
 
       - name: Run userspace gate
         run: make check
+
+  fast:
+    name: Fast / KUnit and grant security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install VM host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes genisoimage qemu-system-x86 qemu-utils rsync
+          test -c /dev/kvm
+          sudo chmod a+rw /dev/kvm
+
+      - name: Cache verified Fedora base image
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/castkms-vm/images
+          key: castkms-fedora-43-cloud-1.6
+
+      - name: Provision pinned guest
+        run: ./scripts/vm/castkms-vm provision
+
+      - name: Run fast VM gate
+        run: ./scripts/vm/castkms-vm kunit-test
+
+      - name: Stop guest
+        if: always()
+        run: ./scripts/vm/castkms-vm stop || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: castkms-vm-fast-results
+          path: |
+            ~/.cache/castkms-vm/results
+            ~/.cache/castkms-vm/instances/default/*.log
+          if-no-files-found: warn
