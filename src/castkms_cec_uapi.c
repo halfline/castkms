@@ -48,6 +48,8 @@ static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16);
 static_assert(sizeof(struct drm_castkms_cec_tx_complete) == 32);
 static_assert(sizeof(struct drm_castkms_cec_receive) == 40);
 static_assert(offsetof(struct drm_castkms_cec_receive, pad0) == 35);
+static_assert(sizeof(struct drm_castkms_cec_get_state) == 112);
+static_assert(offsetof(struct drm_castkms_cec_get_state, pending_cookie) == 48);
 static_assert(sizeof(struct drm_castkms_cec_event_tx) == 72);
 
 static struct castkms_cec_output *
@@ -455,6 +457,59 @@ int castkms_cec_receive_ioctl(struct drm_device *dev, void *data,
 					       args->transport_generation,
 					       args->msg, args->length);
 
+	castkms_grant_end(authority);
+	drm_connector_put(connector);
+out_dev:
+	drm_dev_exit(idx);
+	return ret;
+}
+
+int castkms_cec_get_state_ioctl(struct drm_device *dev, void *data,
+				struct drm_file *file_priv)
+{
+	struct drm_castkms_cec_get_state *args = data;
+	struct castkms_capture_authority *authority;
+	struct castkms_cec_state state;
+	struct castkms_cec_output *output;
+	struct castkms_connector *castkms_connector;
+	struct drm_connector *connector;
+	int idx;
+	int ret;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
+	output = cec_uapi_lookup_granted(dev, file_priv, args->connector_id,
+					 &connector, &authority);
+	if (IS_ERR(output)) {
+		ret = PTR_ERR(output);
+		goto out_dev;
+	}
+	castkms_connector = drm_connector_to_castkms_connector(connector);
+	ret = castkms_cec_uapi_get_transport(output, authority,
+					     args->transport_id, &state);
+	if (ret)
+		goto out_authority;
+
+	args->transport_generation = state.transport_generation;
+	args->state_generation = state.state_generation;
+	args->state_flags = castkms_cec_uapi_state_flags(&state);
+	args->output_index = castkms_connector->output_index;
+	args->phys_addr = state.phys_addr;
+	args->logical_addr_mask = state.logical_addr_mask;
+	args->pad0 = 0;
+	args->pending_cookie = state.pending_cookie;
+	args->stats_tx_submitted = state.stats_tx_submitted;
+	args->stats_tx_completed = state.stats_tx_completed;
+	args->stats_tx_nack = state.stats_tx_nack;
+	args->stats_tx_error = state.stats_tx_error;
+	args->stats_tx_timeout = state.stats_tx_timeout;
+	args->stats_rx = state.stats_rx;
+	args->stats_invalid = state.stats_invalid;
+
+out_authority:
 	castkms_grant_end(authority);
 	drm_connector_put(connector);
 out_dev:

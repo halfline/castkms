@@ -38,6 +38,10 @@ static_assert(sizeof(struct drm_castkms_cec_receive) == 40,
 	      "cec receive ABI size changed");
 static_assert(offsetof(struct drm_castkms_cec_receive, pad0) == 35,
 	      "cec receive ABI layout changed");
+static_assert(sizeof(struct drm_castkms_cec_get_state) == 112,
+	      "cec get state ABI size changed");
+static_assert(offsetof(struct drm_castkms_cec_get_state, pending_cookie) == 48,
+	      "cec get state ABI layout changed");
 static_assert(sizeof(struct drm_castkms_cec_event_tx) == 72,
 	      "cec event tx ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
@@ -195,6 +199,19 @@ static int cec_set_online(int fd, uint32_t connector_id, uint32_t transport_id,
 	return 0;
 }
 
+static int cec_get_state(int fd, uint32_t connector_id, uint32_t transport_id,
+			 struct drm_castkms_cec_get_state *state)
+{
+	*state = (struct drm_castkms_cec_get_state){
+		.connector_id = connector_id,
+		.transport_id = transport_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CEC_GET_STATE, state) < 0)
+		return -errno;
+
+	return 0;
+}
 
 static int cec_tx_complete(int fd, uint32_t connector_id,
 			   uint32_t transport_id, uint64_t generation,
@@ -562,6 +579,7 @@ static void test_unbind_wrong_owner(int fd, uint32_t connector_id)
 static void test_set_transport_online(int fd, uint32_t connector_id)
 {
 	struct drm_castkms_cec_bind_transport bind;
+	struct drm_castkms_cec_get_state state;
 	int ret;
 
 	ret = cec_bind(fd, connector_id, &bind);
@@ -577,7 +595,20 @@ static void test_set_transport_online(int fd, uint32_t connector_id)
 		return;
 	}
 
-	PASS("set_online");
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state);
+	if (ret) {
+		FAIL("set_online_verify", "get_state failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	if (!(state.state_flags & DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE)) {
+		FAIL("set_online_verify", "transport not online after set");
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+	PASS("set_online_verify");
 
 	ret = cec_set_online(fd, connector_id, bind.transport_id, false);
 	if (ret) {
@@ -586,15 +617,58 @@ static void test_set_transport_online(int fd, uint32_t connector_id)
 		return;
 	}
 
-	PASS("set_offline");
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state);
+	if (ret) {
+		FAIL("set_offline_verify", "get_state failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	if (state.state_flags & DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE) {
+		FAIL("set_offline_verify", "transport still online after clear");
+	} else {
+		PASS("set_offline_verify");
+	}
 
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
 
+static void test_get_state_stats(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	struct drm_castkms_cec_get_state state;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("get_state_stats", "bind failed: %s", strerror(-ret));
+		return;
+	}
+
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state);
+	if (ret) {
+		FAIL("get_state_stats", "get_state failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	if (state.stats_tx_submitted != 0 || state.stats_tx_completed != 0 ||
+	    state.stats_rx != 0 || state.stats_invalid != 0) {
+		FAIL("get_state_stats_zero",
+		     "expected zero stats after fresh bind");
+	} else {
+		PASS("get_state_stats_zero");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
 
 static void test_receive_inject(int fd, uint32_t connector_id)
 {
 	struct drm_castkms_cec_bind_transport bind;
+	struct drm_castkms_cec_get_state state;
 	int ret;
 
 	ret = cec_bind(fd, connector_id, &bind);
@@ -620,6 +694,22 @@ static void test_receive_inject(int fd, uint32_t connector_id)
 		return;
 	}
 	PASS("receive_inject");
+
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state);
+	if (ret) {
+		FAIL("receive_inject_stats", "get_state failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	if (state.stats_rx != 1) {
+		FAIL("receive_inject_stats",
+		     "expected 1 rx, got %llu",
+		     (unsigned long long)state.stats_rx);
+	} else {
+		PASS("receive_inject_stats");
+	}
 
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
@@ -881,6 +971,54 @@ static void test_tx_complete_bad_status(int fd, uint32_t connector_id)
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
 
+static void test_state_generation_advances(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	struct drm_castkms_cec_get_state state1, state2;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("state_generation_advances", "bind failed: %s",
+		     strerror(-ret));
+		return;
+	}
+
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state1);
+	if (ret) {
+		FAIL("state_generation_advances", "get_state failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	ret = cec_set_online(fd, connector_id, bind.transport_id, true);
+	if (ret) {
+		FAIL("state_generation_advances", "set_online failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	ret = cec_get_state(fd, connector_id, bind.transport_id, &state2);
+	if (ret) {
+		FAIL("state_generation_advances", "get_state after online failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	if (state2.state_generation <= state1.state_generation) {
+		FAIL("state_generation_advances",
+		     "expected generation to increase: %llu -> %llu",
+		     (unsigned long long)state1.state_generation,
+		     (unsigned long long)state2.state_generation);
+	} else {
+		PASS("state_generation_advances");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
 
 static void test_stale_generation_reject(int fd, uint32_t connector_id)
 {
@@ -972,6 +1110,8 @@ int main(int argc, char **argv)
 	test_double_bind(fd, connector_id);
 	test_unbind_wrong_owner(fd, connector_id);
 	test_set_transport_online(fd, connector_id);
+	test_get_state_stats(fd, connector_id);
+	test_state_generation_advances(fd, connector_id);
 	test_receive_inject(fd, connector_id);
 	test_receive_offline_reject(fd, connector_id);
 	test_receive_bad_length(fd, connector_id);

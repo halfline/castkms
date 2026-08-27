@@ -49,4 +49,6 @@ CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_TX_COMPLETE,
 			     castkms_cec_tx_complete_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_RECEIVE,
 			     castkms_cec_receive_ioctl, ALLOWED)
+CASTKMS_PRIVATE_IOCTL(CASTKMS_CEC_GET_STATE,
+			     castkms_cec_get_state_ioctl, ALLOWED)
 #endif

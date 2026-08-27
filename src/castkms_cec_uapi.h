@@ -20,5 +20,8 @@ int castkms_cec_tx_complete_ioctl(struct drm_device *dev, void *data,
 				  struct drm_file *file_priv);
 int castkms_cec_receive_ioctl(struct drm_device *dev, void *data,
 			      struct drm_file *file_priv);
+int castkms_cec_get_state_ioctl(struct drm_device *dev, void *data,
+				struct drm_file *file_priv);
+
 #endif /* CASTKMS_HAVE_CEC */
 #endif /* _CASTKMS_CEC_UAPI_H_ */

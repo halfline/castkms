@@ -911,6 +911,50 @@ struct drm_castkms_cec_receive {
 	__u8 pad0[5];
 };
 
+/**
+ * struct drm_castkms_cec_get_state - get authoritative transport state
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @flags: must be zero
+ * @reserved: must be zero
+ * @transport_generation: current transport generation
+ * @state_generation: current state generation
+ * @state_flags: bitmask of DRM_CASTKMS_CEC_STATE_* values
+ * @output_index: stable castkms output identity
+ * @phys_addr: current physical address
+ * @logical_addr_mask: current logical address mask
+ * @pad0: output zero; explicit padding for a stable cross-architecture layout
+ * @pending_cookie: outstanding transaction cookie, or 0
+ * @stats_tx_submitted: total transmit events delivered
+ * @stats_tx_completed: total successful completions
+ * @stats_tx_nack: total NACK completions
+ * @stats_tx_error: total error completions
+ * @stats_tx_timeout: total timeout completions
+ * @stats_rx: total received messages injected
+ * @stats_invalid: total rejected invalid requests
+ */
+struct drm_castkms_cec_get_state {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u32 flags;
+	__u32 reserved;
+	__u64 transport_generation;
+	__u64 state_generation;
+	__u32 state_flags;
+	__u32 output_index;
+	__u16 phys_addr;
+	__u16 logical_addr_mask;
+	__u32 pad0;
+	__u64 pending_cookie;
+	__u64 stats_tx_submitted;
+	__u64 stats_tx_completed;
+	__u64 stats_tx_nack;
+	__u64 stats_tx_error;
+	__u64 stats_tx_timeout;
+	__u64 stats_rx;
+	__u64 stats_invalid;
+};
+
 /* CEC DRM event types */
 #define DRM_CASTKMS_CEC_EVENT_TX	0x80000001U
 #define DRM_CASTKMS_CEC_EVENT_STATE	0x80000002U
@@ -953,6 +997,7 @@ struct drm_castkms_cec_event_tx {
 #define DRM_CASTKMS_CEC_SET_TRANSPORT_STATE	0x0d
 #define DRM_CASTKMS_CEC_TX_COMPLETE		0x0e
 #define DRM_CASTKMS_CEC_RECEIVE			0x0f
+#define DRM_CASTKMS_CEC_GET_STATE		0x10
 
 #define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
@@ -972,6 +1017,10 @@ struct drm_castkms_cec_event_tx {
 #define DRM_IOCTL_CASTKMS_CEC_RECEIVE \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_RECEIVE, \
 		struct drm_castkms_cec_receive)
+#define DRM_IOCTL_CASTKMS_CEC_GET_STATE \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_GET_STATE, \
+		 struct drm_castkms_cec_get_state)
+
 #if defined(__cplusplus)
 }
 #endif
