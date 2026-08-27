@@ -4,6 +4,7 @@
 
 #include <drm/drm_fixed.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 
 #include "../castkms_formats.h"
 #include "../castkms_output_buffer.h"

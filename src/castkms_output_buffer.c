@@ -5,6 +5,7 @@
 #include <linux/minmax.h>
 
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_framebuffer.h>
 
 #include <kunit/visibility.h>
 

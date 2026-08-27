@@ -3,7 +3,11 @@
 #ifndef _CASTKMS_OUTPUT_BUFFER_H_
 #define _CASTKMS_OUTPUT_BUFFER_H_
 
-#include "castkms_drv.h"
+#include <linux/iosys-map.h>
+
+#include <drm/drm_fourcc.h>
+
+#include "castkms_frame.h"
 
 /**
  * struct castkms_output_buffer - Mapped destination for composed pixels
