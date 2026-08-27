@@ -21,6 +21,7 @@ Provision the guest and run the smoke test:
 ```sh
 ./scripts/vm/castkms-vm provision
 ./scripts/vm/castkms-vm test
+./scripts/vm/castkms-vm kunit-test
 ```
 
 `provision` downloads the base image, creates a 30 GiB sparse overlay, boots
@@ -46,10 +47,13 @@ into that kernel. Re-running it is safe and idempotent.
 9. records `modetest`, `drm_info`, CRC, writeback, and lifecycle output;
 10. unloads every module it loaded and verifies cleanup.
 
-The pinned Fedora kernel publishes the KUnit ABI in its development package
-but does not ship the corresponding `kunit.ko`, so the VM currently provides
-compile and linkage coverage for the KUnit suites rather than executing them.
-The standalone build target is also available directly with `make kunit`.
+`kunit-test` rebuilds all four audio/CEC inclusion combinations, builds the
+KUnit module with `W=1`, loads the Fedora KUnit support and CastKMS modules,
+and requires all nine CastKMS suites to pass. It also rejects kernel warnings
+and diagnostics, unloads both project modules, and copies its build log,
+kernel log, provenance, package manifests, and summary into the default result
+directory. The standalone `make kunit` target remains available for build-only
+coverage on a host that cannot load the modules.
 
 Results are copied to:
 

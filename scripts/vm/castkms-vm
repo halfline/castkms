@@ -90,6 +90,7 @@ Commands:
   desktop-attach      Sync, build, and attach a virtual monitor
   sync        Mirror the current source tree into the guest
   test        Sync, build, load, and smoke-test castkms in the guest
+  kunit-test  Sync, build, and run KUnit tests in the guest
   desktop-test        Sync, load castkms, attach a monitor, and check Mutter
   shell       Open an interactive shell in the guest
   desktop-shell       Open a shell on the desktop instance
@@ -416,6 +417,29 @@ run_tests()
 	printf 'Guest smoke test passed; results: %s\n' "$RESULT_DIR"
 }
 
+run_kunit_tests()
+{
+	local status
+
+	provision
+	sync_source
+	set +e
+	ssh_guest bash "$GUEST_REPO/scripts/vm/guest-kunit-test.sh" \
+		"$GUEST_REPO" "$KERNEL_RELEASE"
+	status=$?
+	set -e
+
+	mkdir -p "$RESULT_DIR"
+	rsync -az --delete -e "ssh ${SSH_OPTIONS[*]}" \
+		"$SSH_USER@127.0.0.1:$GUEST_REPO/test-results/vm-kunit/" \
+		"$RESULT_DIR/" 2>/dev/null || true
+
+	if test "$status" -ne 0; then
+		die "guest KUnit tests failed with status $status; results: $RESULT_DIR"
+	fi
+	printf 'Guest KUnit tests passed; results: %s\n' "$RESULT_DIR"
+}
+
 run_desktop_tests()
 {
 	local status
@@ -515,6 +539,7 @@ case "$command" in
 		;;
 	sync) sync_source ;;
 	test) run_tests ;;
+	kunit-test) run_kunit_tests ;;
 	desktop-test) run_desktop_tests ;;
 	shell)
 		vm_running || die 'VM is not running; run provision first'
