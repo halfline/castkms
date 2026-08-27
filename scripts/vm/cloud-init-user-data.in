@@ -4,7 +4,7 @@ users:
     gecos: CASTKMS development
     groups:
       - wheel
-    lock_passwd: true
+    lock_passwd: false
     shell: /bin/bash
     sudo:
       - ALL=(ALL) NOPASSWD:ALL
@@ -13,6 +13,9 @@ users:
 
 disable_root: true
 ssh_pwauth: false
+
+runcmd:
+  - passwd -d castkms
 
 growpart:
   mode: auto
