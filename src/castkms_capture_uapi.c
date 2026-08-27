@@ -275,13 +275,15 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	struct castkms_capture_stream *stream;
 	struct castkms_output *output;
 	struct drm_crtc *crtc;
-	u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS |
-		     CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR;
+	u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS;
 	u32 stream_id;
+	bool exclude_cursor;
 	bool put_mapping = false;
 	int ret;
 
-	if (args->flags != DRM_CASTKMS_CAPTURE_START_EXCLUSIVE ||
+	if (!(args->flags & DRM_CASTKMS_CAPTURE_START_EXCLUSIVE) ||
+	    (args->flags & ~(DRM_CASTKMS_CAPTURE_START_EXCLUSIVE |
+			     DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR)) ||
 	    args->reserved)
 		return -EINVAL;
 	args->stream_id = 0;
@@ -291,11 +293,16 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	if (!crtc)
 		return -ENOENT;
 	output = drm_crtc_to_castkms_output(crtc);
+	exclude_cursor = args->flags &
+			 DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR;
+	if (!exclude_cursor)
+		rights |= CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR;
+
 	ret = castkms_grant_begin_crtc(file_priv, crtc, rights, &authority);
 	if (ret)
 		return ret;
 
-	stream = castkms_capture_stream_create(output, authority,
+	stream = castkms_capture_stream_create(output, authority, exclude_cursor,
 					       &args->mode_generation);
 	if (IS_ERR(stream)) {
 		ret = PTR_ERR(stream);

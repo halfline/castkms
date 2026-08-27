@@ -135,6 +135,8 @@ void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
 				       bool full_damage);
 int castkms_capture_buffer_set_cursor(struct castkms_capture_buffer *buffer,
 				      const struct castkms_cursor_snapshot *cursor);
+bool castkms_capture_buffer_excludes_cursor(
+	const struct castkms_capture_buffer *buffer);
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status);
@@ -146,7 +148,7 @@ void castkms_capture_queue_job(struct castkms_output *output,
 struct castkms_capture_stream *
 castkms_capture_stream_create(struct castkms_output *output,
 			      struct castkms_capture_authority *authority,
-			      u64 *mode_generation);
+			      bool exclude_cursor, u64 *mode_generation);
 int castkms_capture_stream_attach(struct castkms_capture_stream *stream);
 void castkms_capture_stream_destroy(struct castkms_capture_stream *stream,
 				    int status);

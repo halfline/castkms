@@ -302,11 +302,11 @@ static int castkms_core_client_start_stream(struct castkms_core_client *client)
 
 	ret = castkms_capture_authority_begin(client->authority,
 					      &client->connector->base,
-					      CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS |
-					      CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR);
+					      CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS);
 	if (!ret) {
 		client->stream = castkms_capture_stream_create(client->output,
 							       client->authority,
+							       true,
 							       &client->mode_generation);
 		if (IS_ERR(client->stream)) {
 			ret = PTR_ERR(client->stream);
@@ -379,8 +379,7 @@ static int castkms_core_client_get_completion_fence(
 
 static int castkms_core_client_test_init(struct kunit *test)
 {
-	const u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS |
-			   CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR;
+	const u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS;
 	struct castkms_config_connector *connector_config;
 	struct castkms_config_crtc *crtc_config;
 	struct castkms_core_client *client;

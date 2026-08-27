@@ -252,11 +252,33 @@ static void castkms_frame_snapshot_release(struct kref *kref)
 	kfree(snapshot);
 }
 
+VISIBLE_IF_KUNIT int castkms_snapshot_collect_planes(
+	const struct castkms_frame_stage *frame,
+	enum castkms_snapshot_flags flags,
+	struct castkms_frame_plane **planes)
+{
+	int i, count = 0;
+
+	for (i = 0; i < frame->num_planes; i++) {
+		struct castkms_frame_plane *plane = frame->planes[i];
+
+		if ((flags & CASTKMS_SNAPSHOT_EXCLUDE_CURSOR) &&
+		    plane->is_cursor)
+			continue;
+		planes[count++] = plane;
+	}
+
+	return count;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_snapshot_collect_planes);
+
 struct castkms_frame_snapshot *
-castkms_frame_snapshot_create(const struct castkms_frame_stage *frame)
+castkms_frame_snapshot_create(const struct castkms_frame_stage *frame,
+			      enum castkms_snapshot_flags flags)
 {
 	struct castkms_frame_snapshot *snapshot;
 	int num_planes = frame->num_planes;
+	int selected_planes;
 	int i, ret;
 
 	snapshot = kzalloc(struct_size(snapshot, planes, num_planes), GFP_KERNEL);
@@ -289,8 +311,10 @@ castkms_frame_snapshot_create(const struct castkms_frame_stage *frame)
 	if (snapshot->frame.cursor.fb)
 		drm_framebuffer_get(snapshot->frame.cursor.fb);
 
-	for (i = 0; i < num_planes; i++) {
-		struct castkms_frame_plane *src = frame->planes[i];
+	selected_planes = castkms_snapshot_collect_planes(
+		frame, flags, snapshot->frame.planes);
+	for (i = 0; i < selected_planes; i++) {
+		struct castkms_frame_plane *src = snapshot->frame.planes[i];
 		struct castkms_snapshot_plane *sp = &snapshot->planes[i];
 
 		drm_framebuffer_get(src->frame_info->fb);

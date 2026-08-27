@@ -2,6 +2,7 @@
 
 #include <linux/err.h>
 #include <linux/limits.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/workqueue.h>
 
@@ -21,6 +22,32 @@
 #include "castkms_output.h"
 #include "castkms_snapshot.h"
 
+static int castkms_compose_without_cursor(
+	const struct castkms_output_buffer *destination,
+	const struct castkms_frame_stage *frame)
+{
+	struct castkms_frame_stage cursorless = *frame;
+	struct castkms_frame_plane **filtered;
+	int n = 0, i;
+	int ret;
+
+	filtered = kcalloc(frame->num_planes, sizeof(*filtered), GFP_KERNEL);
+	if (!filtered)
+		return -ENOMEM;
+
+	for (i = 0; i < frame->num_planes; i++) {
+		if (frame->planes[i]->is_cursor)
+			continue;
+		filtered[n++] = frame->planes[i];
+	}
+
+	cursorless.planes = filtered;
+	cursorless.num_planes = n;
+	ret = castkms_compose_frame(&cursorless, destination);
+	kfree(filtered);
+	return ret;
+}
+
 /**
  * castkms_frame_dispatch_worker - service pending frame consumers
  * @work: CRTC-state work item
@@ -39,9 +66,11 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 	const struct castkms_output_buffer *capture_dest = NULL;
 	struct castkms_output *out = drm_crtc_to_castkms_output(crtc);
 	const struct castkms_frame_stage *frame = &crtc_state->frame;
+	bool separate_capture = false;
 	bool crc_pending, wb_pending, capture_pending;
 	u64 frame_start, frame_end;
 	u32 crc32 = 0;
+	int capture_ret = 0;
 	int ret = 0;
 
 	spin_lock_irq(&out->dispatch_lock);
@@ -76,7 +105,10 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 		if (WARN_ON(!active_capture))
 			return;
 
-		snapshot = castkms_frame_snapshot_create(frame);
+		snapshot = castkms_frame_snapshot_create(
+			frame,
+			castkms_capture_buffer_excludes_cursor(active_capture) ?
+				CASTKMS_SNAPSHOT_EXCLUDE_CURSOR : 0);
 		if (IS_ERR(snapshot))
 			castkms_capture_complete_frame(out, active_capture,
 						       PTR_ERR(snapshot));
@@ -87,21 +119,31 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 
 	if (capture_pending) {
 		if (WARN_ON(!active_capture))
-			ret = -EINVAL;
+			capture_ret = -EINVAL;
 		else
 			capture_dest =
 				castkms_capture_buffer_output(active_capture);
 	}
+	if (capture_dest)
+		separate_capture =
+			castkms_capture_buffer_excludes_cursor(active_capture);
 
 	if (WARN_ON(wb_pending && !active_wb))
 		ret = -EINVAL;
-	else if (!ret)
+	else
 		ret = castkms_compose_targets(
 			frame, wb_pending ? active_wb : NULL,
-			capture_dest, &crc32);
+			separate_capture ? NULL : capture_dest, &crc32);
+
+	if (capture_dest) {
+		capture_ret = ret;
+		if (separate_capture && !capture_ret)
+			capture_ret =
+				castkms_compose_without_cursor(capture_dest, frame);
+	}
 
 	if (capture_pending) {
-		int capture_ret = active_capture ? ret : -EINVAL;
+		int completion_ret = active_capture ? capture_ret : -EINVAL;
 
 		spin_lock_irq(&out->dispatch_lock);
 		crtc_state->capture_pending = false;
@@ -111,11 +153,11 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 			castkms_capture_buffer_set_damage(active_capture,
 						  &frame->damage,
 						  frame->full_damage);
-			if (!capture_ret)
-				capture_ret = castkms_capture_buffer_set_cursor(
+			if (!completion_ret)
+				completion_ret = castkms_capture_buffer_set_cursor(
 					active_capture, &frame->cursor);
 			castkms_capture_complete_frame(out, active_capture,
-						       capture_ret);
+						       completion_ret);
 		}
 	}
 

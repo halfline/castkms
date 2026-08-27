@@ -28,6 +28,7 @@ struct castkms_capture_stream {
 	u32 active_deliveries;
 	bool active;
 	bool attached;
+	bool exclude_cursor;
 	bool cursor_serial_valid;
 	int cancel_status;
 };

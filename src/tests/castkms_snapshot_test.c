@@ -265,6 +265,32 @@ static void castkms_snapshot_test_rejects_null_map(struct kunit *test)
 								   tp.sp.map));
 }
 
+static void castkms_snapshot_test_packs_middle_cursor_exclusion(struct kunit *test)
+{
+	struct castkms_frame_plane planes[3] = {
+		{},
+		{ .is_cursor = true },
+		{},
+	};
+	struct castkms_frame_plane *active_planes[] = {
+		&planes[0], &planes[1], &planes[2],
+	};
+	struct castkms_frame_plane *packed[3] = {};
+	struct castkms_frame_stage frame = {
+		.num_planes = ARRAY_SIZE(active_planes),
+		.planes = active_planes,
+	};
+	int count;
+
+	count = castkms_snapshot_collect_planes(
+		&frame, CASTKMS_SNAPSHOT_EXCLUDE_CURSOR, packed);
+
+	KUNIT_ASSERT_EQ(test, count, 2);
+	KUNIT_EXPECT_PTR_EQ(test, packed[0], &planes[0]);
+	KUNIT_EXPECT_PTR_EQ(test, packed[1], &planes[2]);
+	KUNIT_EXPECT_PTR_EQ(test, packed[2], NULL);
+}
+
 static void castkms_snapshot_test_source_wait_is_bounded(struct kunit *test)
 {
 	struct dma_fence *fence = snapshot_test_unsignaled_fence();
@@ -365,6 +391,7 @@ static struct kunit_case castkms_snapshot_test_cases[] = {
 	KUNIT_CASE(castkms_snapshot_test_plane_pixel_read),
 	KUNIT_CASE(castkms_snapshot_test_rejects_iomem_source),
 	KUNIT_CASE(castkms_snapshot_test_rejects_null_map),
+	KUNIT_CASE(castkms_snapshot_test_packs_middle_cursor_exclusion),
 	KUNIT_CASE(castkms_snapshot_test_source_wait_is_bounded),
 	KUNIT_CASE(castkms_snapshot_test_damage_partial),
 	KUNIT_CASE(castkms_snapshot_test_damage_full),

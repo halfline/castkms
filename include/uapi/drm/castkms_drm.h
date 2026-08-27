@@ -84,7 +84,8 @@ extern "C" {
 /**
  * DRM_CASTKMS_GRANT_READ_CURSOR:
  *
- * Permit cursor inclusion and metadata in a capture stream.
+ * Permit cursor inclusion and metadata in a capture stream. Pixel capture
+ * without this right must exclude the cursor.
  */
 #define DRM_CASTKMS_GRANT_READ_CURSOR		(1U << 3)
 
@@ -275,9 +276,20 @@ struct drm_castkms_capture_query_caps {
 #define DRM_CASTKMS_CAPTURE_START_EXCLUSIVE	(1U << 0)
 
 /**
+ * DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR:
+ *
+ * Exclude the cursor plane from captured frame composition. With
+ * DRM_CASTKMS_GRANT_READ_CURSOR, position and image metadata are still
+ * reported in capture events so consumers can render the cursor client-side.
+ * Without that right all cursor fields and bitmaps are suppressed.
+ */
+#define DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR (1U << 1)
+
+/**
  * struct drm_castkms_capture_start - start an exclusive capture stream
  * @crtc_id: DRM object ID of the CRTC to observe
- * @flags: must be DRM_CASTKMS_CAPTURE_START_EXCLUSIVE
+ * @flags: DRM_CASTKMS_CAPTURE_START_EXCLUSIVE, optionally combined with
+ *         DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR
  * @stream_id: file-local stream identifier returned by the driver
  * @reserved: must be zero
  * @mode_generation: current CRTC mode generation returned by the driver

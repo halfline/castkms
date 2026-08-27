@@ -1308,7 +1308,8 @@ static int run_cursor_test(const char *device, int inherited_fd,
 	{
 		struct drm_castkms_capture_start start = {
 			.crtc_id = crtc_id,
-			.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE,
+			.flags = DRM_CASTKMS_CAPTURE_START_EXCLUSIVE |
+				 DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR,
 		};
 		if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_START, &start) < 0) {
 			perror("start capture");

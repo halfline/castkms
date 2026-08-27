@@ -473,6 +473,12 @@ void castkms_capture_buffer_set_damage(struct castkms_capture_buffer *buffer,
 	buffer->full_damage = full_damage;
 }
 
+bool castkms_capture_buffer_excludes_cursor(
+	const struct castkms_capture_buffer *buffer)
+{
+	return buffer->stream->exclude_cursor;
+}
+
 void castkms_capture_complete_frame(struct castkms_output *output,
 				    struct castkms_capture_buffer *buffer,
 				    int status)

@@ -78,7 +78,7 @@ int castkms_capture_stream_validate_mode(
 struct castkms_capture_stream *
 castkms_capture_stream_create(struct castkms_output *output,
 			      struct castkms_capture_authority *authority,
-			      u64 *mode_generation)
+			      bool exclude_cursor, u64 *mode_generation)
 {
 	struct castkms_capture_stream *stream;
 
@@ -94,6 +94,7 @@ castkms_capture_stream_create(struct castkms_output *output,
 	INIT_LIST_HEAD(&stream->buffers);
 	init_completion(&stream->deliveries_done);
 	complete_all(&stream->deliveries_done);
+	stream->exclude_cursor = exclude_cursor;
 	castkms_capture_stream_snapshot_mode(stream);
 
 	if (mode_generation)

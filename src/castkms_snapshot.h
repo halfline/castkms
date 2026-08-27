@@ -46,12 +46,21 @@ struct castkms_frame_snapshot {
 	struct castkms_snapshot_plane planes[];
 };
 
+enum castkms_snapshot_flags {
+	CASTKMS_SNAPSHOT_EXCLUDE_CURSOR = (1 << 0),
+};
+
 struct castkms_frame_snapshot *
-castkms_frame_snapshot_create(const struct castkms_frame_stage *frame);
+castkms_frame_snapshot_create(const struct castkms_frame_stage *frame,
+			      enum castkms_snapshot_flags flags);
 int castkms_frame_snapshot_wait_for_sources(
 	struct castkms_frame_snapshot *snapshot);
 
 #if IS_ENABLED(CONFIG_KUNIT)
+int castkms_snapshot_collect_planes(
+	const struct castkms_frame_stage *frame,
+	enum castkms_snapshot_flags flags,
+	struct castkms_frame_plane **planes);
 int castkms_snapshot_wait_fences(
 	struct dma_fence **fences, unsigned int count, long timeout);
 #endif

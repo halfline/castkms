@@ -111,8 +111,9 @@ Rights are immutable and connector-scoped:
 | `READ_CURSOR` | Include cursor pixels or receive cursor metadata. |
 | `MANAGE_CEC` | Bind and operate HDMI-CEC (the HDMI command channel) on the connector. |
 
-`ATTACH_MONITOR` with an EDID requires both attachment and EDID rights. Unknown
-rights are rejected.
+Starting a stream without `READ_CURSOR` requires `EXCLUDE_CURSOR`; cursor
+metadata is also suppressed. `ATTACH_MONITOR` with an EDID
+requires both attachment and EDID rights. Unknown rights are rejected.
 
 Only one live grant with `MANAGE_ATTACHMENT` may exist per connector. Capture
 is exclusive per output. Additional capture-only grants are structurally

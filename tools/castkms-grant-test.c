@@ -234,7 +234,8 @@ static int start_capture(int fd, uint32_t crtc_id,
 			 struct drm_castkms_capture_start *start)
 {
 	return castkms_test_capture_start(
-		fd, crtc_id, DRM_CASTKMS_CAPTURE_START_EXCLUSIVE, start);
+		fd, crtc_id, DRM_CASTKMS_CAPTURE_START_EXCLUSIVE |
+		DRM_CASTKMS_CAPTURE_START_EXCLUDE_CURSOR, start);
 }
 
 static int stop_capture(int fd, uint32_t stream_id)
@@ -1109,8 +1110,7 @@ int main(int argc, char **argv)
 		    issuer, connector_id, DRM_CASTKMS_GRANT_CREATE_DELEGATED,
 		    EAGAIN, "current master CREATE_GRANT with DELEGATED") ||
 	    create_grant(delegated_creator, connector_id,
-			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
-			 DRM_CASTKMS_GRANT_READ_CURSOR,
+			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_DELEGATED,
 			 &delegated_fd, &delegated_id) ||
 	    expect_holder_state(delegated_fd, delegated_id,
@@ -1159,8 +1159,7 @@ int main(int argc, char **argv)
 	printf("grant_delegated_stream_cleanup=pass\n");
 
 	if (create_grant(issuer, connector_id,
-			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
-			 DRM_CASTKMS_GRANT_READ_CURSOR,
+			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
 			 &admin_fd, &admin_id) ||
 	    expect_holder_state(admin_fd, admin_id,
@@ -1219,8 +1218,7 @@ int main(int argc, char **argv)
 	printf("grant_admin_master_handoff=pass\n");
 
 	if (create_grant(master_b, connector_id,
-			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
-			 DRM_CASTKMS_GRANT_READ_CURSOR, 0,
+			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS, 0,
 			 &master_b_grant_fd, &master_b_grant_id) ||
 	    expect_holder_state(
 		    master_b_grant_fd, master_b_grant_id,
