@@ -16,6 +16,8 @@
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -447,6 +449,57 @@ static int expect_revoke_event(int grant_fd, uint32_t grant_id, int status)
 	return -1;
 }
 
+static int test_crc_access(int drm_fd, int expected_errno)
+{
+	struct stat statbuf;
+	char control_path[128];
+	char data_path[128];
+	static const char source[] = "auto\n";
+	int control_fd;
+	int data_fd;
+	int ret = -1;
+
+	if (fstat(drm_fd, &statbuf) < 0) {
+		perror("fstat DRM device");
+		return -1;
+	}
+	if (snprintf(control_path, sizeof(control_path),
+		     "/sys/kernel/debug/dri/%u/crtc-0/crc/control",
+		     minor(statbuf.st_rdev)) >= (int)sizeof(control_path) ||
+	    snprintf(data_path, sizeof(data_path),
+		     "/sys/kernel/debug/dri/%u/crtc-0/crc/data",
+		     minor(statbuf.st_rdev)) >= (int)sizeof(data_path))
+		return -1;
+	control_fd = open(control_path, O_WRONLY | O_CLOEXEC);
+	if (control_fd < 0) {
+		perror(control_path);
+		return -1;
+	}
+	if (write(control_fd, source, sizeof(source) - 1) != sizeof(source) - 1) {
+		perror("write CRC source");
+		close(control_fd);
+		return -1;
+	}
+	close(control_fd);
+
+	errno = 0;
+	data_fd = open(data_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (data_fd >= 0) {
+		if (!expected_errno)
+			ret = 0;
+		else
+			fprintf(stderr, "CRC data unexpectedly opened\n");
+		close(data_fd);
+	} else if (expected_errno && errno == expected_errno) {
+		ret = 0;
+	} else {
+		fprintf(stderr, "CRC data open returned %s, expected %s\n",
+			strerror(errno),
+			expected_errno ? strerror(expected_errno) : "success");
+	}
+	return ret;
+}
+
 static int expect_plain_capture_denied(int fd)
 {
 	struct drm_castkms_get_grant get_grant = {};
@@ -791,7 +844,8 @@ int main(int argc, char **argv)
 			 &master_b_grant_fd, &master_b_grant_id) ||
 	    expect_holder_state(
 		    master_b_grant_fd, master_b_grant_id,
-		    DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT, 0))
+		    DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT, 0) ||
+	    test_crc_access(master_b, EACCES))
 		goto out;
 	printf("grant_foreign_content_blocked=pass\n");
 
@@ -807,6 +861,8 @@ int main(int argc, char **argv)
 	    expect_holder_state(admin_fd, admin_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN))
+		goto out;
+	if (test_crc_access(master_b, 0))
 		goto out;
 	printf("grant_new_master_content=pass\n");
 

@@ -233,9 +233,19 @@ int castkms_set_crc_source(struct drm_crtc *crtc, const char *source_name)
 	if (ret)
 		return ret;
 
-	if (enabled)
+	if (enabled) {
+		bool content_safe;
+
+		spin_lock_irq(&out->lock);
+		content_safe =
+			castkms_capture_output_has_safe_content(out);
+		spin_unlock_irq(&out->lock);
+		if (!content_safe)
+			return -EACCES;
+
 		return castkms_frame_dispatch_get(out,
 					   CASTKMS_FRAME_DISPATCH_CLIENT_CRC);
+	}
 
 	castkms_frame_dispatch_put(out, CASTKMS_FRAME_DISPATCH_CLIENT_CRC);
 	return 0;
