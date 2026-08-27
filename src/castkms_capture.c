@@ -142,6 +142,8 @@ int castkms_capture_stream_attach(struct castkms_capture_stream *stream)
 	}
 	capture->stream = stream;
 	stream->attached = true;
+	castkms_connector_set_capture_active(
+		castkms_capture_authority_connector(stream->authority), true);
 	mutex_unlock(&capture->lock);
 
 	return 0;
@@ -216,6 +218,8 @@ static void castkms_capture_stream_detach(struct castkms_capture_stream *stream)
 	}
 	capture->stream = NULL;
 	stream->attached = false;
+	castkms_connector_set_capture_active(
+		castkms_capture_authority_connector(stream->authority), false);
 	mutex_unlock(&capture->lock);
 }
 

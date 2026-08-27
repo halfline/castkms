@@ -5,6 +5,8 @@
 #include <drm/drm_edid.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_property.h>
+#include <drm/drm_sysfs.h>
 
 #include <kunit/visibility.h>
 
@@ -108,6 +110,15 @@ struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsd
 
 	drm_connector_helper_add(connector, &castkms_conn_helper_funcs);
 	drm_connector_attach_edid_property(connector);
+	if (!castkmsdev->capture_active_prop) {
+		castkmsdev->capture_active_prop =
+			drm_property_create_range(dev, DRM_MODE_PROP_IMMUTABLE,
+					  "capture_active", 0, 1);
+		if (!castkmsdev->capture_active_prop)
+			return ERR_PTR(-ENOMEM);
+	}
+	drm_object_attach_property(&connector->base,
+				   castkmsdev->capture_active_prop, 0);
 
 	return castkms_connector;
 }
@@ -117,6 +128,19 @@ void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev)
 	struct drm_device *dev = &castkmsdev->drm;
 
 	drm_kms_helper_hotplug_event(dev);
+}
+
+void castkms_connector_set_capture_active(struct drm_connector *connector,
+					  bool active)
+{
+	struct drm_device *dev = connector->dev;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+
+	drm_object_property_set_value(&connector->base,
+				      castkmsdev->capture_active_prop,
+				      active ? 1 : 0);
+	drm_sysfs_connector_property_event(connector,
+					   castkmsdev->capture_active_prop);
 }
 
 static void

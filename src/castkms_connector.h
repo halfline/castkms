@@ -63,5 +63,7 @@ int castkms_connector_require_authority_attached(
 	struct castkms_capture_authority *authority);
 bool castkms_connector_detach_authority(
 	struct castkms_capture_authority *authority);
+void castkms_connector_set_capture_active(struct drm_connector *connector,
+					  bool active);
 
 #endif /* _CASTKMS_CONNECTOR_H_ */
