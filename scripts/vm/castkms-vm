@@ -14,29 +14,48 @@ readonly KERNEL_RPM_BASE_URL=https://kojipkgs.fedoraproject.org/packages/kernel/
 
 STATE_DIR=${CASTKMS_VM_STATE_DIR:-${XDG_CACHE_HOME:-${HOME}/.cache}/castkms-vm}
 INSTANCE_NAME=${CASTKMS_VM_INSTANCE:-default}
-INSTANCE_DIR=$STATE_DIR/instances/$INSTANCE_NAME
 IMAGE_DIR=$STATE_DIR/images
 BASE_IMAGE=$IMAGE_DIR/$IMAGE_NAME
-DISK_IMAGE=$INSTANCE_DIR/root.qcow2
-SEED_ISO=$INSTANCE_DIR/seed.iso
-PID_FILE=$INSTANCE_DIR/qemu.pid
-SERIAL_LOG=$INSTANCE_DIR/serial.log
-QEMU_LOG=$INSTANCE_DIR/qemu.log
 SSH_KEY=$STATE_DIR/ssh/id_ed25519
 SSH_PORT=${CASTKMS_VM_SSH_PORT:-22222}
 SSH_USER=castkms
 GUEST_REPO=/home/$SSH_USER/castkms
-RESULT_DIR=$STATE_DIR/results/$INSTANCE_NAME
+INSTANCE_DIR=
+DISK_IMAGE=
+SEED_ISO=
+PID_FILE=
+SERIAL_LOG=
+QEMU_LOG=
+RESULT_DIR=
 
-SSH_OPTIONS=(
-	-i "$SSH_KEY"
-	-p "$SSH_PORT"
-	-o BatchMode=yes
-	-o ConnectTimeout=3
-	-o IdentitiesOnly=yes
-	-o StrictHostKeyChecking=accept-new
-	-o UserKnownHostsFile="$STATE_DIR/ssh/known_hosts"
-)
+refresh_paths()
+{
+	INSTANCE_DIR=$STATE_DIR/instances/$INSTANCE_NAME
+	DISK_IMAGE=$INSTANCE_DIR/root.qcow2
+	SEED_ISO=$INSTANCE_DIR/seed.iso
+	PID_FILE=$INSTANCE_DIR/qemu.pid
+	SERIAL_LOG=$INSTANCE_DIR/serial.log
+	QEMU_LOG=$INSTANCE_DIR/qemu.log
+	RESULT_DIR=$STATE_DIR/results/$INSTANCE_NAME
+}
+
+SSH_OPTIONS=()
+
+refresh_ssh_options()
+{
+	SSH_OPTIONS=(
+		-i "$SSH_KEY"
+		-p "$SSH_PORT"
+		-o BatchMode=yes
+		-o ConnectTimeout=3
+		-o IdentitiesOnly=yes
+		-o StrictHostKeyChecking=accept-new
+		-o UserKnownHostsFile="$STATE_DIR/ssh/known_hosts"
+	)
+}
+
+refresh_paths
+refresh_ssh_options
 
 usage()
 {
