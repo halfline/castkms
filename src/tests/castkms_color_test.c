@@ -6,8 +6,9 @@
 #include <drm/drm_fixed.h>
 #include <drm/drm_mode.h>
 #include <drm/drm_property.h>
+
+#include "../castkms_colorop.h"
 #include "../castkms_composer.h"
-#include "../castkms_drv.h"
 #include "../castkms_luts.h"
 
 #define TEST_LUT_SIZE 16

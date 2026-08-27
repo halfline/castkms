@@ -3,6 +3,8 @@
 #ifndef _CASTKMS_LUTS_H_
 #define _CASTKMS_LUTS_H_
 
+#include "castkms_frame.h"
+
 #define LUT_SIZE 256
 
 extern const struct castkms_color_lut castkms_linear_eotf;

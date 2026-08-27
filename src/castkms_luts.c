@@ -2,7 +2,8 @@
 
 #include <drm/drm_mode.h>
 
-#include "castkms_drv.h"
+#include <kunit/visibility.h>
+
 #include "castkms_luts.h"
 
 /*
@@ -276,7 +277,7 @@ const struct castkms_color_lut castkms_linear_eotf = {
 	.lut_length = LUT_SIZE,
 	.channel_value2index_ratio = 0xff00ffll
 };
-EXPORT_SYMBOL(castkms_linear_eotf);
+EXPORT_SYMBOL_IF_KUNIT(castkms_linear_eotf);
 
 static const struct drm_color_lut srgb_array[LUT_SIZE] = {
 	{ 0x0, 0x0, 0x0, 0 },
@@ -542,7 +543,7 @@ const struct castkms_color_lut castkms_srgb_eotf = {
 	.lut_length = LUT_SIZE,
 	.channel_value2index_ratio = 0xff00ffll
 };
-EXPORT_SYMBOL(castkms_srgb_eotf);
+EXPORT_SYMBOL_IF_KUNIT(castkms_srgb_eotf);
 
 static const struct drm_color_lut srgb_inv_array[LUT_SIZE] = {
 	{ 0x0, 0x0, 0x0, 0 },
@@ -808,4 +809,4 @@ const struct castkms_color_lut castkms_srgb_inv_eotf = {
 	.lut_length = LUT_SIZE,
 	.channel_value2index_ratio = 0xff00ffll
 };
-EXPORT_SYMBOL(castkms_srgb_inv_eotf);
+EXPORT_SYMBOL_IF_KUNIT(castkms_srgb_inv_eotf);

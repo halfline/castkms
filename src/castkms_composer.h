@@ -3,8 +3,12 @@
 #ifndef _CASTKMS_COMPOSER_H_
 #define _CASTKMS_COMPOSER_H_
 
-#include <kunit/visibility.h>
-#include "castkms_drv.h"
+#include <linux/kconfig.h>
+#include <linux/types.h>
+
+#include "castkms_frame.h"
+
+struct castkms_output_buffer;
 
 /*
  * This enum is related to the positions of the variables inside
@@ -17,14 +21,16 @@ enum lut_channel {
 	LUT_RESERVED
 };
 
+int castkms_compose_frame(const struct castkms_frame_stage *frame,
+			  const struct castkms_output_buffer *destination);
+int castkms_compose_targets(
+	const struct castkms_frame_stage *frame,
+	const struct castkms_output_buffer *destination,
+	const struct castkms_output_buffer *second_destination, u32 *crc32);
+
 #if IS_ENABLED(CONFIG_KUNIT)
 void castkms_apply_colorops(const struct castkms_frame_plane *plane,
 			    struct line_buffer *output_buffer);
-int castkms_composer_demand_get(struct castkms_composer_demand *demand,
-				enum castkms_composer_client client,
-				int vblank_ret, bool *keep_vblank);
-bool castkms_composer_demand_put(struct castkms_composer_demand *demand,
-				 enum castkms_composer_client client);
 u16 castkms_lerp_u16(u16 a, u16 b, s64 t);
 s64 castkms_get_lut_index(const struct castkms_color_lut *lut, u16 channel_value);
 u16 castkms_apply_lut_to_channel_value(const struct castkms_color_lut *lut,

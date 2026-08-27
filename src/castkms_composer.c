@@ -2,12 +2,13 @@
 
 #include <linux/crc32.h>
 #include <linux/dma-direction.h>
+#include <linux/slab.h>
 
-#include <drm/drm_atomic.h>
-#include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
 #include <drm/drm_colorop.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
+#include <drm/drm_plane.h>
 #include <drm/drm_fixed.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_print.h>
@@ -16,9 +17,18 @@
 #include <kunit/visibility.h>
 
 #include "castkms_composer.h"
+#include "castkms_drv.h"
 #include "castkms_formats.h"
 #include "castkms_luts.h"
 #include "castkms_output_buffer.h"
+
+VISIBLE_IF_KUNIT int
+castkms_composer_demand_get(struct castkms_composer_demand *demand,
+			    enum castkms_composer_client client,
+			    int vblank_ret, bool *keep_vblank);
+VISIBLE_IF_KUNIT bool
+castkms_composer_demand_put(struct castkms_composer_demand *demand,
+			    enum castkms_composer_client client);
 
 static u16 pre_mul_blend_channel(u16 src, u16 dst, u16 alpha)
 {
@@ -124,20 +134,24 @@ castkms_apply_lut_to_channel_value(const struct castkms_color_lut *lut,
 EXPORT_SYMBOL_IF_KUNIT(castkms_apply_lut_to_channel_value);
 
 
-static void apply_lut(const struct castkms_crtc_state *crtc_state, struct line_buffer *output_buffer)
+static void apply_lut(const struct castkms_frame_stage *frame,
+		      struct line_buffer *output_buffer)
 {
-	if (!crtc_state->gamma_lut.base)
+	if (!frame->gamma_lut.base)
 		return;
 
-	if (!crtc_state->gamma_lut.lut_length)
+	if (!frame->gamma_lut.lut_length)
 		return;
 
 	for (size_t x = 0; x < output_buffer->n_pixels; x++) {
 		struct pixel_argb_u16 *pixel = &output_buffer->pixels[x];
 
-		pixel->r = castkms_apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->r, LUT_RED);
-		pixel->g = castkms_apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->g, LUT_GREEN);
-		pixel->b = castkms_apply_lut_to_channel_value(&crtc_state->gamma_lut, pixel->b, LUT_BLUE);
+		pixel->r = castkms_apply_lut_to_channel_value(
+			&frame->gamma_lut, pixel->r, LUT_RED);
+		pixel->g = castkms_apply_lut_to_channel_value(
+			&frame->gamma_lut, pixel->g, LUT_GREEN);
+		pixel->b = castkms_apply_lut_to_channel_value(
+			&frame->gamma_lut, pixel->b, LUT_BLUE);
 	}
 }
 
@@ -301,7 +315,7 @@ static enum pixel_read_direction direction_for_rotation(unsigned int rotation)
  * be dead code.
  */
 static void clamp_line_coordinates(enum pixel_read_direction direction,
-				   const struct castkms_plane_state *current_plane,
+				   const struct castkms_frame_plane *current_plane,
 				   const struct drm_rect *src_line, int *src_x_start,
 				   int *src_y_start, int *dst_x_start, int *pixel_count)
 {
@@ -363,7 +377,7 @@ static void clamp_line_coordinates(enum pixel_read_direction direction,
  * @stage_buffer: temporary buffer to convert the pixel line from the source buffer
  * @output_buffer: buffer to blend the read line into.
  */
-static void blend_line(struct castkms_plane_state *current_plane, int y,
+static void blend_line(const struct castkms_frame_plane *current_plane, int y,
 		       int crtc_x_limit, struct line_buffer *stage_buffer,
 		       struct line_buffer *output_buffer)
 {
@@ -454,9 +468,9 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 	 */
 	plane_buffer.n_pixels = pixel_count;
 	plane_buffer.pixels = &stage_buffer->pixels[dst_x_start];
-	current_plane->pixel_read_line(&current_plane->frame, src_x_start, src_y_start,
+	current_plane->pixel_read_line(current_plane, src_x_start, src_y_start,
 				       direction, pixel_count, plane_buffer.pixels);
-	castkms_apply_colorops(&current_plane->frame, &plane_buffer);
+	castkms_apply_colorops(current_plane, &plane_buffer);
 	pre_mul_alpha_blend(&plane_buffer, output_buffer,
 			    dst_x_start, pixel_count);
 }
@@ -464,7 +478,8 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
 /**
  * blend - blend the pixels from all planes and compute crc
  * @destination: Optional destination for the composed frame
- * @crtc_state: The crtc state
+ * @second_destination: Optional second destination for the same frame
+ * @frame: Renderer input for the frame
  * @crc32: The crc output of the final frame
  * @output_buffer: A buffer of a row that will receive the result of the blend(s)
  * @stage_buffer: The line with the pixels from plane being blend to the output
@@ -472,16 +487,17 @@ static void blend_line(struct castkms_plane_state *current_plane, int y,
  *
  * This function blends the pixels (Using the `pre_mul_alpha_blend`)
  * from all planes, calculates the crc32 of the output from the former step,
- * and, if necessary, convert and store the output in @destination.
+ * and, if necessary, convert and store the output in @destination and
+ * @second_destination.
  */
 static void blend(const struct castkms_output_buffer *destination,
-		  struct castkms_crtc_state *crtc_state,
+		  const struct castkms_output_buffer *second_destination,
+		  const struct castkms_frame_stage *frame,
 		  u32 *crc32, struct line_buffer *stage_buffer,
 		  struct line_buffer *output_buffer, size_t row_size)
 {
-	struct castkms_plane_state **plane = crtc_state->active_planes;
-	u32 n_active_planes = crtc_state->num_active_planes;
-	u64 bgcolor = crtc_state->base.background_color;
+	struct castkms_frame_plane **planes = frame->planes;
+	u64 bgcolor = frame->background_color;
 
 	const struct pixel_argb_u16 background_color = {
 		.a = 0xffff,
@@ -490,8 +506,8 @@ static void blend(const struct castkms_output_buffer *destination,
 		.b = DRM_ARGB64_GETB(bgcolor),
 	};
 
-	int crtc_y_limit = crtc_state->base.mode.vdisplay;
-	int crtc_x_limit = crtc_state->base.mode.hdisplay;
+	int crtc_y_limit = frame->height;
+	int crtc_x_limit = frame->width;
 
 	/*
 	 * The planes are composed line-by-line to avoid heavy memory usage. It is a necessary
@@ -504,26 +520,26 @@ static void blend(const struct castkms_output_buffer *destination,
 		fill_background(&background_color, output_buffer);
 
 		/* The active planes are composed associatively in z-order. */
-		for (size_t i = 0; i < n_active_planes; i++) {
-			blend_line(plane[i], y, crtc_x_limit, stage_buffer, output_buffer);
-		}
+		for (size_t i = 0; i < frame->num_planes; i++)
+			blend_line(planes[i], y, crtc_x_limit, stage_buffer,
+				   output_buffer);
 
-		apply_lut(crtc_state, output_buffer);
+		apply_lut(frame, output_buffer);
 
 		*crc32 = crc32_le(*crc32, (void *)output_buffer->pixels, row_size);
 
 		if (destination)
 			castkms_output_buffer_write_row(destination, output_buffer, y);
+		if (second_destination)
+			castkms_output_buffer_write_row(second_destination,
+							output_buffer, y);
 	}
 }
 
-static bool plane_format_funcs_are_valid(struct castkms_crtc_state *crtc_state)
+static bool plane_format_funcs_are_valid(const struct castkms_frame_stage *frame)
 {
-	struct castkms_plane_state **planes = crtc_state->active_planes;
-	u32 n_active_planes = crtc_state->num_active_planes;
-
-	for (size_t i = 0; i < n_active_planes; i++)
-		if (!planes[i]->pixel_read_line)
+	for (size_t i = 0; i < frame->num_planes; i++)
+		if (!frame->planes[i]->pixel_read_line)
 			return false;
 
 	return true;
@@ -535,20 +551,17 @@ static bool frame_maps_are_valid(const struct castkms_frame_info *frame_info)
 								    frame_info->map);
 }
 
-static bool plane_frame_maps_are_valid(struct castkms_crtc_state *crtc_state)
+static bool plane_frame_maps_are_valid(const struct castkms_frame_stage *frame)
 {
-	struct castkms_plane_state **plane_state = crtc_state->active_planes;
-	u32 n_active_planes = crtc_state->num_active_planes;
-
-	for (size_t i = 0; i < n_active_planes; i++)
-		if (!frame_maps_are_valid(plane_state[i]->frame_info))
+	for (size_t i = 0; i < frame->num_planes; i++)
+		if (!frame_maps_are_valid(frame->planes[i]->frame_info))
 			return false;
 
 	return true;
 }
 
 static bool
-plane_framebuffer_appears_before(struct castkms_plane_state **planes,
+plane_framebuffer_appears_before(struct castkms_frame_plane **planes,
 				 size_t index)
 {
 	struct drm_framebuffer *fb = planes[index]->frame_info->fb;
@@ -561,10 +574,10 @@ plane_framebuffer_appears_before(struct castkms_plane_state **planes,
 }
 
 static void
-plane_framebuffers_end_cpu_access(struct castkms_crtc_state *crtc_state,
+plane_framebuffers_end_cpu_access(const struct castkms_frame_stage *frame,
 				  size_t count)
 {
-	struct castkms_plane_state **planes = crtc_state->active_planes;
+	struct castkms_frame_plane **planes = frame->planes;
 
 	while (count) {
 		struct drm_framebuffer *fb;
@@ -578,10 +591,11 @@ plane_framebuffers_end_cpu_access(struct castkms_crtc_state *crtc_state,
 	}
 }
 
-static int plane_framebuffers_begin_cpu_access(struct castkms_crtc_state *crtc_state)
+static int
+plane_framebuffers_begin_cpu_access(const struct castkms_frame_stage *frame)
 {
-	struct castkms_plane_state **planes = crtc_state->active_planes;
-	size_t count = crtc_state->num_active_planes;
+	struct castkms_frame_plane **planes = frame->planes;
+	size_t count = frame->num_planes;
 	size_t i;
 	int ret;
 
@@ -592,7 +606,7 @@ static int plane_framebuffers_begin_cpu_access(struct castkms_crtc_state *crtc_s
 		ret = drm_gem_fb_begin_cpu_access(planes[i]->frame_info->fb,
 						  DMA_FROM_DEVICE);
 		if (ret) {
-			plane_framebuffers_end_cpu_access(crtc_state, i);
+			plane_framebuffers_end_cpu_access(frame, i);
 			return ret;
 		}
 	}
@@ -600,9 +614,10 @@ static int plane_framebuffers_begin_cpu_access(struct castkms_crtc_state *crtc_s
 	return 0;
 }
 
-static int compose_active_planes(const struct castkms_output_buffer *destination,
-				 struct castkms_crtc_state *crtc_state,
-				 u32 *crc32)
+int castkms_compose_targets(
+	const struct castkms_frame_stage *frame,
+	const struct castkms_output_buffer *destination,
+	const struct castkms_output_buffer *second_destination, u32 *crc32)
 {
 	size_t line_width, pixel_size = sizeof(struct pixel_argb_u16);
 	struct line_buffer output_buffer, stage_buffer;
@@ -616,17 +631,21 @@ static int compose_active_planes(const struct castkms_output_buffer *destination
 	 */
 	static_assert(sizeof(struct pixel_argb_u16) == 8);
 
-	if (WARN_ON(!plane_frame_maps_are_valid(crtc_state)))
+	if (WARN_ON(!plane_frame_maps_are_valid(frame)))
 		return -EINVAL;
 
-	if (WARN_ON(!plane_format_funcs_are_valid(crtc_state)))
+	if (WARN_ON(!plane_format_funcs_are_valid(frame)))
 		return -EINVAL;
 
 	if (WARN_ON(destination &&
 		    !castkms_output_buffer_is_valid(destination)))
 		return -EINVAL;
 
-	line_width = crtc_state->base.mode.hdisplay;
+	if (WARN_ON(second_destination &&
+		    !castkms_output_buffer_is_valid(second_destination)))
+		return -EINVAL;
+
+	line_width = frame->width;
 	stage_buffer.n_pixels = line_width;
 	output_buffer.n_pixels = line_width;
 
@@ -643,7 +662,7 @@ static int compose_active_planes(const struct castkms_output_buffer *destination
 		goto free_stage_buffer;
 	}
 
-	ret = plane_framebuffers_begin_cpu_access(crtc_state);
+	ret = plane_framebuffers_begin_cpu_access(frame);
 	if (ret)
 		goto free_output_buffer;
 
@@ -653,18 +672,74 @@ static int compose_active_planes(const struct castkms_output_buffer *destination
 			goto end_plane_access;
 	}
 
-	blend(destination, crtc_state, crc32, &stage_buffer,
+	if (second_destination) {
+		ret = castkms_output_buffer_begin_cpu_access(second_destination);
+		if (ret)
+			goto end_first_destination;
+	}
+
+	blend(destination, second_destination, frame, crc32, &stage_buffer,
 	      &output_buffer, line_width * pixel_size);
 
+	if (second_destination)
+		castkms_output_buffer_end_cpu_access(second_destination);
+end_first_destination:
 	if (destination)
 		castkms_output_buffer_end_cpu_access(destination);
 end_plane_access:
-	plane_framebuffers_end_cpu_access(crtc_state,
-					  crtc_state->num_active_planes);
+	plane_framebuffers_end_cpu_access(frame, frame->num_planes);
 free_output_buffer:
 	kvfree(output_buffer.pixels);
 free_stage_buffer:
 	kvfree(stage_buffer.pixels);
+
+	return ret;
+}
+
+int castkms_compose_frame(const struct castkms_frame_stage *frame,
+			  const struct castkms_output_buffer *destination)
+{
+	u32 crc32 = 0;
+
+	return castkms_compose_targets(frame, destination, NULL, &crc32);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_compose_frame);
+
+/*
+ * Keep the legacy scheduler usable until CRTC atomic check constructs a frame
+ * stage directly. The renderer itself still consumes only the immutable view.
+ */
+static int
+compose_active_planes(const struct castkms_output_buffer *destination,
+		      struct castkms_crtc_state *crtc_state, u32 *crc32)
+{
+	struct castkms_frame_plane **planes;
+	struct castkms_frame_stage frame;
+	size_t num_planes;
+	int ret;
+
+	if (WARN_ON(crtc_state->num_active_planes < 0))
+		return -EINVAL;
+
+	num_planes = crtc_state->num_active_planes;
+	planes = kcalloc(num_planes, sizeof(*planes), GFP_KERNEL);
+	if (!planes && num_planes)
+		return -ENOMEM;
+
+	for (size_t i = 0; i < num_planes; i++)
+		planes[i] = &crtc_state->active_planes[i]->frame;
+
+	frame = (struct castkms_frame_stage) {
+		.planes = planes,
+		.num_planes = num_planes,
+		.gamma_lut = crtc_state->gamma_lut,
+		.width = crtc_state->base.mode.hdisplay,
+		.height = crtc_state->base.mode.vdisplay,
+		.background_color = crtc_state->base.background_color,
+	};
+
+	ret = castkms_compose_targets(&frame, destination, NULL, crc32);
+	kfree(planes);
 
 	return ret;
 }
@@ -707,11 +782,12 @@ void castkms_composer_worker(struct work_struct *work)
 
 		crtc_state->gamma_lut.base = crtc_state->base.gamma_lut->data;
 		crtc_state->gamma_lut.lut_length =
-			crtc_state->base.gamma_lut->length / sizeof(struct drm_color_lut);
-		max_lut_index_fp = drm_int2fixp(crtc_state->gamma_lut.lut_length - 1);
-		crtc_state->gamma_lut.channel_value2index_ratio = drm_fixp_div(max_lut_index_fp,
-									       u16_max_fp);
-
+			crtc_state->base.gamma_lut->length /
+			sizeof(struct drm_color_lut);
+		max_lut_index_fp =
+			drm_int2fixp(crtc_state->gamma_lut.lut_length - 1);
+		crtc_state->gamma_lut.channel_value2index_ratio =
+			drm_fixp_div(max_lut_index_fp, u16_max_fp);
 	} else {
 		crtc_state->gamma_lut.base = NULL;
 		crtc_state->gamma_lut.lut_length = 0;
@@ -755,7 +831,7 @@ void castkms_composer_worker(struct work_struct *work)
 static const char *const pipe_crc_sources[] = { "auto" };
 
 const char *const *castkms_get_crc_sources(struct drm_crtc *crtc,
-					size_t *count)
+					    size_t *count)
 {
 	*count = ARRAY_SIZE(pipe_crc_sources);
 	return pipe_crc_sources;
@@ -778,7 +854,7 @@ static int castkms_crc_parse_source(const char *src_name, bool *enabled)
 }
 
 int castkms_verify_crc_source(struct drm_crtc *crtc, const char *src_name,
-			   size_t *values_cnt)
+			      size_t *values_cnt)
 {
 	bool enabled;
 
