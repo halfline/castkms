@@ -11,4 +11,5 @@ tools/castkms-grant-test
 tools/castkms-capture-test
 tools/pw-castkms/pw-castkms
 tools/pw-castkms/pw-castkms-test
+tools/pw-castkms/pw-castkms-view
 /test-results/
