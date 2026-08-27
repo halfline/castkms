@@ -111,8 +111,8 @@ Environment:
                              (desktop commands default to 9)
   CASTKMS_VM_LAN_BRIDGE      Optional host bridge for a second guest NIC;
                              the user-network SSH NIC remains available
-  CASTKMS_VM_SCENARIO        Product scenario: all, configfs, or capture
-                             (default: all)
+  CASTKMS_VM_SCENARIO        Product scenario: all, configfs, capture,
+                             or cursor (default: all)
 EOF
 }
 

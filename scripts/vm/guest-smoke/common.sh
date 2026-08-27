@@ -7,10 +7,12 @@
 declare -ar smoke_scenario_names=(
 	configfs
 	capture
+	cursor
 )
 declare -Ar smoke_scenario_handlers=(
 	[configfs]=run_configfs_scenario
 	[capture]=run_capture_scenario
+	[cursor]=run_cursor_scenario
 )
 
 smoke_validate_scenario()

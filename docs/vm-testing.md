@@ -126,8 +126,8 @@ The product work is selectable:
 CASTKMS_VM_SCENARIO=capture ./scripts/vm/castkms-vm test
 ```
 
-The available scenarios are `configfs` and `capture`. The default `all` runs
-them in that order.
+The available scenarios are `configfs`, `capture`, and `cursor`. The default
+`all` runs them in that order.
 
 The guest harness keeps lifecycle setup and the single failure-safe cleanup
 trap in `guest-smoke-test.sh`. Its product scenarios live in
@@ -149,6 +149,9 @@ explicit buffer synchronization, DMA-BUF fence reuse, completion metadata,
 composed pixels, a vsynced `800x600` page-flip that advances the capture
 mode generation, writeback overlapping an in-flight capture, and the
 standalone CEC session test through a full-rights grant.
+
+**cursor** checks cursor metadata and bitmap transitions on a grant-backed
+capture stream.
 
 Device-backed capture, grant, grant-launcher, and CEC clients share the small
 `castkms-test-drm` harness for driver identification, dumb framebuffers, and
