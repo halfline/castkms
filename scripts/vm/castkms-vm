@@ -199,8 +199,14 @@ start()
 		-pidfile "$PID_FILE" \
 		-D "$QEMU_LOG"
 
-	printf 'Started VM %s (pid %s, SSH port %s)\n' \
-		"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT"
+	if test -n "${CASTKMS_VM_VNC_DISPLAY:-}"; then
+		printf 'Started VM %s (pid %s, SSH port %s, VNC 127.0.0.1:%s)\n' \
+			"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT" \
+			"$((5900 + CASTKMS_VM_VNC_DISPLAY))"
+	else
+		printf 'Started VM %s (pid %s, SSH port %s)\n' \
+			"$INSTANCE_NAME" "$(vm_pid)" "$SSH_PORT"
+	fi
 	if test -n "$lan_bridge"; then
 		printf 'Attached VM %s LAN NIC to host bridge %s\n' \
 			"$INSTANCE_NAME" "$lan_bridge"
