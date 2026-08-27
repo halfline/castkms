@@ -14,6 +14,7 @@
 #include <drm/drm_writeback.h>
 
 #include "castkms_frame.h"
+#include "castkms_crtc.h"
 #include "castkms_plane.h"
 
 #define DEFAULT_DEVICE_NAME "castkms"
@@ -50,42 +51,6 @@ castkms_composer_demand_is_active(const struct castkms_composer_demand *demand)
 {
 	return demand->crc_enabled || demand->writeback_count;
 }
-
-struct castkms_output_buffer;
-
-/**
- * struct castkms_crtc_state - Driver specific CRTC state
- *
- * @base: base CRTC state
- * @composer_work: work struct to compose and add CRC entries
- *
- * @num_active_planes: Number of active planes
- * @active_planes: List containing all the active planes (counted by
- *		   @num_active_planes). They should be stored in z-order.
- * @active_writeback: Current active writeback destination buffer
- * @gamma_lut: Look up table for gamma used in this CRTC
- * @crc_pending: Protected by @castkms_output.composer_lock, true when the frame CRC is not computed
- *		 yet. Used by vblank to detect if the composer is too slow.
- * @wb_pending: Protected by @castkms_output.composer_lock, true when a writeback frame is requested.
- * @frame_start: Protected by @castkms_output.composer_lock, saves the frame number before the start
- *		 of the composition process.
- * @frame_end: Protected by @castkms_output.composer_lock, saves the last requested frame number.
- *	       This is used to generate enough CRC entries when the composition worker is too slow.
- */
-struct castkms_crtc_state {
-	struct drm_crtc_state base;
-	struct work_struct composer_work;
-
-	int num_active_planes;
-	struct castkms_plane_state **active_planes;
-	struct castkms_output_buffer *active_writeback;
-	struct castkms_color_lut gamma_lut;
-
-	bool crc_pending;
-	bool wb_pending;
-	u64 frame_start;
-	u64 frame_end;
-};
 
 /**
  * struct castkms_output - Internal representation of all output components in CASTKMS
@@ -140,9 +105,6 @@ struct castkms_device {
 
 #define drm_device_to_castkms_device(target) \
 	container_of(target, struct castkms_device, drm)
-
-#define to_castkms_crtc_state(target)\
-	container_of(target, struct castkms_crtc_state, base)
 
 /**
  * castkms_create() - Create a device from a configuration

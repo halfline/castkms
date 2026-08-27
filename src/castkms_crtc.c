@@ -6,6 +6,7 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
+#include <drm/drm_fixed.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
@@ -14,27 +15,28 @@
 
 #include <kunit/visibility.h>
 
+#include "castkms_crtc.h"
 #include "castkms_drv.h"
+#include "castkms_plane.h"
 
-static int castkms_plane_state_zpos_cmp(const void *a, const void *b)
+static int castkms_frame_plane_zpos_cmp(const void *a, const void *b)
 {
-	const struct castkms_plane_state *plane_a =
-		*(const struct castkms_plane_state **)a;
-	const struct castkms_plane_state *plane_b =
-		*(const struct castkms_plane_state **)b;
-	u32 zpos_a = plane_a->base.base.normalized_zpos;
-	u32 zpos_b = plane_b->base.base.normalized_zpos;
+	const struct castkms_frame_plane *plane_a =
+		*(const struct castkms_frame_plane **)a;
+	const struct castkms_frame_plane *plane_b =
+		*(const struct castkms_frame_plane **)b;
 
-	return (zpos_a > zpos_b) - (zpos_a < zpos_b);
+	return (plane_a->zpos > plane_b->zpos) -
+	       (plane_a->zpos < plane_b->zpos);
 }
 
 VISIBLE_IF_KUNIT void
-castkms_sort_plane_states(struct castkms_plane_state **planes, size_t count)
+castkms_sort_frame_planes(struct castkms_frame_plane **planes, size_t count)
 {
-	sort(planes, count, sizeof(*planes), castkms_plane_state_zpos_cmp,
+	sort(planes, count, sizeof(*planes), castkms_frame_plane_zpos_cmp,
 	     NULL);
 }
-EXPORT_SYMBOL_IF_KUNIT(castkms_sort_plane_states);
+EXPORT_SYMBOL_IF_KUNIT(castkms_sort_frame_planes);
 
 static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 {
@@ -53,8 +55,9 @@ static bool castkms_crtc_handle_vblank_timeout(struct drm_crtc *crtc)
 	if (state && castkms_composer_demand_is_active(&output->composer_demand)) {
 		u64 frame = drm_crtc_accurate_vblank_count(crtc);
 
-		/* update frame_start only if a queued castkms_composer_worker()
-		 * has read the data
+		/*
+		 * Update frame_start only if queued work has consumed the
+		 * preceding range.
 		 */
 		spin_lock(&output->composer_lock);
 		if (!state->crc_pending)
@@ -90,7 +93,6 @@ castkms_atomic_crtc_duplicate_state(struct drm_crtc *crtc)
 		return NULL;
 
 	__drm_atomic_helper_crtc_duplicate_state(crtc, &castkms_state->base);
-
 	INIT_WORK(&castkms_state->composer_work, castkms_composer_worker);
 
 	return &castkms_state->base;
@@ -104,7 +106,7 @@ static void castkms_atomic_crtc_destroy_state(struct drm_crtc *crtc,
 	__drm_atomic_helper_crtc_destroy_state(state);
 
 	WARN_ON(work_pending(&castkms_state->composer_work));
-	kfree(castkms_state->active_planes);
+	kfree(castkms_state->frame.planes);
 	kfree(castkms_state);
 }
 
@@ -136,17 +138,40 @@ static const struct drm_crtc_funcs castkms_crtc_funcs = {
 	.verify_crc_source	= castkms_verify_crc_source,
 };
 
+static void castkms_frame_stage_init_crtc(
+	struct castkms_frame_stage *frame,
+	const struct drm_crtc_state *crtc_state)
+{
+	frame->width = crtc_state->mode.hdisplay;
+	frame->height = crtc_state->mode.vdisplay;
+	frame->background_color = crtc_state->background_color;
+	frame->gamma_lut = (struct castkms_color_lut) {};
+	if (crtc_state->gamma_lut) {
+		size_t length = crtc_state->gamma_lut->length /
+				sizeof(struct drm_color_lut);
+
+		if (WARN_ON(!length))
+			return;
+		frame->gamma_lut.base = crtc_state->gamma_lut->data;
+		frame->gamma_lut.lut_length = length;
+		frame->gamma_lut.channel_value2index_ratio = drm_fixp_div(
+			drm_int2fixp(length - 1), drm_int2fixp(0xffff));
+	}
+}
+
 static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 				  struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
 									  crtc);
 	struct castkms_crtc_state *castkms_state = to_castkms_crtc_state(crtc_state);
+	struct castkms_frame_stage *frame = &castkms_state->frame;
+	struct castkms_plane_state *castkms_plane_state;
 	struct drm_plane *plane;
 	struct drm_plane_state *plane_state;
 	int i = 0, ret;
 
-	if (castkms_state->active_planes)
+	if (frame->planes)
 		return 0;
 
 	ret = drm_atomic_add_affected_planes(crtc_state->state, crtc);
@@ -154,8 +179,6 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 		return ret;
 
 	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
-		struct castkms_plane_state *castkms_plane_state;
-
 		plane_state = drm_atomic_get_new_plane_state(crtc_state->state, plane);
 		if (WARN_ON(!plane_state))
 			return -EINVAL;
@@ -171,52 +194,54 @@ static int castkms_crtc_atomic_check(struct drm_crtc *crtc,
 		i++;
 	}
 
-	castkms_state->active_planes = kzalloc_objs(*castkms_state->active_planes, i);
-	if (!castkms_state->active_planes)
+	frame->planes = kzalloc_objs(*frame->planes, i);
+	if (!frame->planes)
 		return -ENOMEM;
-	castkms_state->num_active_planes = i;
+	frame->num_planes = i;
 
 	i = 0;
 	drm_for_each_plane_mask(plane, crtc->dev, crtc_state->plane_mask) {
 		plane_state = drm_atomic_get_new_plane_state(crtc_state->state, plane);
 		if (WARN_ON(!plane_state)) {
 			ret = -EINVAL;
-			goto err_free_active_planes;
+			goto err_free_frame_planes;
 		}
 
 		if (!plane_state->visible)
 			continue;
 
-		castkms_state->active_planes[i++] =
-			to_castkms_plane_state(plane_state);
+		castkms_plane_state = to_castkms_plane_state(plane_state);
+		castkms_plane_state->frame.zpos = plane_state->normalized_zpos;
+		castkms_plane_state->frame.is_cursor =
+			plane_state->plane->type == DRM_PLANE_TYPE_CURSOR;
+		frame->planes[i++] = &castkms_plane_state->frame;
 	}
 
-	castkms_sort_plane_states(castkms_state->active_planes,
-				  castkms_state->num_active_planes);
+	castkms_sort_frame_planes(frame->planes, frame->num_planes);
+
+	castkms_frame_stage_init_crtc(frame, crtc_state);
 
 	return 0;
 
-err_free_active_planes:
-	kfree(castkms_state->active_planes);
-	castkms_state->active_planes = NULL;
-	castkms_state->num_active_planes = 0;
+err_free_frame_planes:
+	kfree(frame->planes);
+	frame->planes = NULL;
+	frame->num_planes = 0;
 	return ret;
 }
 
 static void castkms_crtc_atomic_begin(struct drm_crtc *crtc,
-				   struct drm_atomic_commit *state)
+				     struct drm_atomic_commit *state)
 	__acquires(&castkms_output->lock)
 {
 	struct castkms_output *castkms_output = drm_crtc_to_castkms_output(crtc);
 
-	/* This lock is held across the atomic commit to block vblank timer
-	 * from scheduling castkms_composer_worker until the composer is updated
-	 */
+	/* Keep vblank from queuing work while the published state changes. */
 	spin_lock_irq(&castkms_output->lock);
 }
 
 static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
-				   struct drm_atomic_commit *state)
+				     struct drm_atomic_commit *state)
 	__releases(&castkms_output->lock)
 {
 	struct castkms_output *castkms_output = drm_crtc_to_castkms_output(crtc);
@@ -235,7 +260,6 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 	}
 
 	castkms_output->composer_state = to_castkms_crtc_state(crtc->state);
-
 	spin_unlock_irq(&castkms_output->lock);
 }
 
@@ -257,7 +281,8 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 
 	castkms_out = drmm_crtc_alloc_with_planes(dev, struct castkms_output, crtc,
 					       primary, cursor,
-					       &castkms_crtc_funcs, NULL);
+					       &castkms_crtc_funcs,
+					       NULL);
 	if (IS_ERR(castkms_out)) {
 		DRM_DEV_ERROR(dev->dev, "Failed to init CRTC\n");
 		return castkms_out;
@@ -280,7 +305,8 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 	spin_lock_init(&castkms_out->lock);
 	spin_lock_init(&castkms_out->composer_lock);
 
-	castkms_out->composer_workq = drmm_alloc_ordered_workqueue(dev, "castkms_composer", 0);
+	castkms_out->composer_workq =
+		drmm_alloc_ordered_workqueue(dev, "castkms_composer", 0);
 	if (IS_ERR(castkms_out->composer_workq))
 		return ERR_CAST(castkms_out->composer_workq);
 

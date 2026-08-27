@@ -21,16 +21,7 @@ struct drm_atomic_commit;
  */
 struct castkms_plane_state {
 	struct drm_shadow_plane_state base;
-	union {
-		struct castkms_frame_plane frame;
-		struct {
-			struct castkms_frame_info *frame_info;
-			pixel_read_line_t pixel_read_line;
-			struct conversion_matrix conversion_matrix;
-			u32 zpos;
-			bool is_cursor;
-		};
-	};
+	struct castkms_frame_plane frame;
 };
 
 /**

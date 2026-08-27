@@ -706,42 +706,15 @@ int castkms_compose_frame(const struct castkms_frame_stage *frame,
 EXPORT_SYMBOL_IF_KUNIT(castkms_compose_frame);
 
 /*
- * Keep the legacy scheduler usable until CRTC atomic check constructs a frame
- * stage directly. The renderer itself still consumes only the immutable view.
+ * Keep the legacy scheduler usable until its CRC and writeback clients move to
+ * frame dispatch. The renderer itself still consumes only the immutable view.
  */
 static int
 compose_active_planes(const struct castkms_output_buffer *destination,
 		      struct castkms_crtc_state *crtc_state, u32 *crc32)
 {
-	struct castkms_frame_plane **planes;
-	struct castkms_frame_stage frame;
-	size_t num_planes;
-	int ret;
-
-	if (WARN_ON(crtc_state->num_active_planes < 0))
-		return -EINVAL;
-
-	num_planes = crtc_state->num_active_planes;
-	planes = kcalloc(num_planes, sizeof(*planes), GFP_KERNEL);
-	if (!planes && num_planes)
-		return -ENOMEM;
-
-	for (size_t i = 0; i < num_planes; i++)
-		planes[i] = &crtc_state->active_planes[i]->frame;
-
-	frame = (struct castkms_frame_stage) {
-		.planes = planes,
-		.num_planes = num_planes,
-		.gamma_lut = crtc_state->gamma_lut,
-		.width = crtc_state->base.mode.hdisplay,
-		.height = crtc_state->base.mode.vdisplay,
-		.background_color = crtc_state->base.background_color,
-	};
-
-	ret = castkms_compose_targets(&frame, destination, NULL, crc32);
-	kfree(planes);
-
-	return ret;
+	return castkms_compose_targets(&crtc_state->frame, destination, NULL,
+				       crc32);
 }
 
 /**
@@ -780,17 +753,18 @@ void castkms_composer_worker(struct work_struct *work)
 		s64 max_lut_index_fp;
 		s64 u16_max_fp = drm_int2fixp(0xffff);
 
-		crtc_state->gamma_lut.base = crtc_state->base.gamma_lut->data;
-		crtc_state->gamma_lut.lut_length =
+		crtc_state->frame.gamma_lut.base =
+			crtc_state->base.gamma_lut->data;
+		crtc_state->frame.gamma_lut.lut_length =
 			crtc_state->base.gamma_lut->length /
 			sizeof(struct drm_color_lut);
 		max_lut_index_fp =
-			drm_int2fixp(crtc_state->gamma_lut.lut_length - 1);
-		crtc_state->gamma_lut.channel_value2index_ratio =
+			drm_int2fixp(crtc_state->frame.gamma_lut.lut_length - 1);
+		crtc_state->frame.gamma_lut.channel_value2index_ratio =
 			drm_fixp_div(max_lut_index_fp, u16_max_fp);
 	} else {
-		crtc_state->gamma_lut.base = NULL;
-		crtc_state->gamma_lut.lut_length = 0;
+		crtc_state->frame.gamma_lut.base = NULL;
+		crtc_state->frame.gamma_lut.lut_length = 0;
 	}
 
 	spin_unlock_irq(&out->composer_lock);
