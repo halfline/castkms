@@ -78,6 +78,24 @@ if ! grep -q '^stream: streaming' "$result_dir/pw-castkms.log" 2>/dev/null; then
 fi
 printf '%s\n' 'pw_castkms_bridge=running' | tee -a "$result_dir/summary.txt"
 
+test_status=0
+"$script_dir/pw-castkms-test" -f 30 -t 10 \
+	| tee "$result_dir/pw-castkms-test.txt" || test_status=$?
+
+if test "$test_status" -ne 0; then
+	printf 'pw-castkms frame delivery exited with status %d\n' \
+		"$test_status" >&2
+	cat "$result_dir/pw-castkms.log" >&2
+	exit 1
+fi
+if ! grep -Fx 'pw_castkms_test=pass' \
+		"$result_dir/pw-castkms-test.txt" >/dev/null; then
+	printf 'pw-castkms frame delivery test failed\n' >&2
+	cat "$result_dir/pw-castkms.log" >&2
+	exit 1
+fi
+printf '%s\n' 'pw_castkms_frame_delivery=pass' | tee -a "$result_dir/summary.txt"
+
 kill "$bridge_pid"
 bridge_status=0
 wait "$bridge_pid" || bridge_status=$?

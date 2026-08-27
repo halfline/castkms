@@ -52,6 +52,39 @@ struct test_state {
 	bool streaming;
 };
 
+static bool valid_frame_layout(const struct test_state *s,
+			       const struct spa_data *d)
+{
+	size_t stride;
+	size_t size;
+
+	if (!s->format_negotiated || !d->chunk ||
+	    !(d->flags & SPA_DATA_FLAG_READABLE) ||
+	    (d->chunk->flags & SPA_CHUNK_FLAG_CORRUPTED) ||
+	    d->chunk->stride <= 0)
+		return false;
+
+	stride = (size_t)d->chunk->stride;
+	if (stride < (size_t)s->width * 4 || stride > SIZE_MAX / s->height)
+		return false;
+	size = stride * s->height;
+	if (!d->maxsize || d->chunk->offset > d->maxsize ||
+	    size > d->maxsize - d->chunk->offset ||
+	    d->chunk->size < size ||
+	    d->chunk->size > d->maxsize - d->chunk->offset)
+		return false;
+
+	switch (d->type) {
+	case SPA_DATA_DmaBuf:
+	case SPA_DATA_MemFd:
+		return d->fd >= 0 && d->fd <= INT_MAX;
+	case SPA_DATA_MemPtr:
+		return d->data != NULL;
+	default:
+		return false;
+	}
+}
+
 static void on_timeout(void *data, uint64_t expirations)
 {
 	struct test_state *s = data;
@@ -155,10 +188,53 @@ static void on_param_changed(void *data, uint32_t id,
 	}
 }
 
+static void on_process(void *data)
+{
+	struct test_state *s = data;
+	struct pw_buffer *buf;
+	struct spa_buffer *spa_buf;
+	struct spa_meta_header *h;
+
+	buf = pw_stream_dequeue_buffer(s->stream);
+	if (!buf)
+		return;
+
+	spa_buf = buf->buffer;
+
+	h = spa_buffer_find_meta_data(spa_buf, SPA_META_Header, sizeof(*h));
+	if (!h) {
+		s->meta_errors++;
+	} else {
+		if (s->frames_received > 0) {
+			if (h->seq <= s->last_seq)
+				s->seq_errors++;
+			if (h->pts <= s->last_pts)
+				s->pts_errors++;
+		}
+		s->last_seq = h->seq;
+		s->last_pts = h->pts;
+	}
+
+	if (spa_buf->n_datas < 1 ||
+	    !valid_frame_layout(s, &spa_buf->datas[0]))
+		s->data_errors++;
+
+	s->frames_received++;
+	if (pw_stream_queue_buffer(s->stream, buf) < 0) {
+		s->data_errors++;
+		pw_main_loop_quit(s->loop);
+		return;
+	}
+
+	if (s->frames_received >= s->target_frames)
+		pw_main_loop_quit(s->loop);
+}
+
 static const struct pw_stream_events stream_events = {
 	PW_VERSION_STREAM_EVENTS,
 	.state_changed = on_state_changed,
 	.param_changed = on_param_changed,
+	.process = on_process,
 };
 
 static void on_core_error(void *data, uint32_t id, int seq,
@@ -178,3 +254,165 @@ static const struct pw_core_events core_events = {
 	PW_VERSION_CORE_EVENTS,
 	.error = on_core_error,
 };
+
+static void usage(const char *prog)
+{
+	fprintf(stderr,
+		"Usage: %s [-n node-name] [-f frame-count] [-t timeout-sec]\n",
+		prog);
+}
+
+int main(int argc, char *argv[])
+{
+	struct test_state state = {};
+	struct test_state *s = &state;
+	uint8_t format_buf[1024];
+	struct spa_pod_builder builder;
+	const struct spa_pod *params[1];
+	struct pw_properties *props;
+	const char *node_name = NULL;
+	struct timespec timeout_val;
+	int timeout_sec = DEFAULT_TIMEOUT_SEC;
+	bool passed;
+	int opt;
+	int ret = EXIT_FAILURE;
+
+	s->target_frames = DEFAULT_FRAME_COUNT;
+
+	while ((opt = getopt(argc, argv, "n:f:t:h")) != -1) {
+		switch (opt) {
+		case 'n':
+			node_name = optarg;
+			break;
+		case 'f':
+			s->target_frames = atoi(optarg);
+			break;
+		case 't':
+			timeout_sec = atoi(optarg);
+			break;
+		case 'h':
+		default:
+			usage(argv[0]);
+			return opt == 'h' ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+	}
+
+	pw_init(&argc, &argv);
+
+	s->loop = pw_main_loop_new(NULL);
+	if (!s->loop) {
+		fprintf(stderr, "pw_main_loop_new failed\n");
+		goto out_deinit;
+	}
+
+	s->ctx = pw_context_new(pw_main_loop_get_loop(s->loop), NULL, 0);
+	if (!s->ctx) {
+		fprintf(stderr, "pw_context_new failed\n");
+		goto out_loop;
+	}
+
+	s->core = pw_context_connect(s->ctx, NULL, 0);
+	if (!s->core) {
+		fprintf(stderr, "pw_context_connect: %s\n", strerror(errno));
+		goto out_ctx;
+	}
+
+	pw_core_add_listener(s->core, &s->core_listener, &core_events, s);
+
+	s->timer = pw_loop_add_timer(pw_main_loop_get_loop(s->loop),
+				      on_timeout, s);
+	timeout_val = (struct timespec){ .tv_sec = timeout_sec };
+	pw_loop_update_timer(pw_main_loop_get_loop(s->loop), s->timer,
+			      &timeout_val, NULL, false);
+
+	props = pw_properties_new(
+		PW_KEY_MEDIA_TYPE, "Video",
+		PW_KEY_MEDIA_CATEGORY, "Capture",
+		PW_KEY_MEDIA_ROLE, "Screen",
+		NULL);
+	if (node_name)
+		pw_properties_set(props, PW_KEY_TARGET_OBJECT, node_name);
+
+	s->stream = pw_stream_new(s->core, "pw-castkms-test", props);
+	if (!s->stream) {
+		fprintf(stderr, "pw_stream_new failed\n");
+		goto out_timer;
+	}
+
+	pw_stream_add_listener(s->stream, &s->stream_listener,
+			       &stream_events, s);
+
+	spa_pod_builder_init(&builder, format_buf, sizeof(format_buf));
+	params[0] = spa_pod_builder_add_object(&builder,
+		SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+		SPA_FORMAT_mediaType,
+			SPA_POD_Id(SPA_MEDIA_TYPE_video),
+		SPA_FORMAT_mediaSubtype,
+			SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+		SPA_FORMAT_VIDEO_format,
+			SPA_POD_CHOICE_ENUM_Id(2,
+				SPA_VIDEO_FORMAT_BGRx,
+				SPA_VIDEO_FORMAT_BGRx),
+		SPA_FORMAT_VIDEO_modifier,
+			SPA_POD_Long(DRM_FORMAT_MOD_LINEAR),
+		SPA_FORMAT_VIDEO_size,
+			SPA_POD_CHOICE_RANGE_Rectangle(
+				&SPA_RECTANGLE(1920, 1080),
+				&SPA_RECTANGLE(1, 1),
+				&SPA_RECTANGLE(8192, 8192)),
+		SPA_FORMAT_VIDEO_framerate,
+			SPA_POD_CHOICE_RANGE_Fraction(
+				&SPA_FRACTION(60, 1),
+				&SPA_FRACTION(1, 1),
+				&SPA_FRACTION(240, 1)));
+
+	if (pw_stream_connect(s->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
+			      PW_STREAM_FLAG_AUTOCONNECT, params, 1) < 0) {
+		fprintf(stderr, "pw_stream_connect failed\n");
+		goto out_stream;
+	}
+
+	pw_main_loop_run(s->loop);
+
+	printf("pw_connected=1\n");
+	printf("format_negotiated=%d\n", s->format_negotiated ? 1 : 0);
+	if (s->format_negotiated) {
+		printf("width=%u\n", s->width);
+		printf("height=%u\n", s->height);
+		printf("framerate=%u/%u\n",
+		       s->framerate_num, s->framerate_denom);
+	}
+	printf("frames_received=%d\n", s->frames_received);
+	printf("target_frames=%d\n", s->target_frames);
+	printf("timed_out=%d\n", s->timed_out ? 1 : 0);
+	printf("sequence_monotonic=%d\n", s->seq_errors == 0 ? 1 : 0);
+	printf("timestamp_monotonic=%d\n", s->pts_errors == 0 ? 1 : 0);
+	printf("meta_present=%d\n", s->meta_errors == 0 ? 1 : 0);
+	printf("data_valid=%d\n", s->data_errors == 0 ? 1 : 0);
+	printf("format_valid=%d\n", s->format_errors == 0 ? 1 : 0);
+
+	passed = s->format_negotiated &&
+		 s->frames_received >= s->target_frames &&
+		 !s->timed_out &&
+		 !s->seq_errors &&
+		 !s->pts_errors &&
+		 !s->meta_errors &&
+		 !s->data_errors &&
+		 !s->format_errors;
+	printf("pw_castkms_test=%s\n", passed ? "pass" : "fail");
+
+	ret = passed ? EXIT_SUCCESS : EXIT_FAILURE;
+
+out_stream:
+	pw_stream_destroy(s->stream);
+out_timer:
+	pw_loop_destroy_source(pw_main_loop_get_loop(s->loop), s->timer);
+	pw_core_disconnect(s->core);
+out_ctx:
+	pw_context_destroy(s->ctx);
+out_loop:
+	pw_main_loop_destroy(s->loop);
+out_deinit:
+	pw_deinit();
+	return ret;
+}

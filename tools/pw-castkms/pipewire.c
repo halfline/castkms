@@ -231,12 +231,103 @@ static void on_stream_remove_buffer(void *data,
 	bridge->buffer_count--;
 }
 
+static int set_frame_metadata(struct pw_castkms *bridge,
+			      struct capture_buffer *buffer,
+			      struct spa_buffer *spa_buffer)
+{
+	const struct captured_frame *frame = &buffer->frame;
+	struct spa_meta_header *header;
+
+	(void)bridge;
+
+	header = spa_buffer_find_meta_data(spa_buffer, SPA_META_Header,
+					   sizeof(*header));
+	if (header) {
+		header->pts = frame->timestamp_ns;
+		header->dts_offset = 0;
+		header->seq = frame->sequence;
+		header->flags = 0;
+	}
+
+	return 0;
+}
+
+static bool publish_ready_frames(struct pw_castkms *bridge)
+{
+	uint32_t i;
+
+	for (i = 0; i < bridge->buffer_count; i++) {
+		struct capture_buffer *buffer = &bridge->buffers[i];
+		struct spa_buffer *spa_buffer;
+		int status;
+
+		if (buffer->state != CAPTURE_BUFFER_READY)
+			continue;
+
+		spa_buffer = buffer->pipewire_buffer->buffer;
+		status = set_frame_metadata(bridge, buffer, spa_buffer);
+		if (status) {
+			pw_castkms_fail(bridge, "frame metadata failed", status);
+			return false;
+		}
+
+		spa_buffer->datas[0].chunk->offset = 0;
+		spa_buffer->datas[0].chunk->size = buffer->size;
+		spa_buffer->datas[0].chunk->stride = buffer->pitch;
+
+		if (pw_stream_queue_buffer(bridge->stream,
+					   buffer->pipewire_buffer) < 0) {
+			pw_castkms_fail(bridge,
+					"pw_stream_queue_buffer failed", 0);
+			return false;
+		}
+		buffer->state = CAPTURE_BUFFER_IN_PIPEWIRE;
+		bridge->frames_produced++;
+	}
+
+	return true;
+}
+
+static bool reclaim_pipewire_buffers(struct pw_castkms *bridge)
+{
+	struct pw_buffer *pipewire_buffer;
+
+	while ((pipewire_buffer = pw_stream_dequeue_buffer(bridge->stream))) {
+		struct capture_buffer *buffer = castkms_find_buffer_by_pipewire(
+			bridge, pipewire_buffer);
+
+		if (!buffer || buffer->state != CAPTURE_BUFFER_IN_PIPEWIRE) {
+			(void)pw_stream_queue_buffer(bridge->stream, pipewire_buffer);
+			pw_castkms_fail(
+				bridge, "unexpected PipeWire buffer ownership",
+				-EPROTO);
+			return false;
+		}
+
+		buffer->state = CAPTURE_BUFFER_AVAILABLE;
+	}
+
+	return true;
+}
+
+static void on_stream_process(void *data)
+{
+	struct pw_castkms *bridge = data;
+
+	if (!publish_ready_frames(bridge) ||
+	    !reclaim_pipewire_buffers(bridge))
+		return;
+
+	castkms_queue_available(bridge);
+}
+
 static const struct pw_stream_events stream_events = {
 	PW_VERSION_STREAM_EVENTS,
 	.state_changed = on_stream_state_changed,
 	.param_changed = on_stream_param_changed,
 	.add_buffer = on_stream_add_buffer,
 	.remove_buffer = on_stream_remove_buffer,
+	.process = on_stream_process,
 };
 
 /* ---- PipeWire core and application lifetime --------------------------- */
@@ -395,6 +486,20 @@ int pipewire_open(struct pw_castkms *bridge)
 	}
 
 	return 0;
+}
+
+int pipewire_run(struct pw_castkms *bridge)
+{
+	int status;
+
+	fprintf(stderr, "running\n");
+	status = pw_main_loop_run(bridge->loop);
+	if (status < 0 && !bridge->failed)
+		pw_castkms_fail(bridge, "PipeWire main loop failed", status);
+
+	fprintf(stderr, "produced %llu frames\n",
+		(unsigned long long)bridge->frames_produced);
+	return status;
 }
 
 void pipewire_close(struct pw_castkms *bridge)

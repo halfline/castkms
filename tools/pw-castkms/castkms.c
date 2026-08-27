@@ -652,3 +652,74 @@ static bool handle_frame_event(
 	*frame_ready = true;
 	return true;
 }
+
+static int dispatch_event_batch(struct pw_castkms *bridge, int fd,
+				uint32_t discarded_stream_id,
+				bool *frame_ready)
+{
+	uint64_t aligned_events[4096 / sizeof(uint64_t)];
+	char *events = (char *)aligned_events;
+	ssize_t length;
+	ssize_t offset;
+
+	*frame_ready = false;
+	length = read(fd, events, sizeof(aligned_events));
+	if (length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+		return -EAGAIN;
+	if (length <= 0) {
+		int status = length < 0 ? -errno : -EIO;
+
+		pw_castkms_fail(bridge, "DRM event read failed",
+				 status);
+		return status;
+	}
+
+	for (offset = 0; offset < length;) {
+		struct drm_event *base = (struct drm_event *)(events + offset);
+
+		if (length - offset < (ssize_t)sizeof(*base) ||
+		    base->length < sizeof(*base) ||
+		    (ssize_t)base->length > length - offset) {
+			pw_castkms_fail(bridge, "malformed DRM event stream",
+					 -EPROTO);
+			return -EPROTO;
+		}
+
+		switch (base->type) {
+		case DRM_CASTKMS_CAPTURE_EVENT_FRAME: {
+			bool event_frame_ready;
+
+			if (!handle_frame_event(bridge, (void *)base,
+						discarded_stream_id,
+						&event_frame_ready))
+				return -EPROTO;
+			*frame_ready |= event_frame_ready;
+			break;
+		}
+		default:
+			pw_castkms_fail(bridge, "unexpected DRM event type",
+					 -EPROTO);
+			return -EPROTO;
+		}
+
+		offset += base->length;
+	}
+
+	return 0;
+}
+
+void castkms_on_fd_ready(void *data, int fd, uint32_t mask)
+{
+	struct pw_castkms *bridge = data;
+	bool frame_ready;
+
+	if (mask & (SPA_IO_ERR | SPA_IO_HUP)) {
+		pw_castkms_fail(bridge, "DRM fd disconnected", -EIO);
+		return;
+	}
+	if (dispatch_event_batch(bridge, fd, 0, &frame_ready))
+		return;
+
+	if (frame_ready && bridge->stream)
+		(void)pw_stream_trigger_process(bridge->stream);
+}
