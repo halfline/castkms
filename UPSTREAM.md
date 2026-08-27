@@ -10,3 +10,12 @@ CastKMS is derived from VKMS at this baseline:
 The repository keeps the complete Linux history leading to this release. The
 standalone tree is pruned from the source at the commit immediately after the
 baseline tag.
+
+That provenance makes a full clone much larger than the standalone source
+tree. Contributors who do not need to inspect pre-CastKMS kernel history can
+start with a shallow clone and deepen it later if necessary:
+
+```sh
+git clone --depth=1 <repository-url> castkms
+git -C castkms fetch --deepen=100
+```
