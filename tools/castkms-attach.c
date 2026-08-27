@@ -119,9 +119,10 @@ static void usage(const char *program)
 
 int main(int argc, char **argv)
 {
-	uint8_t edid[CASTKMS_EDID_BLOCK];
+	uint8_t edid[CASTKMS_REFERENCE_EDID_MAX_SIZE];
 	uint32_t connector_id;
 	int inherited_fd = -1;
+	int edid_size;
 	int ioctl_ret;
 	int fd;
 	int ret = EXIT_FAILURE;
@@ -145,11 +146,14 @@ int main(int argc, char **argv)
 	if (fd < 0)
 		return EXIT_FAILURE;
 
-	if (castkms_fill_named_edid(edid, NULL) < 0) {
+	edid_size = castkms_fill_edid(edid, sizeof(edid), NULL,
+				      CASTKMS_EDID_FLAG_AUDIO);
+	if (edid_size < 0) {
 		fprintf(stderr, "failed to build attachment EDID\n");
 		goto out_close;
 	}
-	ioctl_ret = attach_monitor(fd, connector_id, edid, sizeof(edid));
+	ioctl_ret = attach_monitor(fd, connector_id, edid,
+				   (uint32_t)edid_size);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("ATTACH_MONITOR");
