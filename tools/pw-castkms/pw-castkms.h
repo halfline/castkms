@@ -78,6 +78,18 @@ struct pw_castkms {
 	uint32_t buffer_count;
 	uint64_t user_data_sequence;
 
+	/* PipeWire publisher and event-loop sources. */
+	struct pw_main_loop *loop;
+	struct pw_context *context;
+	struct pw_core *core;
+	struct spa_hook core_listener;
+	struct pw_stream *stream;
+	struct spa_hook stream_listener;
+	struct spa_source *drm_source;
+	struct spa_source *process_timer;
+	struct spa_source *sigint_source;
+	struct spa_source *sigterm_source;
+
 	/* Process lifetime and diagnostics. */
 	bool failed;
 	bool shutting_down;
@@ -110,5 +122,10 @@ int castkms_create_destination(struct pw_castkms *bridge,
 int castkms_destroy_destination(struct pw_castkms *bridge,
 				struct capture_buffer *buffer);
 void castkms_queue_available(struct pw_castkms *bridge);
+
+/* PipeWire publication.  pw_init()/pw_deinit() remain owned by main(). */
+int pipewire_open(struct pw_castkms *bridge);
+int pipewire_run(struct pw_castkms *bridge);
+void pipewire_close(struct pw_castkms *bridge);
 
 #endif /* PW_CASTKMS_H */

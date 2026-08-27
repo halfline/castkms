@@ -36,6 +36,8 @@ void pw_castkms_fail(struct pw_castkms *bridge, const char *operation,
 
 	bridge->failed = true;
 	bridge->exit_status = EXIT_FAILURE;
+	if (bridge->loop)
+		pw_main_loop_quit(bridge->loop);
 }
 
 static int parse_object_id(const char *value, uint32_t *id)
