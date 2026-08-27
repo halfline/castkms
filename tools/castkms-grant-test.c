@@ -242,6 +242,15 @@ static int stop_capture(int fd, uint32_t stream_id)
 	return castkms_test_capture_stop(fd, stream_id);
 }
 
+static int register_capture_buffer(int fd, uint32_t stream_id,
+				   uint32_t fb_id, uint64_t mode_generation,
+				   uint32_t *buffer_id)
+{
+	return castkms_test_capture_register_buffer(
+		fd, stream_id, fb_id, DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		mode_generation, buffer_id);
+}
+
 static int expect_capture_start_errno(int fd, uint32_t crtc_id,
 				      int expected)
 {
@@ -481,7 +490,10 @@ static int test_capture_access(int grant_fd,
 			       const struct test_display *display)
 {
 	struct drm_castkms_capture_start stream;
+	struct castkms_test_framebuffer destination = {};
+	uint32_t buffer_id = 0;
 	int ioctl_ret;
+	int ret = -1;
 
 	ioctl_ret = start_capture(grant_fd, display->crtc_id, &stream);
 	if (ioctl_ret) {
@@ -489,20 +501,34 @@ static int test_capture_access(int grant_fd,
 		perror("grant CAPTURE_START");
 		return -1;
 	}
+	if (create_test_framebuffer(grant_fd, display->mode.hdisplay,
+				    display->mode.vdisplay, &destination))
+		goto out_stop;
+	ioctl_ret = register_capture_buffer(grant_fd, stream.stream_id,
+					    destination.fb_id,
+					    stream.mode_generation, &buffer_id);
+	if (ioctl_ret || !buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("grant REGISTER_BUFFER");
+		goto out_stop;
+	}
+	ret = 0;
 
+out_stop:
 	ioctl_ret = stop_capture(grant_fd, stream.stream_id);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("grant CAPTURE_STOP");
-		return -1;
+		ret = -1;
 	}
-
-	return 0;
+	destroy_test_framebuffer(grant_fd, &destination);
+	return ret;
 }
 
 static int prepare_capture_stream(
 	int grant_fd, const struct test_display *display,
-	struct drm_castkms_capture_start *stream)
+	struct drm_castkms_capture_start *stream,
+	struct castkms_test_framebuffer *destination, uint32_t *buffer_id)
 {
 	int ioctl_ret;
 
@@ -512,8 +538,25 @@ static int prepare_capture_stream(
 		perror("grant CAPTURE_START");
 		return -1;
 	}
+	if (create_test_framebuffer(grant_fd, display->mode.hdisplay,
+				    display->mode.vdisplay, destination))
+		goto out_stop;
+	ioctl_ret = register_capture_buffer(
+		grant_fd, stream->stream_id, destination->fb_id,
+		stream->mode_generation, buffer_id);
+	if (ioctl_ret || !*buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("grant REGISTER_BUFFER");
+		goto out_destroy;
+	}
 
 	return 0;
+
+out_destroy:
+	destroy_test_framebuffer(grant_fd, destination);
+out_stop:
+	stop_capture(grant_fd, stream->stream_id);
+	return -1;
 }
 
 static int validate_prepared_stream(int grant_fd,
@@ -554,31 +597,50 @@ static int retire_prepared_stream(
 static int test_master_cleanup_generation(int issuer_fd, int grant_fd,
 					  const struct test_display *display)
 {
+	struct castkms_test_framebuffer destination = {};
 	unsigned int iteration;
+	int ret = -1;
+
+	if (create_test_framebuffer(grant_fd, display->mode.hdisplay,
+				    display->mode.vdisplay, &destination))
+		return -1;
 
 	for (iteration = 0; iteration < 32; iteration++) {
 		struct drm_castkms_capture_start stream;
+		uint32_t buffer_id = 0;
 		int ioctl_ret;
 
 		if (ioctl(issuer_fd, DRM_IOCTL_DROP_MASTER, 0) < 0 ||
 		    ioctl(issuer_fd, DRM_IOCTL_SET_MASTER, 0) < 0) {
 			perror("drop/reacquire master during capture stress");
-			return -1;
+			goto out;
 		}
 		ioctl_ret = start_capture(grant_fd, display->crtc_id, &stream);
 		if (ioctl_ret) {
 			errno = -ioctl_ret;
 			perror("post-reacquire CAPTURE_START");
-			return -1;
+			goto out;
+		}
+		ioctl_ret = register_capture_buffer(
+			grant_fd, stream.stream_id, destination.fb_id,
+			stream.mode_generation, &buffer_id);
+		if (ioctl_ret || !buffer_id) {
+			errno = ioctl_ret ? -ioctl_ret : EPROTO;
+			perror("post-reacquire REGISTER_BUFFER");
+			stop_capture(grant_fd, stream.stream_id);
+			goto out;
 		}
 	}
 	if (ioctl(issuer_fd, DRM_IOCTL_DROP_MASTER, 0) < 0 ||
 	    ioctl(issuer_fd, DRM_IOCTL_SET_MASTER, 0) < 0) {
 		perror("final drop/reacquire master during capture stress");
-		return -1;
+		goto out;
 	}
 
-	return 0;
+	ret = 0;
+out:
+	destroy_test_framebuffer(grant_fd, &destination);
+	return ret;
 }
 
 static int test_crc_access(int drm_fd, int expected_errno)
@@ -774,10 +836,21 @@ out:
 
 static int expect_plain_capture_denied(int fd)
 {
+	struct drm_castkms_capture_register_buffer register_buffer = {
+		.stream_id = 1,
+		.fb_id = 1,
+		.flags = DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+	};
 	struct drm_castkms_get_grant get_grant = {};
 
-	return expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_GET_GRANT, &get_grant,
-				  ENODATA, "plain-fd GET_GRANT");
+	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_GET_GRANT, &get_grant,
+			       ENODATA, "plain-fd GET_GRANT") ||
+	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER,
+			       &register_buffer, EACCES,
+			       "plain-fd REGISTER_BUFFER"))
+		return -1;
+
+	return 0;
 }
 
 static int expect_holder_cannot_create_grant(int fd, uint32_t connector_id)
@@ -918,14 +991,18 @@ int main(int argc, char **argv)
 	struct drm_castkms_capture_start admin_stream = {};
 	struct drm_castkms_capture_start delegated_stream = {};
 	struct drm_castkms_get_grant issuer_query;
+	struct castkms_test_framebuffer admin_destination = {};
+	struct castkms_test_framebuffer delegated_destination = {};
 	struct castkms_test_framebuffer master_b_source = {};
 	struct test_display display = {};
 	uint32_t masterless_admin_id = 0;
 	uint32_t issuer_close_id = 0;
 	uint32_t detached_delegated_id = 0;
+	uint32_t delegated_buffer_id = 0;
 	uint32_t delegated_id = 0;
 	uint32_t foreign_grant_id = 0;
 	uint32_t master_b_grant_id = 0;
+	uint32_t admin_buffer_id = 0;
 	uint32_t normal_id = 0;
 	uint32_t admin_id = 0;
 	uint32_t foreign_connector_id = 0;
@@ -1032,7 +1109,9 @@ int main(int argc, char **argv)
 	    expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_DELEGATED) ||
-	    prepare_capture_stream(delegated_fd, &display, &delegated_stream))
+	    prepare_capture_stream(delegated_fd, &display, &delegated_stream,
+				   &delegated_destination,
+				   &delegated_buffer_id))
 		goto out;
 	delegated_stream_prepared = true;
 	close(delegated_creator);
@@ -1069,6 +1148,7 @@ int main(int argc, char **argv)
 	    retire_prepared_stream(delegated_fd, &delegated_stream))
 		goto out;
 	delegated_stream_prepared = false;
+	destroy_test_framebuffer(delegated_fd, &delegated_destination);
 	printf("grant_delegated_stream_cleanup=pass\n");
 
 	if (create_grant(issuer, connector_id,
@@ -1079,7 +1159,8 @@ int main(int argc, char **argv)
 	    expect_holder_state(admin_fd, admin_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN) ||
-	    prepare_capture_stream(admin_fd, &display, &admin_stream))
+	    prepare_capture_stream(admin_fd, &display, &admin_stream,
+				   &admin_destination, &admin_buffer_id))
 		goto out;
 	admin_stream_prepared = true;
 	printf("grant_admin_stream_before_handoff=pass\n");
@@ -1159,6 +1240,7 @@ int main(int argc, char **argv)
 	    retire_prepared_stream(admin_fd, &admin_stream))
 		goto out;
 	admin_stream_prepared = false;
+	destroy_test_framebuffer(admin_fd, &admin_destination);
 	if (test_capture_access(admin_fd, &display) ||
 	    test_capture_access(master_b_grant_fd, &display) ||
 	    test_crc_access(master_b, 0))
@@ -1310,6 +1392,9 @@ out:
 	if (delegated_stream_prepared && delegated_fd >= 0)
 		stop_capture(delegated_fd, delegated_stream.stream_id);
 	if (delegated_fd >= 0)
+		destroy_test_framebuffer(delegated_fd,
+					   &delegated_destination);
+	if (delegated_fd >= 0)
 		close(delegated_fd);
 	if (master_b_grant_fd >= 0)
 		close(master_b_grant_fd);
@@ -1323,6 +1408,8 @@ out:
 		close(normal_fd);
 	if (admin_stream_prepared && admin_fd >= 0)
 		stop_capture(admin_fd, admin_stream.stream_id);
+	if (admin_fd >= 0)
+		destroy_test_framebuffer(admin_fd, &admin_destination);
 	if (admin_fd >= 0)
 		close(admin_fd);
 	if (issuer2 >= 0)

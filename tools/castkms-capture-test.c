@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "castkms-test-drm.h"
@@ -26,6 +27,8 @@ static_assert(sizeof(struct drm_castkms_capture_start) == 24,
 	      "capture start ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16,
 	      "capture stop ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 24,
+	      "capture register ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
@@ -141,6 +144,15 @@ static int stop_capture(int fd, uint32_t stream_id)
 	return castkms_test_capture_stop(fd, stream_id);
 }
 
+static int register_capture_buffer(int fd, uint32_t stream_id,
+				   uint32_t fb_id, uint32_t flags,
+				   uint64_t mode_generation,
+				   uint32_t *buffer_id)
+{
+	return castkms_test_capture_register_buffer(
+		fd, stream_id, fb_id, flags, mode_generation, buffer_id);
+}
+
 static int connector_drives_crtc(int fd, uint32_t connector_id,
 				 uint32_t crtc_id, bool *drives)
 {
@@ -227,6 +239,56 @@ static int find_display_connector(int fd, uint32_t crtc_id,
 	return -1;
 }
 
+static int get_crtc_size(int fd, uint32_t crtc_id,
+			 uint32_t *width, uint32_t *height)
+{
+	struct drm_mode_crtc crtc = {
+		.crtc_id = crtc_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &crtc) < 0) {
+		perror("DRM_IOCTL_MODE_GETCRTC");
+		return -1;
+	}
+	if (!crtc.mode_valid || !crtc.mode.hdisplay || !crtc.mode.vdisplay)
+		return -1;
+
+	*width = crtc.mode.hdisplay;
+	*height = crtc.mode.vdisplay;
+	return 0;
+}
+
+static int wait_crtc_size(int fd, uint32_t crtc_id,
+			  uint32_t *width, uint32_t *height)
+{
+	const struct timespec retry_delay = {
+		.tv_nsec = 50000000,
+	};
+	int attempt;
+
+	for (attempt = 0; attempt < 100; attempt++) {
+		if (!get_crtc_size(fd, crtc_id, width, height))
+			return 0;
+		if (nanosleep(&retry_delay, NULL) < 0)
+			return -1;
+	}
+
+	fprintf(stderr, "capture CRTC has no active mode after attach\n");
+	return -1;
+}
+
+static int create_test_framebuffer(int fd, uint32_t width, uint32_t height,
+				   struct castkms_test_framebuffer *buffer)
+{
+	return castkms_test_framebuffer_create(fd, width, height, true, buffer);
+}
+
+static void destroy_test_framebuffer(
+	int fd, struct castkms_test_framebuffer *buffer)
+{
+	castkms_test_framebuffer_destroy(fd, buffer);
+}
+
 static int parse_crtc_id(const char *text, uint32_t *crtc_id)
 {
 	char *end;
@@ -253,13 +315,12 @@ static int validate_query(const struct drm_castkms_capture_query_caps *query,
 		return -1;
 	}
 	if (query->crtc_id != crtc_id || query->format_count != 1 ||
-	    query->reserved || query->max_registered_buffers) {
+	    query->reserved || query->max_registered_buffers < 2) {
 		fprintf(stderr, "unexpected capture query result\n");
 		return -1;
 	}
-	if (query->flags & DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC) {
-		fprintf(stderr,
-			"capture query unexpectedly advertises implicit sync\n");
+	if (!(query->flags & DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC)) {
+		fprintf(stderr, "capture query lacks implicit sync support\n");
 		return -1;
 	}
 	if (!(query->flags & DRM_CASTKMS_CAPTURE_CAP_GRANT_FD)) {
@@ -283,7 +344,14 @@ int main(int argc, char **argv)
 	struct drm_castkms_capture_query_caps query = {};
 	struct drm_castkms_capture_start first_stream;
 	struct drm_castkms_capture_start second_stream;
+	struct castkms_test_framebuffer first_buffer = {};
+	struct castkms_test_framebuffer second_buffer = {};
+	struct castkms_test_framebuffer wrong_size_buffer = {};
+	uint32_t buffer_id;
 	uint32_t crtc_id;
+	uint32_t height;
+	uint32_t second_buffer_id;
+	uint32_t width;
 	int competitor_fd = -1;
 	int fd;
 	int ioctl_ret;
@@ -407,6 +475,8 @@ int main(int argc, char **argv)
 			fprintf(stderr, "failed to find display connector\n");
 			goto out_close;
 		}
+		if (wait_crtc_size(fd, crtc_id, &width, &height))
+			goto out_close;
 		ioctl_ret = start_capture(fd, crtc_id, &first_stream);
 		if (ioctl_ret) {
 			errno = -ioctl_ret;
@@ -436,12 +506,92 @@ int main(int argc, char **argv)
 	}
 	printf("capture_stream_exclusive=pass\n");
 
+	if (create_test_framebuffer(fd, width, height, &first_buffer) ||
+	    create_test_framebuffer(fd, width, height, &second_buffer) ||
+	    create_test_framebuffer(fd, width + 1, height,
+				    &wrong_size_buffer))
+		goto out_close;
+
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		first_stream.mode_generation + 1, &buffer_id);
+	if (ioctl_ret != -ESTALE) {
+		fprintf(stderr,
+			"stale capture buffer registration returned %d, expected %d\n",
+			ioctl_ret, -ESTALE);
+		goto out_close;
+	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    wrong_size_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"wrong-size capture buffer returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	printf("capture_buffer_rejections=pass\n");
+
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret || !buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("register implicit capture buffer");
+		goto out_close;
+	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    second_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		first_stream.mode_generation, &second_buffer_id);
+	if (ioctl_ret || !second_buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("register second implicit capture buffer");
+		goto out_close;
+	}
+	for (uint32_t i = 2; i < query.max_registered_buffers; i++) {
+		uint32_t extra_buffer_id = 0;
+
+		ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+			first_buffer.fb_id,
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+			first_stream.mode_generation, &extra_buffer_id);
+		if (ioctl_ret || !extra_buffer_id) {
+			errno = ioctl_ret ? -ioctl_ret : EPROTO;
+			perror("register buffer up to advertised limit");
+			goto out_close;
+		}
+	}
+	{
+		uint32_t rejected_id = 0;
+
+		ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+			first_buffer.fb_id,
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+			first_stream.mode_generation, &rejected_id);
+		if (ioctl_ret != -ENOSPC) {
+			fprintf(stderr,
+				"buffer past advertised limit returned %d, expected %d\n",
+				ioctl_ret, -ENOSPC);
+			goto out_close;
+		}
+	}
+	printf("capture_buffer_limit=pass\n");
+
 	ioctl_ret = stop_capture(fd, first_stream.stream_id);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("stop first capture stream");
 		goto out_close;
 	}
+	destroy_test_framebuffer(fd, &wrong_size_buffer);
+	destroy_test_framebuffer(fd, &second_buffer);
+	destroy_test_framebuffer(fd, &first_buffer);
+	printf("capture_buffer_stop_cleanup=pass\n");
+
 	ioctl_ret = start_capture(fd, crtc_id, &second_stream);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
@@ -462,12 +612,16 @@ int main(int argc, char **argv)
 
 	printf("capture_mode_generation=%llu\n",
 	       (unsigned long long)second_stream.mode_generation);
+	printf("capture_buffer_registration=pass\n");
 	printf("capture_stream_lifecycle=pass\n");
 	ret = EXIT_SUCCESS;
 
 out_close:
 	if (competitor_fd >= 0)
 		close(competitor_fd);
+	destroy_test_framebuffer(fd, &wrong_size_buffer);
+	destroy_test_framebuffer(fd, &second_buffer);
+	destroy_test_framebuffer(fd, &first_buffer);
 	close(fd);
 	return ret;
 }

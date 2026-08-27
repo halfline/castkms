@@ -144,3 +144,21 @@ int castkms_test_capture_stop(int fd, uint32_t stream_id)
 
 	return 0;
 }
+
+int castkms_test_capture_register_buffer(
+	int fd, uint32_t stream_id, uint32_t fb_id, uint32_t flags,
+	uint64_t mode_generation, uint32_t *buffer_id)
+{
+	struct drm_castkms_capture_register_buffer buffer = {
+		.stream_id = stream_id,
+		.fb_id = fb_id,
+		.flags = flags,
+		.mode_generation = mode_generation,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER, &buffer) < 0)
+		return -errno;
+	*buffer_id = buffer.buffer_id;
+
+	return 0;
+}

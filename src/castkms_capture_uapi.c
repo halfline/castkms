@@ -13,6 +13,7 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_framebuffer.h>
 
 #include "castkms_capture.h"
 #include "castkms_capture_authority.h"
@@ -28,6 +29,7 @@ struct castkms_capture_uapi_stream {
 	struct castkms_capture_authority *authority;
 	struct castkms_file *file_state;
 	struct castkms_capture_stream *stream;
+	struct xarray buffers;
 	u32 stream_id;
 	bool published;
 };
@@ -52,6 +54,7 @@ static_assert(CASTKMS_MAX_EDID_SIZE == DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE);
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_capture_start) == 24);
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
+static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 24);
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -61,6 +64,7 @@ static void castkms_capture_uapi_stream_release(struct kref *ref)
 	WARN_ON(uapi_stream->published);
 	WARN_ON(uapi_stream->resource.authority);
 	WARN_ON(uapi_stream->stream);
+	xa_destroy(&uapi_stream->buffers);
 	castkms_capture_authority_put(uapi_stream->authority);
 	kfree(uapi_stream);
 }
@@ -170,8 +174,9 @@ int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 
 	args->uapi_major = DRM_CASTKMS_CAPTURE_UAPI_MAJOR;
 	args->uapi_minor = DRM_CASTKMS_CAPTURE_UAPI_MINOR;
-	args->flags = DRM_CASTKMS_CAPTURE_CAP_GRANT_FD;
-	args->max_registered_buffers = 0;
+	args->flags = DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC |
+		      DRM_CASTKMS_CAPTURE_CAP_GRANT_FD;
+	args->max_registered_buffers = CASTKMS_CAPTURE_MAX_BUFFERS;
 	args->format_count = ARRAY_SIZE(castkms_capture_formats);
 
 	if (capacity >= ARRAY_SIZE(castkms_capture_formats) &&
@@ -228,6 +233,7 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	castkms_capture_authority_get(authority);
 	uapi_stream->file_state = file_state;
 	uapi_stream->stream = stream;
+	xa_init_flags(&uapi_stream->buffers, XA_FLAGS_ALLOC);
 	ret = castkms_capture_authority_register_resource(
 		authority, &uapi_stream->resource,
 		&castkms_capture_uapi_stream_resource_ops);
@@ -316,4 +322,91 @@ int castkms_capture_stop_ioctl(struct drm_device *dev, void *data,
 		castkms_capture_uapi_stream_put(uapi_stream);
 
 	return 0;
+}
+
+static int castkms_capture_uapi_validate_stream(
+	struct drm_device *dev, struct drm_file *file_priv,
+	struct castkms_capture_uapi_stream *uapi_stream,
+	struct castkms_capture_authority *authority)
+{
+	struct castkms_output *output;
+	int ret;
+
+	if (!castkms_capture_stream_has_authority(uapi_stream->stream,
+						     authority))
+		return -EACCES;
+	ret = castkms_capture_stream_status(uapi_stream->stream);
+	if (ret)
+		return ret;
+
+	output = castkms_capture_stream_output(uapi_stream->stream);
+	if (drm_crtc_find(dev, file_priv, output->crtc.base.id) !=
+	    &output->crtc)
+		return -ENOENT;
+
+	return 0;
+}
+
+int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
+					  struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_register_buffer *args = data;
+	struct castkms_file *file_state = file_priv->driver_priv;
+	struct castkms_capture_uapi_stream *uapi_stream;
+	struct castkms_capture_authority *authority;
+	struct castkms_capture_buffer *buffer;
+	struct drm_framebuffer *fb;
+	u32 buffer_id;
+	int ret;
+
+	args->buffer_id = 0;
+	if (args->flags != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC)
+		return -EINVAL;
+
+	ret = castkms_grant_begin(file_priv, NULL,
+				  CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS,
+				  &authority);
+	if (ret)
+		return ret;
+
+	mutex_lock(&file_state->capture_lock);
+	uapi_stream = xa_load(&file_state->capture_streams, args->stream_id);
+	if (!uapi_stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	ret = castkms_capture_uapi_validate_stream(dev, file_priv, uapi_stream,
+						   authority);
+	if (ret)
+		goto out_unlock;
+
+	fb = drm_framebuffer_lookup(dev, file_priv, args->fb_id);
+	if (!fb) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	buffer = castkms_capture_buffer_create(uapi_stream->stream, fb,
+					       args->mode_generation);
+	if (IS_ERR(buffer)) {
+		ret = PTR_ERR(buffer);
+		goto out_put_fb;
+	}
+
+	ret = xa_alloc(&uapi_stream->buffers, &buffer_id, buffer,
+		       XA_LIMIT(1, CASTKMS_CAPTURE_MAX_BUFFERS), GFP_KERNEL);
+	if (ret)
+		goto out_remove_buffer;
+	args->buffer_id = buffer_id;
+	ret = 0;
+	goto out_put_fb;
+
+out_remove_buffer:
+	castkms_capture_buffer_discard(uapi_stream->stream, buffer);
+out_put_fb:
+	drm_framebuffer_put(fb);
+out_unlock:
+	mutex_unlock(&file_state->capture_lock);
+	castkms_grant_end(authority);
+	return ret;
 }

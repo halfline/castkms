@@ -6,6 +6,7 @@ castkms-kunit-tests-y := \
 	castkms_config_test.o \
 	castkms_format_test.o \
 	castkms_color_test.o \
+	castkms_capture_buffer_test.o \
 	castkms_frame_dispatch_test.o \
 	castkms_grant_test.o
 
