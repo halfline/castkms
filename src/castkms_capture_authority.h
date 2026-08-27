@@ -65,8 +65,8 @@ struct castkms_capture_authority_resource {
 };
 
 /*
- * Kernel-internal capture rights.  A future UAPI adapter can translate public
- * bit values to this mask at its boundary.
+ * Kernel-internal capture rights. The grant UAPI translates public bit values
+ * to this mask at its boundary.
  */
 enum castkms_capture_authority_right {
 	CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS		= (1U << 0),

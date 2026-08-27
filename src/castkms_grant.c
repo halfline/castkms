@@ -1,0 +1,488 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+#include <linux/build_bug.h>
+#include <linux/file.h>
+#include <linux/fs.h>
+#include <linux/limits.h>
+#include <linux/slab.h>
+#include <linux/xarray.h>
+
+#include <drm/castkms_drm.h>
+#include <drm/drm_auth.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_drv.h>
+#include <drm/drm_file.h>
+#include <drm/drm_managed.h>
+#include <drm/drm_print.h>
+
+#include <kunit/visibility.h>
+
+#include "castkms_capture_authority.h"
+#include "castkms_file.h"
+#include "castkms_grant.h"
+#include "castkms_grant_file.h"
+#include "castkms_output.h"
+#include "castkms_uapi_device.h"
+
+/**
+ * struct castkms_grant_registry - Device-local grant-fd UAPI namespace
+ * @lock: Serializes IDs and wrapper lifetime
+ * @grants: Live grant wrappers retained through holder final close
+ * @next_id: Cyclic allocation cursor for device-unique UAPI grant IDs
+ *
+ * This state is private to the grant adapter. The outer UAPI device shell
+ * retains an opaque pointer; the core device, authority, and CEC interfaces
+ * cannot observe the registry or its grant IDs.
+ */
+struct castkms_grant_registry {
+	struct mutex lock;
+	struct xarray grants;
+	u32 next_id;
+};
+
+static struct castkms_grant_registry *
+castkms_grant_registry(struct drm_device *dev)
+{
+	return drm_device_to_castkms_uapi_device(dev)->grant_registry;
+}
+
+/**
+ * struct castkms_capture_grant - grant-fd UAPI wrapper
+ * @authority: Kernel-native authorization and security state
+ * @lock: Protects UAPI file associations and reported state
+ * @id: Device-unique UAPI grant ID
+ * @reported_state: Latest state reported through the grant fd
+ * @holder_file: Fresh DRM file carrying this grant, valid through cleanup
+ *
+ * Capture streams, connector attachments, and CEC transports retain only
+ * @authority.  This wrapper translates file descriptors and IDs
+ * without becoming part of the kernel-native capture mechanism.
+ */
+struct castkms_capture_grant {
+	struct castkms_capture_authority *authority;
+	struct mutex lock; /* Protects UAPI associations and reported state. */
+	u32 id;
+	enum castkms_capture_authority_state reported_state;
+	struct drm_file *holder_file;
+};
+
+static_assert(sizeof(struct drm_castkms_create_grant) == 24);
+
+static u32 castkms_grant_rights_from_uapi(u32 rights)
+{
+	u32 authority_rights = 0;
+
+	if (rights & DRM_CASTKMS_GRANT_CAPTURE_PIXELS)
+		authority_rights |= CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS;
+	if (rights & DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT)
+		authority_rights |= CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT;
+	if (rights & DRM_CASTKMS_GRANT_UPDATE_EDID)
+		authority_rights |= CASTKMS_CAPTURE_AUTHORITY_UPDATE_EDID;
+	if (rights & DRM_CASTKMS_GRANT_READ_CURSOR)
+		authority_rights |= CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR;
+	if (rights & DRM_CASTKMS_GRANT_MANAGE_CEC)
+		authority_rights |= CASTKMS_CAPTURE_AUTHORITY_MANAGE_CEC;
+
+	return authority_rights;
+}
+
+static u32 castkms_grant_rights_to_uapi(u32 rights)
+{
+	u32 uapi_rights = 0;
+
+	if (rights & CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS)
+		uapi_rights |= DRM_CASTKMS_GRANT_CAPTURE_PIXELS;
+	if (rights & CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT)
+		uapi_rights |= DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT;
+	if (rights & CASTKMS_CAPTURE_AUTHORITY_UPDATE_EDID)
+		uapi_rights |= DRM_CASTKMS_GRANT_UPDATE_EDID;
+	if (rights & CASTKMS_CAPTURE_AUTHORITY_READ_CURSOR)
+		uapi_rights |= DRM_CASTKMS_GRANT_READ_CURSOR;
+	if (rights & CASTKMS_CAPTURE_AUTHORITY_MANAGE_CEC)
+		uapi_rights |= DRM_CASTKMS_GRANT_MANAGE_CEC;
+
+	return uapi_rights;
+}
+
+static struct castkms_capture_grant *
+castkms_grant_from_file(struct drm_file *file_priv)
+{
+	struct castkms_file *file_state = file_priv->driver_priv;
+
+	return file_state ? READ_ONCE(file_state->holder_grant) : NULL;
+}
+
+static void castkms_grant_state_changed(
+	struct castkms_capture_authority *authority,
+	enum castkms_capture_authority_state state, int status, void *data)
+{
+	struct castkms_capture_grant *grant = data;
+
+	mutex_lock(&grant->lock);
+	if (!castkms_capture_authority_is_revoked(authority))
+		grant->reported_state = state;
+	mutex_unlock(&grant->lock);
+}
+
+static void castkms_grant_release(
+	struct castkms_capture_authority *authority, void *data)
+{
+	struct castkms_capture_grant *grant = data;
+
+	WARN_ON(grant->holder_file);
+	mutex_destroy(&grant->lock);
+	kfree(grant);
+}
+
+static const struct castkms_capture_authority_ops castkms_grant_authority_ops = {
+	.state_changed = castkms_grant_state_changed,
+	.release = castkms_grant_release,
+};
+
+VISIBLE_IF_KUNIT bool
+castkms_grant_master_is_owner(const struct drm_master *master)
+{
+	return master && !master->lessor;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_grant_master_is_owner);
+
+VISIBLE_IF_KUNIT int castkms_grant_creation_status(bool caller_owner_master)
+{
+	return caller_owner_master ? 0 : -EACCES;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_grant_creation_status);
+
+static int castkms_grant_select_master(
+	struct drm_device *dev, struct drm_file *file_priv,
+	struct drm_master **bound_master_out)
+{
+	struct drm_master *bound_master = NULL;
+	bool caller_owner_master;
+	int ret;
+
+	*bound_master_out = NULL;
+	mutex_lock(&dev->master_mutex);
+	caller_owner_master = drm_is_current_master(file_priv) &&
+		file_priv->master &&
+		castkms_grant_master_is_owner(file_priv->master) &&
+		dev->master == file_priv->master;
+	ret = castkms_grant_creation_status(caller_owner_master);
+	if (!ret)
+		bound_master = drm_master_get(file_priv->master);
+	mutex_unlock(&dev->master_mutex);
+
+	*bound_master_out = bound_master;
+	return ret;
+}
+
+int castkms_grant_begin(struct drm_file *file_priv,
+			struct drm_connector *connector, u32 rights,
+			struct castkms_capture_authority **authority_out)
+{
+	struct castkms_capture_grant *grant = castkms_grant_from_file(file_priv);
+	struct castkms_capture_authority *authority;
+	int ret;
+
+	*authority_out = NULL;
+	if (!grant)
+		return -EACCES;
+	authority = grant->authority;
+	ret = castkms_capture_authority_begin(authority, connector, rights);
+	if (ret)
+		return ret;
+
+	*authority_out = authority;
+	return 0;
+}
+
+int castkms_grant_begin_crtc(
+	struct drm_file *file_priv, struct drm_crtc *crtc, u32 rights,
+	struct castkms_capture_authority **authority_out)
+{
+	struct castkms_capture_grant *grant = castkms_grant_from_file(file_priv);
+	struct castkms_capture_authority *authority;
+	int ret;
+
+	*authority_out = NULL;
+	if (!grant)
+		return -EACCES;
+	authority = grant->authority;
+	ret = castkms_capture_authority_begin_output(
+		authority, drm_crtc_to_castkms_output(crtc), rights);
+	if (ret)
+		return ret;
+
+	*authority_out = authority;
+	return 0;
+}
+
+void castkms_grant_end(struct castkms_capture_authority *authority)
+{
+	castkms_capture_authority_end(authority);
+}
+
+static int castkms_grant_register(
+	struct castkms_grant_registry *registry,
+	struct castkms_capture_grant *grant)
+{
+	int ret;
+
+	mutex_lock(&registry->lock);
+	mutex_lock(&grant->lock);
+	ret = castkms_capture_authority_lifetime_status(grant->authority);
+	if (ret)
+		goto out_unlock;
+
+	castkms_capture_authority_get(grant->authority);
+	ret = xa_alloc_cyclic(&registry->grants, &grant->id, grant,
+			      XA_LIMIT(1, INT_MAX),
+			      &registry->next_id, GFP_KERNEL);
+	if (ret < 0) {
+		castkms_capture_authority_put(grant->authority);
+		goto out_unlock;
+	}
+
+out_unlock:
+	mutex_unlock(&grant->lock);
+	mutex_unlock(&registry->lock);
+	return ret;
+}
+
+int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
+			       struct drm_file *file_priv)
+{
+	struct drm_castkms_create_grant *args = data;
+	struct castkms_device *core_device = drm_device_to_castkms_device(dev);
+	struct castkms_grant_registry *registry = castkms_grant_registry(dev);
+	struct castkms_file *creator_file = file_priv->driver_priv;
+	struct castkms_file *holder_file_state = NULL;
+	struct castkms_capture_grant *grant;
+	struct castkms_capture_authority *authority;
+	struct drm_connector *connector;
+	struct drm_master *bound_master = NULL;
+	struct drm_file *holder_file;
+	struct file *grant_file = NULL;
+	bool holder_ref = false;
+	int fd = -1;
+	int ret;
+
+	args->fd = -1;
+	args->grant_id = 0;
+	if (!args->rights || (args->rights & ~DRM_CASTKMS_GRANT_RIGHTS_MASK) ||
+	    args->flags ||
+	    (args->fd_flags & ~O_NONBLOCK))
+		return -EINVAL;
+	if (!creator_file || creator_file->holder_grant)
+		return -EACCES;
+	if (!drm_is_primary_client(file_priv))
+		return -EACCES;
+
+	ret = castkms_grant_select_master(dev, file_priv, &bound_master);
+	if (ret)
+		return ret;
+
+	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
+	if (!connector) {
+		ret = -ENOENT;
+		goto out_put_master;
+	}
+	if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
+		ret = -ENOENT;
+		goto out_put_connector;
+	}
+
+	grant = kzalloc_obj(*grant);
+	if (!grant) {
+		ret = -ENOMEM;
+		goto out_put_connector;
+	}
+	mutex_init(&grant->lock);
+	authority = castkms_capture_authority_create(
+		core_device, connector, bound_master,
+		castkms_grant_rights_from_uapi(args->rights),
+		false, &castkms_grant_authority_ops, grant);
+	if (IS_ERR(authority)) {
+		ret = PTR_ERR(authority);
+		mutex_destroy(&grant->lock);
+		kfree(grant);
+		goto out_put_connector;
+	}
+	grant->authority = authority;
+	mutex_lock(&grant->lock);
+	ret = castkms_capture_authority_get_state(authority,
+						 &grant->reported_state);
+	mutex_unlock(&grant->lock);
+	if (ret)
+		goto out_revoke_authority;
+
+	fd = get_unused_fd_flags(O_CLOEXEC);
+	if (fd < 0) {
+		ret = fd;
+		goto out_revoke_authority;
+	}
+
+	grant_file = castkms_grant_file_create(dev, args->fd_flags);
+	if (IS_ERR(grant_file)) {
+		ret = PTR_ERR(grant_file);
+		grant_file = NULL;
+		goto out_put_fd;
+	}
+	holder_file = grant_file->private_data;
+	grant_file->f_flags &= ~O_NONBLOCK;
+	grant_file->f_flags |= args->fd_flags & O_NONBLOCK;
+
+	holder_file_state = holder_file->driver_priv;
+	if (WARN_ON(!holder_file_state)) {
+		ret = -EINVAL;
+		goto out_fput;
+	}
+	mutex_lock(&grant->lock);
+	grant->holder_file = holder_file;
+	mutex_unlock(&grant->lock);
+	castkms_capture_authority_get(authority);
+	holder_ref = true;
+	holder_file_state->holder_grant = grant;
+
+	ret = castkms_grant_register(registry, grant);
+	if (ret)
+		goto out_clear_holder;
+
+	args->fd = fd;
+	args->grant_id = grant->id;
+	fd_install(fd, grant_file);
+	drm_connector_put(connector);
+	if (bound_master)
+		drm_master_put(&bound_master);
+	castkms_capture_authority_put(authority);
+	return 0;
+
+out_clear_holder:
+	holder_file_state->holder_grant = NULL;
+	mutex_lock(&grant->lock);
+	grant->holder_file = NULL;
+	mutex_unlock(&grant->lock);
+	if (holder_ref)
+		castkms_capture_authority_put(authority);
+out_fput:
+	fput(grant_file);
+out_put_fd:
+	put_unused_fd(fd);
+out_revoke_authority:
+	castkms_capture_authority_revoke(authority, -EKEYREVOKED);
+	castkms_capture_authority_put(authority);
+out_put_connector:
+	drm_connector_put(connector);
+out_put_master:
+	if (bound_master)
+		drm_master_put(&bound_master);
+	return ret;
+}
+
+void castkms_grant_uapi_file_fini(struct drm_device *dev,
+				  struct drm_file *file_priv)
+{
+	struct castkms_grant_registry *registry = castkms_grant_registry(dev);
+	struct castkms_file *file_state = file_priv->driver_priv;
+	struct castkms_capture_grant *grant;
+	struct castkms_capture_authority *authority;
+	bool put_registry = false;
+
+	grant = file_state->holder_grant;
+	if (!grant)
+		return;
+	authority = grant->authority;
+	castkms_capture_authority_revoke(authority, -EKEYREVOKED);
+
+	mutex_lock(&grant->lock);
+	grant->holder_file = NULL;
+	mutex_unlock(&grant->lock);
+
+	mutex_lock(&registry->lock);
+	if (xa_load(&registry->grants, grant->id) == grant) {
+		xa_erase(&registry->grants, grant->id);
+		put_registry = true;
+	}
+	mutex_unlock(&registry->lock);
+
+	file_state->holder_grant = NULL;
+	if (put_registry)
+		castkms_capture_authority_put(authority);
+	castkms_capture_authority_put(authority);
+}
+
+static void castkms_grant_device_fini(struct drm_device *dev, void *data)
+{
+	struct castkms_uapi_device *uapi_device = data;
+	struct castkms_grant_registry *registry = uapi_device->grant_registry;
+
+	if (!registry)
+		return;
+	WARN_ON(!xa_empty(&registry->grants));
+	xa_destroy(&registry->grants);
+	mutex_destroy(&registry->lock);
+	uapi_device->grant_registry = NULL;
+}
+
+int castkms_grant_device_init(struct drm_device *dev)
+{
+	struct castkms_uapi_device *uapi_device =
+		drm_device_to_castkms_uapi_device(dev);
+	struct castkms_grant_registry *registry;
+
+	registry = drmm_kzalloc(dev, sizeof(*registry), GFP_KERNEL);
+	if (!registry)
+		return -ENOMEM;
+	mutex_init(&registry->lock);
+	xa_init_flags(&registry->grants, XA_FLAGS_ALLOC);
+	registry->next_id = 1;
+	uapi_device->grant_registry = registry;
+
+	return drmm_add_action_or_reset(dev, castkms_grant_device_fini,
+					uapi_device);
+}
+
+void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
+{
+	struct castkms_capture_grant *grant = castkms_grant_from_file(file);
+	struct castkms_capture_authority *authority;
+	enum castkms_capture_authority_state state;
+	const char *state_name;
+	u32 connector_id;
+	u32 grant_id;
+	u32 rights;
+	bool attached = false;
+
+	if (!grant)
+		return;
+	authority = grant->authority;
+
+	mutex_lock(&grant->lock);
+	grant_id = grant->id;
+	connector_id = castkms_capture_authority_connector(authority)->base.id;
+	rights = castkms_grant_rights_to_uapi(
+		castkms_capture_authority_rights(authority));
+	state = castkms_capture_authority_is_revoked(authority) ?
+		CASTKMS_CAPTURE_AUTHORITY_REVOKED : grant->reported_state;
+	mutex_unlock(&grant->lock);
+
+	if (state == CASTKMS_CAPTURE_AUTHORITY_PENDING)
+		state_name = "pending";
+	else if (state == CASTKMS_CAPTURE_AUTHORITY_ACTIVE)
+		state_name = "active";
+	else if (state == CASTKMS_CAPTURE_AUTHORITY_SUSPENDED_NO_MASTER)
+		state_name = "suspended-no-master";
+	else if (state == CASTKMS_CAPTURE_AUTHORITY_SUSPENDED_OTHER_MASTER)
+		state_name = "suspended-other-master";
+	else if (state == CASTKMS_CAPTURE_AUTHORITY_SUSPENDED_FOREIGN_CONTENT)
+		state_name = "suspended-foreign-content";
+	else
+		state_name = "revoked";
+	/* Grant-owned attachment arrives with the attachment UAPI. */
+	drm_printf(p, "castkms-grant-id:\t%u\n", grant_id);
+	drm_printf(p, "castkms-grant-connector:\t%u\n", connector_id);
+	drm_printf(p, "castkms-grant-rights:\t0x%x\n", rights);
+	drm_printf(p, "castkms-grant-state:\t%s\n", state_name);
+	drm_printf(p, "castkms-grant-attached:\t%s\n",
+		   attached ? "yes" : "no");
+}

@@ -7,15 +7,20 @@
 
 #include "castkms_drv.h"
 
+struct castkms_grant_registry;
+
 /**
  * struct castkms_uapi_device - Driver/UAPI shell around a core CastKMS device
  * @core: Transport-neutral device state
+ * @grant_registry: Private grant-fd ID namespace owned by castkms_grant.c
  *
- * Driver assembly owns this outer shell so UAPI-only state need not enter the
- * transport-neutral core device.
+ * Only driver assembly and the grant adapter use this shell. Keeping the
+ * grant registry here prevents core device consumers from observing even an
+ * opaque grant-fd namespace.
  */
 struct castkms_uapi_device {
 	struct castkms_device core;
+	struct castkms_grant_registry *grant_registry;
 };
 
 #define castkms_device_to_uapi_device(target) \

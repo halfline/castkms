@@ -9,6 +9,7 @@ castkms-y := \
 	src/castkms_framebuffer.o \
 	src/castkms_capture_authority.o \
 	src/castkms_capture_owner.o \
+	src/castkms_grant.o \
 	src/castkms_grant_file.o \
 	src/castkms_plane.o \
 	src/castkms_output.o \
@@ -24,4 +25,4 @@ castkms-y := \
 	src/castkms_colorop.o \
 	src/castkms_luts.o
 
-ccflags-y += -I$(src)/src
+ccflags-y += -I$(src)/src -I$(src)/include/uapi

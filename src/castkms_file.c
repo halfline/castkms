@@ -8,6 +8,7 @@
 
 #include "castkms_capture_owner.h"
 #include "castkms_file.h"
+#include "castkms_grant.h"
 #include "castkms_grant_file.h"
 
 int castkms_file_open(struct drm_device *dev, struct drm_file *file_priv)
@@ -32,6 +33,7 @@ void castkms_file_postclose(struct drm_device *dev,
 	castkms_capture_owner_file_close(dev, file_priv);
 	if (WARN_ON(!file_state))
 		return;
+	castkms_grant_uapi_file_fini(dev, file_priv);
 
 	kfree(file_state);
 	file_priv->driver_priv = NULL;
@@ -45,7 +47,7 @@ bool castkms_file_is_grant(struct file *file)
 	if (!file_priv)
 		return false;
 	file_state = file_priv->driver_priv;
-	return file_state && READ_ONCE(file_state->grant_client);
+	return file_state && READ_ONCE(file_state->holder_grant);
 }
 
 int castkms_file_release(struct inode *inode, struct file *file)

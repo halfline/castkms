@@ -31,6 +31,8 @@
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_vblank.h>
 
+#include <drm/castkms_drm.h>
+
 #include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
 #include "castkms_config.h"
@@ -39,6 +41,7 @@
 #include "castkms_drv.h"
 #include "castkms_file.h"
 #include "castkms_framebuffer.h"
+#include "castkms_grant.h"
 #include "castkms_uapi_device.h"
 
 #define DRIVER_NAME	"castkms"
@@ -93,6 +96,11 @@ bool castkms_crc_enabled(void)
 	return enable_crc;
 }
 
+static const struct drm_ioctl_desc castkms_ioctls[] = {
+	DRM_IOCTL_DEF_DRV(CASTKMS_CREATE_GRANT,
+			  castkms_grant_create_ioctl, 0),
+};
+
 static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 {
 	struct drm_device *dev = old_state->dev;
@@ -124,10 +132,13 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 
 static const struct drm_driver castkms_driver = {
 	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM,
+	.ioctls			= castkms_ioctls,
+	.num_ioctls		= ARRAY_SIZE(castkms_ioctls),
 	.open			= castkms_file_open,
 	.postclose		= castkms_file_postclose,
 	.master_set		= castkms_capture_owner_master_set,
 	.master_drop		= castkms_capture_owner_master_drop,
+	.show_fdinfo		= castkms_grant_show_fdinfo,
 	.fops			= &castkms_driver_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
@@ -230,6 +241,9 @@ int castkms_create(struct castkms_config *config)
 	castkms_device->config = config;
 	config->dev = castkms_device;
 	ret = castkms_capture_authority_device_init(castkms_device);
+	if (ret)
+		goto out_devres;
+	ret = castkms_grant_device_init(&castkms_device->drm);
 	if (ret)
 		goto out_devres;
 

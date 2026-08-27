@@ -2,8 +2,11 @@
 
 #include <kunit/test.h>
 
+#include <drm/drm_auth.h>
+
 #include "../castkms_capture_authority.h"
 #include "../castkms_capture_owner.h"
+#include "../castkms_grant.h"
 
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 
@@ -96,6 +99,28 @@ static void castkms_capture_owner_requires_current_master(struct kunit *test)
 		castkms_capture_owner_is_current(NULL, owner_a));
 }
 
+static void castkms_grant_rejects_lease_master(struct kunit *test)
+{
+	struct drm_master owner = {};
+	struct drm_master lessee = {
+		.lessor = &owner,
+	};
+
+	KUNIT_EXPECT_TRUE(test, castkms_grant_master_is_owner(&owner));
+	KUNIT_EXPECT_FALSE(test, castkms_grant_master_is_owner(&lessee));
+	KUNIT_EXPECT_FALSE(test, castkms_grant_master_is_owner(NULL));
+}
+
+static void castkms_grant_creation_policy(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(true),
+		0);
+	KUNIT_EXPECT_EQ(test,
+		castkms_grant_creation_status(false),
+		-EACCES);
+}
+
 static void castkms_master_cleanup_preserves_current_streams(struct kunit *test)
 {
 	KUNIT_EXPECT_TRUE(test,
@@ -148,6 +173,8 @@ static struct kunit_case castkms_grant_test_cases[] = {
 	KUNIT_CASE(castkms_grant_revivifies_after_intervening_master),
 	KUNIT_CASE(castkms_grant_waits_for_returning_owner_content),
 	KUNIT_CASE(castkms_capture_owner_requires_current_master),
+	KUNIT_CASE(castkms_grant_rejects_lease_master),
+	KUNIT_CASE(castkms_grant_creation_policy),
 	KUNIT_CASE(castkms_master_cleanup_preserves_current_streams),
 	KUNIT_CASE(castkms_grant_explicit_revoke_is_terminal),
 	KUNIT_CASE(castkms_grant_device_shutdown_is_terminal),

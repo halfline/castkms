@@ -39,6 +39,8 @@ drm-runtime src/castkms_plane.h
 drm-runtime src/castkms_writeback.c
 drm-runtime src/castkms_writeback.h
 
+grant-uapi src/castkms_grant.c
+grant-uapi src/castkms_grant.h
 grant-uapi src/castkms_grant_file.c
 grant-uapi src/castkms_grant_file.h
 grant-uapi src/castkms_uapi_device.h
