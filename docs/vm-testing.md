@@ -163,4 +163,5 @@ Useful desktop lifecycle commands:
 ./scripts/vm/castkms-vm desktop-start
 ./scripts/vm/castkms-vm desktop-attach
 ./scripts/vm/castkms-vm desktop-shell
+./scripts/vm/castkms-vm desktop-stop
 ```

@@ -97,6 +97,7 @@ Commands:
   desktop-status      Show desktop-instance status
   logs        Follow the guest serial console log
   stop        Ask the guest to power off, with a bounded fallback
+  desktop-stop        Stop the desktop instance
   reset       Stop and archive the disposable instance, then create a fresh one
 
 Environment:
@@ -534,6 +535,10 @@ case "$command" in
 		tail -f "$SERIAL_LOG"
 		;;
 	stop) stop ;;
+	desktop-stop)
+		apply_desktop_defaults
+		stop
+		;;
 	reset) reset ;;
 	-h|--help|help|'') usage ;;
 	*) usage >&2; die "unknown command: $command" ;;
