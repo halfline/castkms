@@ -1,3 +1,5 @@
+# `pw-castkms` example consumer
+
 Read this if you are writing a CastKMS capture consumer. `pw-castkms` is a
 small end-to-end example of the capture path. It takes a grant fd (permission
 to capture one connector), copies frames into linear `XRGB8888` buffers, and
