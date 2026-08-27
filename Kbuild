@@ -3,6 +3,12 @@
 obj-m += castkms.o
 obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += src/tests/
 
+CASTKMS_BUILD_AUDIO ?= y
+
+ifeq ($(filter y n,$(CASTKMS_BUILD_AUDIO)),)
+$(error CASTKMS_BUILD_AUDIO must be y or n)
+endif
+
 castkms-y := \
 	src/castkms_drv.o \
 	src/castkms_file.o \
@@ -32,6 +38,11 @@ castkms-y := \
 	src/castkms_luts.o \
 	src/castkms_snapshot.o
 
-castkms-$(CONFIG_SND) += src/castkms_audio.o
+ifeq ($(CASTKMS_BUILD_AUDIO),y)
+ifneq ($(filter y m,$(CONFIG_SND)),)
+castkms-y += src/castkms_audio.o
+ccflags-y += -DCASTKMS_HAVE_AUDIO=1
+endif
+endif
 
 ccflags-y += -I$(src)/src -I$(src)/include/uapi

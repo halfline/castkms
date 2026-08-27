@@ -76,6 +76,17 @@ When the kernel provides ALSA support, each CastKMS output has a playback-only
 virtual HDMI PCM endpoint. Its presentation clock supports pause, resume, and
 timestamps without retaining a second copy of samples for capture.
 
+HDMI audio compiles in when the kernel provides its dependencies. A package
+that does not want it can omit it:
+
+```sh
+make CASTKMS_BUILD_AUDIO=n W=1
+```
+
+`make build-matrix W=1` builds the enabled, explicitly disabled, and
+kernel-disabled audio configurations. The enabled case needs a kernel with
+`CONFIG_SND`.
+
 ## VM smoke test
 
 The repository includes a reproducible QEMU/KVM guest for development on hosts

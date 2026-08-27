@@ -66,9 +66,13 @@ static bool enable_writeback = true;
 module_param_named(enable_writeback, enable_writeback, bool, 0444);
 MODULE_PARM_DESC(enable_writeback, "Enable/Disable writeback connector support");
 
+#ifdef CASTKMS_HAVE_AUDIO
 static bool enable_audio = true;
 module_param_named(enable_audio, enable_audio, bool, 0444);
 MODULE_PARM_DESC(enable_audio, "Enable/Disable HDMI audio output support");
+#else
+static const bool enable_audio;
+#endif
 
 static bool enable_crc;
 module_param_named(enable_crc, enable_crc, bool, 0444);
@@ -542,3 +546,6 @@ MODULE_AUTHOR("Haneen Mohammed <hamohammed.sa@gmail.com>");
 MODULE_AUTHOR("Rodrigo Siqueira <rodrigosiqueiramelo@gmail.com>");
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL");
+#ifdef CASTKMS_HAVE_AUDIO
+MODULE_SOFTDEP("pre: snd snd-pcm");
+#endif

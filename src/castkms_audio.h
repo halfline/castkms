@@ -3,13 +3,12 @@
 #ifndef _CASTKMS_AUDIO_H_
 #define _CASTKMS_AUDIO_H_
 
-#include <linux/mutex.h>
-
 struct castkms_device;
 struct drm_connector;
 
-#if IS_ENABLED(CONFIG_SND)
+#ifdef CASTKMS_HAVE_AUDIO
 
+#include <linux/mutex.h>
 #include <drm/drm_connector.h>
 #include <sound/core.h>
 #include <sound/jack.h>
@@ -44,7 +43,7 @@ void castkms_audio_notify_eld(struct castkms_device *castkmsdev,
 void castkms_audio_notify_disconnect(struct castkms_device *castkmsdev,
 				     struct drm_connector *connector);
 
-#else /* !CONFIG_SND */
+#else /* !CASTKMS_HAVE_AUDIO */
 
 struct castkms_audio;
 
@@ -65,5 +64,5 @@ static inline void
 castkms_audio_notify_disconnect(struct castkms_device *castkmsdev,
 				struct drm_connector *connector) { }
 
-#endif /* CONFIG_SND */
+#endif /* CASTKMS_HAVE_AUDIO */
 #endif /* _CASTKMS_AUDIO_H_ */
