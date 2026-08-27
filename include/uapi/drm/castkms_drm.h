@@ -775,6 +775,11 @@ struct drm_castkms_capture_read_cursor_bitmap {
 #define DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE	(1ULL << 3)
 #define DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR	(1ULL << 4)
 
+/* State flags for bind response and get-state */
+#define DRM_CASTKMS_CEC_STATE_TRANSPORT_ONLINE	(1U << 0)
+#define DRM_CASTKMS_CEC_STATE_MONITOR_ATTACHED	(1U << 1)
+#define DRM_CASTKMS_CEC_STATE_ADAPTER_ENABLED	(1U << 2)
+
 /**
  * struct drm_castkms_cec_query_caps - query CEC capabilities for a connector
  * @connector_id: DRM object ID of the display connector
@@ -799,15 +804,47 @@ struct drm_castkms_cec_query_caps {
 	__u32 reserved;
 };
 
+/**
+ * struct drm_castkms_cec_bind_transport - bind as the CEC transport owner
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @transport_id: file-local transport ID returned by the driver
+ * @reserved: must be zero
+ * @transport_generation: transport generation returned by the driver
+ * @state_generation: current state generation returned by the driver
+ * @output_index: stable castkms output identity
+ * @state_flags: bitmask of DRM_CASTKMS_CEC_STATE_* values
+ * @phys_addr: current EDID-derived physical address
+ * @logical_addr_mask: current logical address mask
+ * @pad0: output zero; explicit padding for a stable cross-architecture layout
+ */
+struct drm_castkms_cec_bind_transport {
+	__u32 connector_id;
+	__u32 flags;
+	__u32 transport_id;
+	__u32 reserved;
+	__u64 transport_generation;
+	__u64 state_generation;
+	__u32 output_index;
+	__u32 state_flags;
+	__u16 phys_addr;
+	__u16 logical_addr_mask;
+	__u32 pad0;
+};
+
 /* CEC DRM event types */
 #define DRM_CASTKMS_CEC_EVENT_STATE	0x80000002U
 
 /* CEC ioctl command numbers (after capture range 0x00-0x09) */
 #define DRM_CASTKMS_CEC_QUERY_CAPS		0x0a
+#define DRM_CASTKMS_CEC_BIND_TRANSPORT		0x0b
 
 #define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
 		 struct drm_castkms_cec_query_caps)
+#define DRM_IOCTL_CASTKMS_CEC_BIND_TRANSPORT \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_BIND_TRANSPORT, \
+		 struct drm_castkms_cec_bind_transport)
 #if defined(__cplusplus)
 }
 #endif

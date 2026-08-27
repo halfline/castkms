@@ -21,6 +21,10 @@
 /* ABI size checks */
 static_assert(sizeof(struct drm_castkms_cec_query_caps) == 40,
 	      "cec query caps ABI size changed");
+static_assert(sizeof(struct drm_castkms_cec_bind_transport) == 48,
+	      "cec bind transport ABI size changed");
+static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44,
+	      "cec bind transport ABI layout changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get grant ABI size changed");
 
@@ -47,7 +51,8 @@ static int parse_fd(const char *text, int *fd)
 
 static int open_grant(int inherited_fd, uint32_t *connector_id)
 {
-	const uint32_t rights = DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT;
+	const uint32_t rights = DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT |
+		DRM_CASTKMS_GRANT_MANAGE_CEC;
 	struct drm_castkms_get_grant grant = {};
 	const char *environment;
 	int fd;
@@ -134,6 +139,18 @@ static int cec_query_caps(int fd, uint32_t connector_id,
 	return 0;
 }
 
+static int cec_bind(int fd, uint32_t connector_id,
+		    struct drm_castkms_cec_bind_transport *bind)
+{
+	*bind = (struct drm_castkms_cec_bind_transport){
+		.connector_id = connector_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CEC_BIND_TRANSPORT, bind) < 0)
+		return -errno;
+
+	return 0;
+}
 
 /* --- Tests --- */
 
@@ -220,6 +237,27 @@ static void test_query_caps_reserved_reject(int fd, uint32_t connector_id)
 	PASS("query_caps_reserved_reject");
 }
 
+static void test_double_bind(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind1, bind2;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind1);
+	if (ret) {
+		FAIL("double_bind_first", "ioctl failed: %s", strerror(-ret));
+		return;
+	}
+
+	ret = cec_bind(fd, connector_id, &bind2);
+	if (ret != -EBUSY) {
+		FAIL("double_bind_reject",
+		     "expected EBUSY, got %s",
+		     ret ? strerror(-ret) : "success");
+		return;
+	}
+	PASS("double_bind_reject");
+
+}
 
 static void usage(const char *program)
 {
@@ -272,6 +310,7 @@ int main(int argc, char **argv)
 	test_query_caps(fd, connector_id);
 	test_query_caps_bad_connector(fd);
 	test_query_caps_reserved_reject(fd, connector_id);
+	test_double_bind(fd, connector_id);
 	detach_monitor(fd, connector_id);
 
 	printf("\n%d/%d tests passed\n", tests_pass, tests_run);

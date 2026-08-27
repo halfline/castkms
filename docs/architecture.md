@@ -43,6 +43,18 @@ Writeback always retains the cursor. When writeback or frame checksums overlap
 a cursor-excluded capture, frame dispatch preserves the full composition for
 those consumers and renders a separate cursor-free capture result.
 
+## HDMI-CEC
+
+HDMI-CEC carries power, volume, and input commands between HDMI devices.
+CastKMS exposes it as an opt-in, grant-owned transport rather than as a
+pixel-capture path.
+
+A grant with `MANAGE_CEC` may bind one transport to its connector. The
+transport-neutral `castkms_cec_core` owns exclusive binding and connector
+state; its authority resource hook removes the binding when the grant is
+revoked. `castkms_cec_uapi` performs DRM object lookup, checks grant rights,
+and translates the core snapshot into the public CEC structures.
+
 ## HDMI audio
 
 The optional ALSA device is a single device-global card with one playback-only
@@ -65,4 +77,5 @@ The current specialized interfaces have explicit owners:
 | Monitor attachment ioctl translation | `castkms_connector_uapi.c` |
 | Connector attachment and EDID state | `castkms_connector.c` |
 | Captured cursor state and bitmap extraction | `castkms_capture_cursor.c` |
+| CEC transport state | `castkms_cec_core.c` |
 | CEC ioctl and DRM events | `castkms_cec_uapi.c` |
