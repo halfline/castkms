@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include "pw-castkms.h"
+
 #include <errno.h>
 #include <getopt.h>
 #include <stdbool.h>
@@ -19,6 +21,22 @@ struct options {
 	const char *edid_path;
 	const char *monitor_name;
 };
+
+void pw_castkms_fail(struct pw_castkms *bridge, const char *operation,
+		     int status)
+{
+	if (!bridge->failed) {
+		if (status) {
+			fprintf(stderr, "%s: %s\n", operation,
+				strerror(status < 0 ? -status : status));
+		} else {
+			fprintf(stderr, "%s\n", operation);
+		}
+	}
+
+	bridge->failed = true;
+	bridge->exit_status = EXIT_FAILURE;
+}
 
 static int parse_object_id(const char *value, uint32_t *id)
 {
