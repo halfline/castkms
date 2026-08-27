@@ -22,6 +22,7 @@
 
 #include "castkms_audio.h"
 #include "castkms_config.h"
+#include "castkms_connector.h"
 #include "castkms_drv.h"
 
 struct castkms_audio_runtime {
@@ -521,13 +522,18 @@ int castkms_audio_init(struct castkms_device *castkmsdev)
 
 	drm_connector_list_iter_begin(&castkmsdev->drm, &iter);
 	drm_for_each_connector_iter(connector, &iter) {
+		struct castkms_connector *castkms_conn;
+
 		if (connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
 			continue;
 		if (idx >= num_outputs)
 			break;
 
+		castkms_conn = drm_connector_to_castkms_connector(connector);
+
 		ret = castkms_audio_output_init(audio, &audio->outputs[idx],
-						castkmsdev, connector, idx);
+						castkmsdev, connector,
+						castkms_conn->output_index);
 		if (ret) {
 			drm_connector_list_iter_end(&iter);
 			goto err_card;
