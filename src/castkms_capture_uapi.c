@@ -4,6 +4,7 @@
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
+#include <linux/ktime.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/xarray.h>
@@ -34,6 +35,20 @@ struct castkms_capture_uapi_stream {
 	bool published;
 };
 
+/*
+ * @pending must remain first: DRM event cleanup frees the pending-event
+ * address after delivery or cancellation.
+ */
+struct castkms_capture_uapi_request {
+	struct drm_pending_event pending;
+	struct drm_event_castkms_capture_frame event;
+	struct castkms_capture_request request;
+	struct drm_device *dev;
+	u64 user_data;
+	u32 stream_id;
+	u32 buffer_id;
+};
+
 static const struct drm_castkms_capture_format castkms_capture_formats[] = {
 	{
 		.format = DRM_FORMAT_XRGB8888,
@@ -56,6 +71,9 @@ static_assert(sizeof(struct drm_castkms_capture_start) == 24);
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 24);
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
+static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 32);
+static_assert(sizeof(struct drm_event_castkms_capture_frame) == 64);
+static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 60);
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -444,5 +462,102 @@ int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
 
 out_unlock:
 	mutex_unlock(&file_state->capture_lock);
+	return ret;
+}
+
+static void castkms_capture_uapi_request_complete(
+	struct castkms_capture_request *request,
+	const struct castkms_capture_result *result)
+{
+	struct castkms_capture_uapi_request *uapi_request = container_of(
+		request, struct castkms_capture_uapi_request, request);
+	struct drm_event_castkms_capture_frame *event = &uapi_request->event;
+
+	if (result->cancelled) {
+		drm_event_cancel_free(uapi_request->dev, &uapi_request->pending);
+		return;
+	}
+
+	event->user_data = uapi_request->user_data;
+	event->sequence = result->sequence;
+	event->timestamp_ns = ktime_to_ns(result->timestamp);
+	event->mode_generation = result->mode_generation;
+	event->stream_id = uapi_request->stream_id;
+	event->buffer_id = uapi_request->buffer_id;
+	event->status = result->status;
+	event->dropped_frames = result->dropped_frames;
+
+	/* drm_send_event() takes ownership of the adapter allocation. */
+	drm_send_event(uapi_request->dev, &uapi_request->pending);
+}
+
+int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
+				       struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_queue_buffer *args = data;
+	struct castkms_file *file_state = file_priv->driver_priv;
+	struct castkms_capture_uapi_stream *uapi_stream;
+	struct castkms_capture_uapi_request *uapi_request;
+	struct castkms_capture_authority *authority;
+	struct castkms_capture_buffer *buffer;
+	int ret;
+
+	if (args->reserved ||
+	    args->flags != DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC)
+		return -EINVAL;
+
+	ret = castkms_grant_begin(file_priv, NULL,
+				  CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS,
+				  &authority);
+	if (ret)
+		return ret;
+
+	mutex_lock(&file_state->capture_lock);
+	uapi_stream = xa_load(&file_state->capture_streams, args->stream_id);
+	if (!uapi_stream) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	ret = castkms_capture_uapi_validate_stream(dev, file_priv, uapi_stream,
+						   authority);
+	if (ret)
+		goto out_unlock;
+	ret = castkms_capture_stream_validate_mode(
+		uapi_stream->stream, args->mode_generation);
+	if (ret)
+		goto out_unlock;
+
+	buffer = xa_load(&uapi_stream->buffers, args->buffer_id);
+	if (!buffer) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+	uapi_request = kzalloc_obj(*uapi_request);
+	if (!uapi_request) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+	uapi_request->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_FRAME;
+	uapi_request->event.base.length = sizeof(uapi_request->event);
+	uapi_request->request.complete = castkms_capture_uapi_request_complete;
+	uapi_request->dev = dev;
+	uapi_request->user_data = args->user_data;
+	uapi_request->stream_id = args->stream_id;
+	uapi_request->buffer_id = args->buffer_id;
+
+	ret = drm_event_reserve_init(dev, file_priv, &uapi_request->pending,
+				     &uapi_request->event.base);
+	if (ret) {
+		kfree(uapi_request);
+		goto out_unlock;
+	}
+
+	ret = castkms_capture_buffer_submit(buffer, &uapi_request->request);
+	if (ret)
+		drm_event_cancel_free(dev, &uapi_request->pending);
+
+out_unlock:
+	mutex_unlock(&file_state->capture_lock);
+	castkms_grant_end(authority);
 	return ret;
 }

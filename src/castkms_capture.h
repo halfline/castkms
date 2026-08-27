@@ -122,4 +122,7 @@ castkms_capture_buffer_create(struct castkms_capture_stream *stream,
 			      u64 mode_generation);
 int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
 				  struct castkms_capture_buffer *buffer);
+int castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
+				  struct castkms_capture_request *request);
+
 #endif /* _CASTKMS_CAPTURE_H_ */

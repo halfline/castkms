@@ -16,4 +16,7 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 					  struct drm_file *file_priv);
 int castkms_capture_unregister_buffer_ioctl(struct drm_device *dev, void *data,
 					    struct drm_file *file_priv);
+int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
+				       struct drm_file *file_priv);
+
 #endif /* _CASTKMS_CAPTURE_UAPI_H_ */

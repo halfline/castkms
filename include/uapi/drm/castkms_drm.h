@@ -340,6 +340,55 @@ struct drm_castkms_capture_unregister_buffer {
 };
 
 /**
+ * DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC:
+ *
+ * Queue a buffer registered for implicit synchronization. Existing readers
+ * and writers delay vblank eligibility without blocking the vblank callback.
+ */
+#define DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC	(1U << 0)
+
+/**
+ * struct drm_castkms_capture_queue_buffer - queue one capture destination
+ * @stream_id: file-local capture stream identifier
+ * @buffer_id: stream-local registered buffer identifier
+ * @flags: must be DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC
+ * @reserved: must be zero
+ * @user_data: opaque value returned in the completion event
+ * @mode_generation: generation returned when the stream was started
+ *
+ * The current UAPI accepts one queued buffer while a previous capture may
+ * remain in flight on the same CRTC. A queued buffer is captured at a future
+ * vblank.
+ * Implicit synchronization attaches a write fence to the buffer's GEM
+ * reservation object before returning.
+ *
+ * Dependencies are honored asynchronously, so an unavailable buffer is
+ * skipped rather than waited upon from the vblank callback. The completion
+ * event reports that the capture operation finished, but success and error
+ * events are metadata only and never transfer buffer ownership.
+ * Synchronization remains authoritative: wait for the reservation fences
+ * before accessing a destination. In particular, an error event may report
+ * cancellation before the reuse dependency resolves and does not supersede
+ * that dependency. Queueing reserves event space up front, so completion
+ * never allocates in the vblank path.
+ */
+struct drm_castkms_capture_queue_buffer {
+	__u32 stream_id;
+	__u32 buffer_id;
+	__u32 flags;
+	__u32 reserved;
+	__u64 user_data;
+	__u64 mode_generation;
+};
+
+/**
+ * DRM_CASTKMS_CAPTURE_EVENT_FRAME:
+ *
+ * Driver-private event type carrying a completed capture frame.
+ */
+#define DRM_CASTKMS_CAPTURE_EVENT_FRAME	0x80000000U
+
+/**
  * DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED:
  *
  * Reliable notification that a grant has become permanently inert. This is
@@ -384,11 +433,41 @@ struct drm_event_castkms_grant_state {
 	__u64 timestamp_ns;
 };
 
+/**
+ * struct drm_event_castkms_capture_frame - capture completion event
+ * @base: DRM event header with type DRM_CASTKMS_CAPTURE_EVENT_FRAME
+ * @user_data: opaque value supplied when the buffer was queued
+ * @sequence: vblank sequence associated with the frame, or zero on cancellation
+ * @timestamp_ns: vblank timestamp for a captured frame, or monotonic
+ *                completion time when @sequence is zero
+ * @mode_generation: generation used for this completion
+ * @stream_id: file-local capture stream identifier
+ * @buffer_id: stream-local registered buffer identifier
+ * @status: zero on success or a negative errno on asynchronous failure
+ * @flags: must be zero
+ * @dropped_frames: frames skipped since this buffer was queued
+ * @reserved: must be zero
+ */
+struct drm_event_castkms_capture_frame {
+	struct drm_event base;
+	__u64 user_data;
+	__u64 sequence;
+	__s64 timestamp_ns;
+	__u64 mode_generation;
+	__u32 stream_id;
+	__u32 buffer_id;
+	__s32 status;
+	__u32 flags;
+	__u32 dropped_frames;
+	__u32 reserved;
+};
+
 #define DRM_CASTKMS_CAPTURE_QUERY_CAPS	0x00
 #define DRM_CASTKMS_CAPTURE_START	0x01
 #define DRM_CASTKMS_CAPTURE_STOP		0x02
 #define DRM_CASTKMS_CAPTURE_REGISTER_BUFFER	0x03
 #define DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER	0x04
+#define DRM_CASTKMS_CAPTURE_QUEUE_BUFFER	0x05
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13
@@ -408,6 +487,9 @@ struct drm_event_castkms_grant_state {
 #define DRM_IOCTL_CASTKMS_CAPTURE_UNREGISTER_BUFFER \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER, \
 		struct drm_castkms_capture_unregister_buffer)
+#define DRM_IOCTL_CASTKMS_CAPTURE_QUEUE_BUFFER \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUEUE_BUFFER, \
+		struct drm_castkms_capture_queue_buffer)
 #define DRM_IOCTL_CASTKMS_CREATE_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
 		 struct drm_castkms_create_grant)

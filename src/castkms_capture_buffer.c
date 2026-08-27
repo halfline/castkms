@@ -3,6 +3,7 @@
 #include <linux/completion.h>
 #include <linux/dma-fence.h>
 #include <linux/err.h>
+#include <linux/dma-resv.h>
 #include <linux/kernel.h>
 #include <linux/ktime.h>
 #include <linux/list.h>
@@ -50,6 +51,50 @@ VISIBLE_IF_KUNIT bool castkms_capture_buffer_state_transition_valid(
 	}
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_buffer_state_transition_valid);
+
+struct castkms_capture_fence {
+	struct dma_fence base;
+	spinlock_t lock; /* Protects @base. */
+};
+
+static const char *
+castkms_capture_fence_get_driver_name(struct dma_fence *fence)
+{
+	(void)fence;
+	return "castkms";
+}
+
+static const char *
+castkms_capture_fence_get_timeline_name(struct dma_fence *fence)
+{
+	(void)fence;
+	return "capture";
+}
+
+static const struct dma_fence_ops castkms_capture_fence_ops = {
+	.get_driver_name = castkms_capture_fence_get_driver_name,
+	.get_timeline_name = castkms_capture_fence_get_timeline_name,
+};
+
+static struct dma_fence *castkms_capture_fence_create(void)
+{
+	struct castkms_capture_fence *capture_fence;
+
+	capture_fence = kzalloc_obj(*capture_fence);
+	if (!capture_fence)
+		return NULL;
+
+	/*
+	 * A queued job may be cancelled before an older in-flight job finishes.
+	 * Give every producer an independent context so reservation objects retain
+	 * both fences instead of replacing the older writer by sequence number.
+	 */
+	spin_lock_init(&capture_fence->lock);
+	dma_fence_init64(&capture_fence->base, &castkms_capture_fence_ops,
+			 &capture_fence->lock, dma_fence_context_alloc(1), 1);
+
+	return &capture_fence->base;
+}
 
 static void castkms_capture_signal_fence(struct dma_fence *fence, int status)
 {
@@ -163,6 +208,25 @@ void castkms_capture_deliver_completion(
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_deliver_completion);
 
+static void
+castkms_capture_abort_completion(struct castkms_output *output,
+				 struct castkms_capture_completion *completion)
+{
+	struct dma_fence *dependency = completion->dependency;
+	struct dma_fence *fence = completion->fence;
+	struct castkms_capture_stream *stream;
+	int status = completion->result.status;
+
+	/* Submission failed, so request ownership remains with the caller. */
+	completion->request = NULL;
+	stream = castkms_capture_begin_delivery(output, completion);
+	castkms_capture_signal_fence(fence, status);
+	dma_fence_put(dependency);
+	*completion = (struct castkms_capture_completion) {};
+	if (stream)
+		castkms_capture_end_delivery(stream);
+}
+
 void castkms_capture_buffer_destroy(struct castkms_capture_buffer *buffer)
 {
 	if (!buffer)
@@ -212,6 +276,76 @@ static bool castkms_capture_fb_is_local(struct drm_framebuffer *fb)
 	 * consumers.
 	 */
 	return obj && !drm_gem_is_imported(obj);
+}
+
+static int
+castkms_capture_prepare_implicit_sync(struct castkms_capture_buffer *buffer,
+				      struct dma_fence **dependency,
+				      struct dma_fence **completion_fence)
+{
+	struct drm_gem_object *obj =
+		drm_gem_fb_get_obj(buffer->output.fb, 0);
+	struct dma_fence *producer;
+	struct dma_fence *reuse = NULL;
+	int ret;
+
+	if (WARN_ON(!obj || !obj->resv))
+		return -EINVAL;
+
+	producer = castkms_capture_fence_create();
+	if (!producer)
+		return -ENOMEM;
+
+	ret = dma_resv_lock_interruptible(obj->resv, NULL);
+	if (ret)
+		goto err_put_producer;
+
+	ret = dma_resv_get_singleton(obj->resv, dma_resv_usage_rw(true),
+				     &reuse);
+	if (ret)
+		goto err_unlock;
+	if (reuse && dma_fence_is_signaled(reuse)) {
+		dma_fence_put(reuse);
+		reuse = NULL;
+	}
+
+	ret = dma_resv_reserve_fences(obj->resv, 1);
+	if (ret)
+		goto err_put_reuse;
+
+	dma_resv_add_fence(obj->resv, producer, DMA_RESV_USAGE_WRITE);
+	dma_resv_unlock(obj->resv);
+
+	*dependency = reuse;
+	*completion_fence = producer;
+	return 0;
+
+err_put_reuse:
+	dma_fence_put(reuse);
+err_unlock:
+	dma_resv_unlock(obj->resv);
+err_put_producer:
+	dma_fence_put(producer);
+	return ret;
+}
+
+static void castkms_capture_reuse_ready(struct dma_fence *fence,
+					struct dma_fence_cb *callback)
+{
+	struct castkms_capture_buffer *buffer =
+		container_of(callback, struct castkms_capture_buffer, reuse_cb);
+	struct castkms_capture_output *capture = &buffer->stream->output->capture;
+	unsigned long flags;
+
+	(void)fence;
+	spin_lock_irqsave(&capture->state_lock, flags);
+	if (buffer->reuse_callback_armed &&
+	    buffer->state == CASTKMS_CAPTURE_BUFFER_WAITING_REUSE) {
+		buffer->reuse_callback_armed = false;
+		castkms_capture_buffer_set_state(
+			buffer, CASTKMS_CAPTURE_BUFFER_QUEUED);
+	}
+	spin_unlock_irqrestore(&capture->state_lock, flags);
 }
 
 const struct castkms_output_buffer *
@@ -333,3 +467,171 @@ int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
 	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_buffer_remove);
+
+static int
+castkms_capture_buffer_begin_submit(struct castkms_capture_buffer *buffer)
+{
+	struct castkms_capture_output *capture = &buffer->stream->output->capture;
+	unsigned long flags;
+	int ret = 0;
+
+	spin_lock_irqsave(&capture->state_lock, flags);
+	if (buffer->stream->cancel_status) {
+		ret = buffer->stream->cancel_status;
+	} else if (buffer->state != CASTKMS_CAPTURE_BUFFER_IDLE ||
+	    capture->queued_buffer) {
+		ret = -EBUSY;
+	} else {
+		castkms_capture_buffer_set_state(
+			buffer, CASTKMS_CAPTURE_BUFFER_PREPARING);
+		reinit_completion(&buffer->submit_done);
+	}
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+
+	return ret;
+}
+
+static void
+castkms_capture_buffer_abort_submit(struct castkms_capture_buffer *buffer)
+{
+	struct castkms_capture_output *capture = &buffer->stream->output->capture;
+	unsigned long flags;
+
+	spin_lock_irqsave(&capture->state_lock, flags);
+	if (!WARN_ON(buffer->state != CASTKMS_CAPTURE_BUFFER_PREPARING))
+		castkms_capture_buffer_set_state(
+			buffer, CASTKMS_CAPTURE_BUFFER_IDLE);
+	complete_all(&buffer->submit_done);
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+}
+
+int
+castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
+			      struct castkms_capture_request *request)
+{
+	struct castkms_capture_stream *stream = buffer->stream;
+	struct castkms_capture_output *capture = &stream->output->capture;
+	struct castkms_capture_completion failed_completion = {};
+	struct dma_fence *completion_fence = NULL;
+	struct dma_fence *dependency = NULL;
+	unsigned long flags;
+	bool remove_callback = false;
+	int ret;
+
+	if (!request || !request->complete)
+		return -EINVAL;
+	ret = castkms_capture_buffer_begin_submit(buffer);
+	if (ret)
+		return ret;
+
+	ret = castkms_capture_prepare_implicit_sync(buffer, &dependency,
+						    &completion_fence);
+	if (ret)
+		goto out_abort_submit;
+
+	ret = castkms_frame_dispatch_get(stream->output,
+				   CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE);
+	if (ret)
+		goto out_signal_fence;
+
+	/*
+	 * Arm an existing dependency before publishing the buffer to vblank or
+	 * mode-change cancellation. The callback may transition this private
+	 * buffer to QUEUED before publication, but cannot make it globally
+	 * visible on its own.
+	 */
+	spin_lock_irqsave(&capture->state_lock, flags);
+	WARN_ON(buffer->state != CASTKMS_CAPTURE_BUFFER_PREPARING);
+	buffer->request = request;
+	buffer->reuse_fence = dependency;
+	buffer->completion_fence = completion_fence;
+	buffer->dropped_frames = 0;
+	buffer->reuse_callback_armed = !!dependency;
+	castkms_capture_buffer_set_state(
+		buffer, dependency ? CASTKMS_CAPTURE_BUFFER_WAITING_REUSE :
+				     CASTKMS_CAPTURE_BUFFER_QUEUED);
+	dependency = NULL;
+	completion_fence = NULL;
+	spin_unlock_irqrestore(&capture->state_lock, flags);
+
+	if (buffer->reuse_callback_armed) {
+		ret = dma_fence_add_callback(buffer->reuse_fence,
+					     &buffer->reuse_cb,
+					     castkms_capture_reuse_ready);
+		if (ret == -ENOENT) {
+			spin_lock_irqsave(&capture->state_lock, flags);
+			if (buffer->reuse_callback_armed &&
+			    buffer->state ==
+					CASTKMS_CAPTURE_BUFFER_WAITING_REUSE) {
+				buffer->reuse_callback_armed = false;
+				castkms_capture_buffer_set_state(
+					buffer, CASTKMS_CAPTURE_BUFFER_QUEUED);
+			}
+			spin_unlock_irqrestore(&capture->state_lock, flags);
+			ret = 0;
+		} else if (ret) {
+			spin_lock_irqsave(&capture->state_lock, flags);
+			buffer->reuse_callback_armed = false;
+			castkms_capture_buffer_finish(
+				buffer, &failed_completion, ret, false, false,
+				capture->mode_generation, 0, ktime_get());
+			spin_unlock_irqrestore(&capture->state_lock, flags);
+		}
+	}
+	if (ret)
+		goto out_put_dispatch;
+
+	/*
+	 * Publish only after callback setup is complete. output->lock closes the
+	 * final validation race with modesets and vblank selection.
+	 */
+	spin_lock_irqsave(&stream->output->lock, flags);
+	spin_lock(&capture->state_lock);
+	ret = stream->cancel_status;
+	if (!ret)
+		ret = castkms_capture_authority_evaluate_stream_status(
+			stream->authority, stream->output,
+			stream->authority_generation);
+	if (!ret && capture->mode_generation != stream->mode_generation) {
+		ret = -ESTALE;
+	} else if (!capture->active) {
+		ret = -ENOLINK;
+	} else if (capture->queued_buffer) {
+		ret = -EBUSY;
+	} else {
+		capture->queued_buffer = buffer;
+		/* No submitter state is accessed after dropping these locks. */
+		complete_all(&buffer->submit_done);
+		ret = 0;
+	}
+	if (ret) {
+		remove_callback = buffer->reuse_callback_armed;
+		buffer->reuse_callback_armed = false;
+		castkms_capture_buffer_finish(
+			buffer, &failed_completion, ret, false, false,
+			capture->mode_generation, 0, ktime_get());
+	}
+	spin_unlock(&capture->state_lock);
+	spin_unlock_irqrestore(&stream->output->lock, flags);
+	if (!ret)
+		return 0;
+
+	if (remove_callback)
+		dma_fence_remove_callback(failed_completion.dependency,
+					  &buffer->reuse_cb);
+out_put_dispatch:
+	castkms_frame_dispatch_put(stream->output,
+			     CASTKMS_FRAME_DISPATCH_CLIENT_CAPTURE);
+	if (failed_completion.buffer) {
+		castkms_capture_abort_completion(stream->output,
+					 &failed_completion);
+		complete_all(&buffer->submit_done);
+		return ret;
+	}
+out_signal_fence:
+	castkms_capture_signal_fence(completion_fence, ret);
+	dma_fence_put(dependency);
+out_abort_submit:
+	castkms_capture_buffer_abort_submit(buffer);
+	return ret;
+}

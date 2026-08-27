@@ -33,4 +33,8 @@ int castkms_test_capture_register_buffer(
 	uint64_t mode_generation, uint32_t *buffer_id);
 int castkms_test_capture_unregister_buffer(int fd, uint32_t stream_id,
 					   uint32_t buffer_id);
+int castkms_test_capture_queue_buffer(
+	int fd, uint32_t stream_id, uint32_t buffer_id, uint32_t flags,
+	uint64_t mode_generation, uint64_t user_data);
+
 #endif /* CASTKMS_TEST_DRM_H */
