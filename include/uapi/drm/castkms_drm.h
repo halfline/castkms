@@ -22,6 +22,15 @@ extern "C" {
 #define DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE	512U
 
 /**
+ * DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE:
+ *
+ * Capture buffers may use DRM timeline syncobjs for explicit synchronization.
+ * The driver waits asynchronously for a reuse point and publishes a capture
+ * fence at the corresponding ready point.
+ */
+#define DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE	(1ULL << 0)
+
+/**
  * DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC:
  *
  * Capture buffers may be registered without explicit timeline syncobjs.
@@ -306,10 +315,21 @@ struct drm_castkms_capture_stop {
 #define DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC	(1U << 0)
 
 /**
+ * DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC:
+ *
+ * Use the supplied ready and reuse timeline syncobjs. Each explicit buffer
+ * requires a dedicated pair of distinct syncobjs that is not shared with
+ * another buffer. The ready timeline must be empty at registration and is then
+ * owned by the driver; userspace must not signal or otherwise modify it.
+ */
+#define DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC	(1U << 1)
+/**
  * struct drm_castkms_capture_register_buffer - register a capture destination
  * @stream_id: file-local capture stream identifier
  * @fb_id: framebuffer object ID visible to this DRM file
- * @flags: must be DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC
+ * @ready_syncobj_handle: driver-produced timeline, or zero for implicit sync
+ * @reuse_syncobj_handle: consumer-produced timeline, or zero for implicit sync
+ * @flags: exactly one DRM_CASTKMS_CAPTURE_BUFFER_* synchronization mode
  * @buffer_id: stream-local buffer identifier returned by the driver
  * @mode_generation: generation returned when the stream was started
  *
@@ -320,6 +340,8 @@ struct drm_castkms_capture_stop {
 struct drm_castkms_capture_register_buffer {
 	__u32 stream_id;
 	__u32 fb_id;
+	__u32 ready_syncobj_handle;
+	__u32 reuse_syncobj_handle;
 	__u32 flags;
 	__u32 buffer_id;
 	__u64 mode_generation;

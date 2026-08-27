@@ -11,6 +11,7 @@
 struct drm_crtc_state;
 struct drm_device;
 struct drm_framebuffer;
+struct drm_syncobj;
 struct dma_fence;
 struct castkms_capture_buffer;
 struct castkms_capture_authority;
@@ -20,6 +21,11 @@ struct castkms_output;
 struct castkms_output_buffer;
 
 #define CASTKMS_CAPTURE_MAX_BUFFERS 8
+
+enum castkms_capture_sync_mode {
+	CASTKMS_CAPTURE_SYNC_IMPLICIT,
+	CASTKMS_CAPTURE_SYNC_EXPLICIT,
+};
 
 /**
  * struct castkms_capture_result - Transport-neutral capture result
@@ -119,9 +125,16 @@ int castkms_capture_stream_validate_mode(
 struct castkms_capture_buffer *
 castkms_capture_buffer_create(struct castkms_capture_stream *stream,
 			      struct drm_framebuffer *fb,
+			      struct drm_syncobj *ready_syncobj,
+			      struct drm_syncobj *reuse_syncobj,
+			      enum castkms_capture_sync_mode sync_mode,
 			      u64 mode_generation);
 int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
 				  struct castkms_capture_buffer *buffer);
+bool castkms_capture_buffer_uses_syncobj(const struct castkms_capture_buffer *buffer,
+					 const struct drm_syncobj *syncobj);
+enum castkms_capture_sync_mode
+castkms_capture_buffer_sync_mode(const struct castkms_capture_buffer *buffer);
 int castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 				  struct castkms_capture_request *request);
 

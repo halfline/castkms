@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/build_bug.h>
+#include <linux/dma-fence.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
 #include <linux/kref.h>
@@ -15,6 +16,7 @@
 #include <drm/drm_file.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_framebuffer.h>
+#include <drm/drm_syncobj.h>
 
 #include "castkms_capture.h"
 #include "castkms_capture_authority.h"
@@ -69,7 +71,7 @@ static_assert(CASTKMS_MAX_EDID_SIZE == DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE);
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40);
 static_assert(sizeof(struct drm_castkms_capture_start) == 24);
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
-static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 24);
+static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32);
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 32);
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 64);
@@ -179,6 +181,37 @@ static void castkms_capture_uapi_stream_stop(
 	castkms_capture_uapi_stream_put(uapi_stream);
 }
 
+static bool castkms_capture_syncobjs_are_available(
+	struct castkms_file *file_state,
+	struct drm_syncobj *ready_syncobj, struct drm_syncobj *reuse_syncobj)
+{
+	struct castkms_capture_uapi_stream *uapi_stream;
+	struct castkms_capture_buffer *buffer;
+	struct dma_fence *ready_fence;
+	unsigned long buffer_id;
+	unsigned long stream_id;
+
+	if (ready_syncobj == reuse_syncobj)
+		return false;
+	ready_fence = drm_syncobj_fence_get(ready_syncobj);
+	if (ready_fence) {
+		dma_fence_put(ready_fence);
+		return false;
+	}
+
+	xa_for_each(&file_state->capture_streams, stream_id, uapi_stream) {
+		xa_for_each(&uapi_stream->buffers, buffer_id, buffer) {
+			if (castkms_capture_buffer_uses_syncobj(
+				    buffer, ready_syncobj) ||
+			    castkms_capture_buffer_uses_syncobj(
+				    buffer, reuse_syncobj))
+				return false;
+		}
+	}
+
+	return true;
+}
+
 int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 				     struct drm_file *file_priv)
 {
@@ -195,6 +228,8 @@ int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 	args->uapi_minor = DRM_CASTKMS_CAPTURE_UAPI_MINOR;
 	args->flags = DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC |
 		      DRM_CASTKMS_CAPTURE_CAP_GRANT_FD;
+	if (drm_core_check_feature(dev, DRIVER_SYNCOBJ_TIMELINE))
+		args->flags |= DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE;
 	args->max_registered_buffers = CASTKMS_CAPTURE_MAX_BUFFERS;
 	args->format_count = ARRAY_SIZE(castkms_capture_formats);
 
@@ -374,12 +409,22 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 	struct castkms_capture_uapi_stream *uapi_stream;
 	struct castkms_capture_authority *authority;
 	struct castkms_capture_buffer *buffer;
+	struct drm_syncobj *ready_syncobj = NULL;
+	struct drm_syncobj *reuse_syncobj = NULL;
 	struct drm_framebuffer *fb;
+	enum castkms_capture_sync_mode sync_mode;
 	u32 buffer_id;
 	int ret;
 
 	args->buffer_id = 0;
-	if (args->flags != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC)
+	if (args->flags != DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC &&
+	    args->flags != DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC)
+		return -EINVAL;
+	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC &&
+	    (args->ready_syncobj_handle || args->reuse_syncobj_handle))
+		return -EINVAL;
+	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC &&
+	    (!args->ready_syncobj_handle || !args->reuse_syncobj_handle))
 		return -EINVAL;
 
 	ret = castkms_grant_begin(file_priv, NULL,
@@ -405,11 +450,37 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 		goto out_unlock;
 	}
 
+	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC) {
+		ready_syncobj = drm_syncobj_find(file_priv,
+						 args->ready_syncobj_handle);
+		if (!ready_syncobj) {
+			ret = -ENOENT;
+			goto out_put_fb;
+		}
+		reuse_syncobj = drm_syncobj_find(file_priv,
+						 args->reuse_syncobj_handle);
+		if (!reuse_syncobj) {
+			ret = -ENOENT;
+			goto out_put_syncobj;
+		}
+		if (!castkms_capture_syncobjs_are_available(file_state,
+							    ready_syncobj,
+							    reuse_syncobj)) {
+			ret = -EINVAL;
+			goto out_put_syncobj;
+		}
+		sync_mode = CASTKMS_CAPTURE_SYNC_EXPLICIT;
+	} else {
+		sync_mode = CASTKMS_CAPTURE_SYNC_IMPLICIT;
+	}
+
 	buffer = castkms_capture_buffer_create(uapi_stream->stream, fb,
+					       ready_syncobj, reuse_syncobj,
+					       sync_mode,
 					       args->mode_generation);
 	if (IS_ERR(buffer)) {
 		ret = PTR_ERR(buffer);
-		goto out_put_fb;
+		goto out_put_syncobj;
 	}
 
 	ret = xa_alloc(&uapi_stream->buffers, &buffer_id, buffer,
@@ -418,10 +489,15 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 		goto out_remove_buffer;
 	args->buffer_id = buffer_id;
 	ret = 0;
-	goto out_put_fb;
+	goto out_put_syncobj;
 
 out_remove_buffer:
 	castkms_capture_buffer_remove(uapi_stream->stream, buffer);
+out_put_syncobj:
+	if (reuse_syncobj)
+		drm_syncobj_put(reuse_syncobj);
+	if (ready_syncobj)
+		drm_syncobj_put(ready_syncobj);
 out_put_fb:
 	drm_framebuffer_put(fb);
 out_unlock:
@@ -532,6 +608,12 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto out_unlock;
 	}
+	if (castkms_capture_buffer_sync_mode(buffer) !=
+	    CASTKMS_CAPTURE_SYNC_IMPLICIT) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
 	uapi_request = kzalloc_obj(*uapi_request);
 	if (!uapi_request) {
 		ret = -ENOMEM;

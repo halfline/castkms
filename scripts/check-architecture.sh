@@ -39,6 +39,10 @@ reject 'pixel composer coordinates mutable frame consumers' \
 	'castkms_capture|castkms_capture_owner|castkms_crtc|castkms_frame_dispatch|drm_writeback|drm_crtc_add_crc' \
 	src/castkms_composer.c src/castkms_composer.h
 
+reject 'stream scheduler owns buffer synchronization' \
+	'dma_resv|drm_syncobj|dma_fence_chain' \
+	src/castkms_capture.c
+
 reject 'buffer engine owns connector or CRTC scheduling' \
 	'castkms_connector|castkms_crtc|drmm_mutex_init|castkms_capture_prepare_frame|castkms_capture_stream_(attach|destroy)' \
 	src/castkms_capture_buffer.c

@@ -42,6 +42,8 @@ struct castkms_capture_buffer {
 	struct castkms_capture_stream *stream;
 	struct list_head link;
 	struct castkms_output_buffer output;
+	struct drm_syncobj *ready_syncobj;
+	struct drm_syncobj *reuse_syncobj;
 	struct castkms_capture_request *request;
 	struct dma_fence *reuse_fence;
 	struct dma_fence_cb reuse_cb;
@@ -51,6 +53,7 @@ struct castkms_capture_buffer {
 	u64 sequence;
 	u64 mode_generation;
 	u32 dropped_frames;
+	enum castkms_capture_sync_mode sync_mode;
 	bool reuse_callback_armed;
 	enum castkms_capture_buffer_state state;
 };

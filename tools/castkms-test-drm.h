@@ -30,6 +30,7 @@ int castkms_test_capture_start(int fd, uint32_t crtc_id, uint32_t flags,
 int castkms_test_capture_stop(int fd, uint32_t stream_id);
 int castkms_test_capture_register_buffer(
 	int fd, uint32_t stream_id, uint32_t fb_id, uint32_t flags,
+	uint32_t ready_syncobj_handle, uint32_t reuse_syncobj_handle,
 	uint64_t mode_generation, uint32_t *buffer_id);
 int castkms_test_capture_unregister_buffer(int fd, uint32_t stream_id,
 					   uint32_t buffer_id);

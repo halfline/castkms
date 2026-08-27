@@ -13,6 +13,7 @@
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_syncobj.h>
 
 #include <kunit/visibility.h>
 
@@ -238,6 +239,10 @@ void castkms_capture_buffer_destroy(struct castkms_capture_buffer *buffer)
 	WARN_ON(buffer->completion_fence);
 	dma_fence_put(buffer->reuse_fence);
 	castkms_output_buffer_fini(&buffer->output);
+	if (buffer->ready_syncobj)
+		drm_syncobj_put(buffer->ready_syncobj);
+	if (buffer->reuse_syncobj)
+		drm_syncobj_put(buffer->reuse_syncobj);
 	kfree(buffer);
 }
 
@@ -398,6 +403,9 @@ void castkms_capture_complete_frame(struct castkms_output *output,
 struct castkms_capture_buffer *
 castkms_capture_buffer_create(struct castkms_capture_stream *stream,
 			      struct drm_framebuffer *fb,
+			      struct drm_syncobj *ready_syncobj,
+			      struct drm_syncobj *reuse_syncobj,
+			      enum castkms_capture_sync_mode sync_mode,
 			      u64 mode_generation)
 {
 	struct castkms_capture_buffer *buffer;
@@ -406,6 +414,13 @@ castkms_capture_buffer_create(struct castkms_capture_stream *stream,
 	ret = castkms_capture_stream_validate_mode(stream, mode_generation);
 	if (ret)
 		return ERR_PTR(ret);
+	if ((sync_mode == CASTKMS_CAPTURE_SYNC_IMPLICIT &&
+	     (ready_syncobj || reuse_syncobj)) ||
+	    (sync_mode == CASTKMS_CAPTURE_SYNC_EXPLICIT &&
+	     (!ready_syncobj || !reuse_syncobj)) ||
+	    (sync_mode != CASTKMS_CAPTURE_SYNC_IMPLICIT &&
+	     sync_mode != CASTKMS_CAPTURE_SYNC_EXPLICIT))
+		return ERR_PTR(-EINVAL);
 	if (stream->num_buffers >= CASTKMS_CAPTURE_MAX_BUFFERS)
 		return ERR_PTR(-ENOSPC);
 	if (!castkms_capture_fb_is_compatible(stream, fb))
@@ -421,6 +436,15 @@ castkms_capture_buffer_create(struct castkms_capture_stream *stream,
 	complete_all(&buffer->submit_done);
 	buffer->stream = stream;
 
+	if (ready_syncobj) {
+		buffer->ready_syncobj = ready_syncobj;
+		drm_syncobj_get(ready_syncobj);
+	}
+	if (reuse_syncobj) {
+		buffer->reuse_syncobj = reuse_syncobj;
+		drm_syncobj_get(reuse_syncobj);
+	}
+
 	ret = castkms_output_buffer_init(&buffer->output, fb);
 	if (ret)
 		goto err_destroy;
@@ -430,6 +454,7 @@ castkms_capture_buffer_create(struct castkms_capture_stream *stream,
 		goto err_destroy;
 
 	buffer->mode_generation = stream->mode_generation;
+	buffer->sync_mode = sync_mode;
 	list_add_tail(&buffer->link, &stream->buffers);
 	stream->num_buffers++;
 
@@ -467,6 +492,20 @@ int castkms_capture_buffer_remove(struct castkms_capture_stream *stream,
 	return 0;
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_buffer_remove);
+
+bool castkms_capture_buffer_uses_syncobj(
+	const struct castkms_capture_buffer *buffer,
+	const struct drm_syncobj *syncobj)
+{
+	return buffer->ready_syncobj == syncobj ||
+	       buffer->reuse_syncobj == syncobj;
+}
+
+enum castkms_capture_sync_mode castkms_capture_buffer_sync_mode(
+	const struct castkms_capture_buffer *buffer)
+{
+	return buffer->sync_mode;
+}
 
 static int
 castkms_capture_buffer_begin_submit(struct castkms_capture_buffer *buffer)
@@ -518,7 +557,8 @@ castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 	bool remove_callback = false;
 	int ret;
 
-	if (!request || !request->complete)
+	if (!request || !request->complete ||
+	    buffer->sync_mode != CASTKMS_CAPTURE_SYNC_IMPLICIT)
 		return -EINVAL;
 	ret = castkms_capture_buffer_begin_submit(buffer);
 	if (ret)

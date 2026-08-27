@@ -147,11 +147,14 @@ int castkms_test_capture_stop(int fd, uint32_t stream_id)
 
 int castkms_test_capture_register_buffer(
 	int fd, uint32_t stream_id, uint32_t fb_id, uint32_t flags,
+	uint32_t ready_syncobj_handle, uint32_t reuse_syncobj_handle,
 	uint64_t mode_generation, uint32_t *buffer_id)
 {
 	struct drm_castkms_capture_register_buffer buffer = {
 		.stream_id = stream_id,
 		.fb_id = fb_id,
+		.ready_syncobj_handle = ready_syncobj_handle,
+		.reuse_syncobj_handle = reuse_syncobj_handle,
 		.flags = flags,
 		.mode_generation = mode_generation,
 	};

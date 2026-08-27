@@ -30,7 +30,7 @@ static_assert(sizeof(struct drm_castkms_capture_start) == 24,
 	      "capture start ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16,
 	      "capture stop ABI size changed");
-static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 24,
+static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32,
 	      "capture register ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
 	      "capture unregister ABI size changed");
@@ -46,6 +46,25 @@ static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
 	      "grant-revoked event ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_state) == 32,
 	      "grant-state event ABI size changed");
+
+static int require_capability(int fd, uint64_t capability, const char *name)
+{
+	struct drm_get_cap cap = {
+		.capability = capability,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_GET_CAP, &cap) < 0) {
+		perror(name);
+		return -1;
+	}
+	if (cap.value != 1) {
+		fprintf(stderr, "%s is not enabled\n", name);
+		return -1;
+	}
+
+	printf("%s=1\n", name);
+	return 0;
+}
 
 static int ensure_non_master(int fd, bool report)
 {
@@ -157,11 +176,14 @@ static int stop_capture(int fd, uint32_t stream_id)
 
 static int register_capture_buffer(int fd, uint32_t stream_id,
 				   uint32_t fb_id, uint32_t flags,
+				   uint32_t ready_syncobj_handle,
+				   uint32_t reuse_syncobj_handle,
 				   uint64_t mode_generation,
 				   uint32_t *buffer_id)
 {
 	return castkms_test_capture_register_buffer(
-		fd, stream_id, fb_id, flags, mode_generation, buffer_id);
+		fd, stream_id, fb_id, flags, ready_syncobj_handle,
+		reuse_syncobj_handle, mode_generation, buffer_id);
 }
 
 static int unregister_capture_buffer(int fd, uint32_t stream_id,
@@ -749,6 +771,46 @@ static int sync_dmabuf_cpu_access(int dmabuf_fd, uint64_t flags)
 	return 0;
 }
 
+static int create_syncobj(int fd, uint32_t *handle)
+{
+	struct drm_syncobj_create create = {};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &create) < 0) {
+		perror("DRM_IOCTL_SYNCOBJ_CREATE");
+		return -1;
+	}
+
+	*handle = create.handle;
+	return 0;
+}
+
+static void destroy_syncobj(int fd, uint32_t *handle)
+{
+	struct drm_syncobj_destroy destroy = {
+		.handle = *handle,
+	};
+
+	if (*handle && ioctl(fd, DRM_IOCTL_SYNCOBJ_DESTROY, &destroy) < 0)
+		perror("DRM_IOCTL_SYNCOBJ_DESTROY");
+	*handle = 0;
+}
+
+static int signal_syncobj_point(int fd, uint32_t handle, uint64_t point)
+{
+	struct drm_syncobj_timeline_array signal = {
+		.handles = (uint64_t)(uintptr_t)&handle,
+		.points = (uint64_t)(uintptr_t)&point,
+		.count_handles = 1,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL, &signal) < 0) {
+		perror("DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int parse_crtc_id(const char *text, uint32_t *crtc_id)
 {
 	char *end;
@@ -781,6 +843,10 @@ static int validate_query(const struct drm_castkms_capture_query_caps *query,
 	}
 	if (!(query->flags & DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC)) {
 		fprintf(stderr, "capture query lacks implicit sync support\n");
+		return -1;
+	}
+	if (!(query->flags & DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE)) {
+		fprintf(stderr, "capture query lacks timeline syncobj support\n");
 		return -1;
 	}
 	if (!(query->flags & DRM_CASTKMS_CAPTURE_CAP_GRANT_FD)) {
@@ -840,7 +906,7 @@ static int run_deliver_one(int inherited_fd, uint32_t crtc_id)
 		goto out_close;
 
 	ioctl_ret = register_capture_buffer(fd, stream.stream_id, buffer.fb_id,
-		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 		stream.mode_generation, &buffer_id);
 	if (ioctl_ret || !buffer_id) {
 		errno = ioctl_ret ? -ioctl_ret : EPROTO;
@@ -925,7 +991,11 @@ int main(int argc, char **argv)
 	uint32_t buffer_id;
 	uint32_t crtc_id;
 	uint32_t height;
+	uint32_t ready_syncobj = 0;
+	uint32_t reuse_syncobj = 0;
 	uint32_t second_buffer_id;
+	uint32_t second_ready_syncobj = 0;
+	uint32_t second_reuse_syncobj = 0;
 	uint32_t width;
 	uint64_t first_sequence;
 	bool capture_fence_pending;
@@ -1005,6 +1075,11 @@ int main(int argc, char **argv)
 		DRM_CASTKMS_GRANT_READ_CURSOR, true);
 	if (fd < 0)
 		return EXIT_FAILURE;
+
+	if (require_capability(fd, DRM_CAP_SYNCOBJ, "drm_cap_syncobj") ||
+	    require_capability(fd, DRM_CAP_SYNCOBJ_TIMELINE,
+			       "drm_cap_syncobj_timeline"))
+		goto out_close;
 
 	query.crtc_id = crtc_id;
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS, &query) < 0) {
@@ -1106,7 +1181,7 @@ int main(int argc, char **argv)
 
 	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 					    first_buffer.fb_id,
-		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 		first_stream.mode_generation + 1, &buffer_id);
 	if (ioctl_ret != -ESTALE) {
 		fprintf(stderr,
@@ -1116,7 +1191,7 @@ int main(int argc, char **argv)
 	}
 	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 					    wrong_size_buffer.fb_id,
-		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 		first_stream.mode_generation, &buffer_id);
 	if (ioctl_ret != -EINVAL) {
 		fprintf(stderr,
@@ -1124,11 +1199,21 @@ int main(int argc, char **argv)
 			ioctl_ret, -EINVAL);
 		goto out_close;
 	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC, UINT32_MAX,
+		UINT32_MAX, first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret != -ENOENT) {
+		fprintf(stderr,
+			"unknown capture syncobjs returned %d, expected %d\n",
+			ioctl_ret, -ENOENT);
+		goto out_close;
+	}
 	printf("capture_buffer_rejections=pass\n");
 
 	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 					    first_buffer.fb_id,
-		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 		first_stream.mode_generation, &buffer_id);
 	if (ioctl_ret || !buffer_id) {
 		errno = ioctl_ret ? -ioctl_ret : EPROTO;
@@ -1137,7 +1222,7 @@ int main(int argc, char **argv)
 	}
 	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 					    second_buffer.fb_id,
-		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 		first_stream.mode_generation, &second_buffer_id);
 	if (ioctl_ret || !second_buffer_id) {
 		errno = ioctl_ret ? -ioctl_ret : EPROTO;
@@ -1155,7 +1240,7 @@ int main(int argc, char **argv)
 	for (uint32_t i = 2; i < query.max_registered_buffers; i++) {
 		ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 			first_buffer.fb_id,
-			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 			first_stream.mode_generation, &extra_buffer_ids[i - 2]);
 		if (ioctl_ret || !extra_buffer_ids[i - 2]) {
 			errno = ioctl_ret ? -ioctl_ret : EPROTO;
@@ -1168,7 +1253,7 @@ int main(int argc, char **argv)
 
 		ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 			first_buffer.fb_id,
-			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+			DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 			first_stream.mode_generation, &rejected_id);
 		if (ioctl_ret != -ENOSPC) {
 			fprintf(stderr,
@@ -1341,9 +1426,100 @@ int main(int argc, char **argv)
 	printf("capture_fence_ownership=pass\n");
 	printf("capture_buffer_implicit=pass\n");
 
+	if (create_syncobj(fd, &ready_syncobj) ||
+	    create_syncobj(fd, &reuse_syncobj) ||
+	    create_syncobj(fd, &second_ready_syncobj) ||
+	    create_syncobj(fd, &second_reuse_syncobj))
+		goto out_close;
+	if (signal_syncobj_point(fd, ready_syncobj, 1))
+		goto out_close;
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC, ready_syncobj,
+		reuse_syncobj, first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"nonempty ready syncobj returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	destroy_syncobj(fd, &ready_syncobj);
+	if (create_syncobj(fd, &ready_syncobj))
+		goto out_close;
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC, ready_syncobj,
+		ready_syncobj, first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"shared capture syncobj returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    first_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC, ready_syncobj,
+		reuse_syncobj, first_stream.mode_generation, &buffer_id);
+	if (ioctl_ret || !buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("register explicit capture buffer");
+		goto out_close;
+	}
 	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 					    second_buffer.fb_id,
-		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC, ready_syncobj,
+		second_reuse_syncobj, first_stream.mode_generation,
+		&second_buffer_id);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"reused ready syncobj returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    second_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC, second_ready_syncobj,
+		reuse_syncobj, first_stream.mode_generation, &second_buffer_id);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"reused reuse syncobj returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    second_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC, second_ready_syncobj,
+		second_reuse_syncobj, first_stream.mode_generation,
+		&second_buffer_id);
+	if (ioctl_ret || !second_buffer_id) {
+		errno = ioctl_ret ? -ioctl_ret : EPROTO;
+		perror("register second explicit capture buffer");
+		goto out_close;
+	}
+
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("unregister explicit capture buffer");
+		goto out_close;
+	}
+	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
+					      second_buffer_id);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("unregister second explicit capture buffer");
+		goto out_close;
+	}
+	destroy_syncobj(fd, &second_reuse_syncobj);
+	destroy_syncobj(fd, &second_ready_syncobj);
+	destroy_syncobj(fd, &reuse_syncobj);
+	destroy_syncobj(fd, &ready_syncobj);
+	printf("capture_buffer_explicit=pass\n");
+
+	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
+					    second_buffer.fb_id,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 		first_stream.mode_generation, &second_buffer_id);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
@@ -1366,7 +1542,7 @@ int main(int argc, char **argv)
 		goto out_close;
 	ioctl_ret = register_capture_buffer(fd, first_stream.stream_id,
 					    first_buffer.fb_id,
-		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
+		DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC, 0, 0,
 		first_stream.mode_generation, &buffer_id);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
@@ -1449,6 +1625,10 @@ out_close:
 		close(dmabuf_fd);
 	if (competitor_fd >= 0)
 		close(competitor_fd);
+	destroy_syncobj(fd, &second_reuse_syncobj);
+	destroy_syncobj(fd, &second_ready_syncobj);
+	destroy_syncobj(fd, &reuse_syncobj);
+	destroy_syncobj(fd, &ready_syncobj);
 	destroy_test_framebuffer(fd, &wrong_size_buffer);
 	destroy_test_framebuffer(fd, &second_buffer);
 	destroy_test_framebuffer(fd, &first_buffer);

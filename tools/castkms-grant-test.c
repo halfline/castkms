@@ -248,7 +248,7 @@ static int register_capture_buffer(int fd, uint32_t stream_id,
 {
 	return castkms_test_capture_register_buffer(
 		fd, stream_id, fb_id, DRM_CASTKMS_CAPTURE_BUFFER_IMPLICIT_SYNC,
-		mode_generation, buffer_id);
+		0, 0, mode_generation, buffer_id);
 }
 
 static int expect_capture_start_errno(int fd, uint32_t crtc_id,
