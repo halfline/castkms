@@ -111,6 +111,7 @@ Environment:
                              (desktop commands default to 9)
   CASTKMS_VM_LAN_BRIDGE      Optional host bridge for a second guest NIC;
                              the user-network SSH NIC remains available
+  CASTKMS_VM_SCENARIO        Product scenario: all (default: all)
 EOF
 }
 
@@ -396,13 +397,14 @@ sync_source()
 
 run_tests()
 {
+	local scenario=${CASTKMS_VM_SCENARIO:-all}
 	local status
 
 	provision
 	sync_source
 	set +e
 	ssh_guest bash "$GUEST_REPO/scripts/vm/guest-smoke-test.sh" \
-		"$GUEST_REPO" "$KERNEL_RELEASE"
+		"$GUEST_REPO" "$KERNEL_RELEASE" "$scenario"
 	status=$?
 	set -e
 

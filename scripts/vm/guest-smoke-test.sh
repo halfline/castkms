@@ -11,6 +11,7 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 repo_dir=${1:-$HOME/castkms}
 expected_release=${2:?missing expected kernel release}
+scenario=${3:-all}
 result_dir=$repo_dir/test-results/vm-smoke
 stock_loaded=0
 cast_loaded=0
@@ -22,6 +23,12 @@ mode_gate_open=0
 mode_holder_pid=
 crc_fd=
 crc_pid=
+# Scenario modules expose one run_*_scenario entrypoint each. The module graph
+# has one authoritative loader; common.sh owns validation and ordered dispatch.
+# shellcheck source=guest-smoke/modules.sh
+. "$script_dir/guest-smoke/modules.sh"
+smoke_validate_registry
+smoke_validate_scenario "$scenario"
 
 append_crc_record()
 {
@@ -141,6 +148,7 @@ runtime_dir=$(mktemp -d)
 running_release=$(uname -r)
 test "$running_release" = "$expected_release"
 printf 'kernel=%s\n' "$running_release" | tee "$result_dir/summary.txt"
+printf 'selected_scenario=%s\n' "$scenario" | tee -a "$result_dir/summary.txt"
 castkms_capture_guest_provenance "$result_dir"
 
 make clean
@@ -293,6 +301,7 @@ cast_loaded=0
 sudo rmmod vkms
 stock_loaded=0
 
+smoke_run_selected_scenarios "$scenario"
 sudo insmod ./castkms.ko \
 	create_default_dev=1 \
 	enable_cursor=0 \

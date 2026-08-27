@@ -115,6 +115,18 @@ pattern gate.
 On a host that can load the modules, `make kunit` builds the test module
 directly.
 
+## Product scenarios
+
+`test` performs module identification and teardown before running the selected
+product work.
+
+The guest harness keeps lifecycle setup and the single failure-safe cleanup
+trap in `guest-smoke-test.sh`. Its product scenarios live in
+`scripts/vm/guest-smoke/`, with an explicit ordered registry in `common.sh`.
+`make check-smoke-modules` checks the registry and source layout without
+starting the VM; the module contract is documented in that directory's
+`README.md`.
+
 
 ## Graphical testing
 

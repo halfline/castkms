@@ -8,8 +8,10 @@ CASTKMS_KBUILD_OPTIONS := \
 	CASTKMS_BUILD_AUDIO=$(CASTKMS_BUILD_AUDIO) \
 	CASTKMS_BUILD_CEC=$(CASTKMS_BUILD_CEC)
 
+GUEST_SMOKE_SCRIPTS := scripts/vm/guest-smoke/*.sh
+
 .PHONY: all build-matrix check check-architecture check-ioctls \
-	check-shell clean install kunit module-clean tools
+	check-shell check-smoke-modules clean install kunit module-clean tools
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) $(CASTKMS_KBUILD_OPTIONS) modules
@@ -72,7 +74,7 @@ build-matrix:
 	nm -u src/castkms_cec_uapi.o | grep -q castkms_grant_begin
 	nm -u src/castkms_cec_uapi.o | grep -q drm_event_reserve_init
 
-check: check-architecture check-ioctls check-shell
+check: check-architecture check-ioctls check-shell check-smoke-modules
 	$(MAKE) -C tools check
 
 check-architecture:
@@ -81,14 +83,19 @@ check-architecture:
 check-ioctls:
 	./scripts/check-private-ioctls.sh
 
+check-smoke-modules:
+	./scripts/check-smoke-modules.sh
+
 check-shell:
-	bash -O nullglob -c 'files=(scripts/*.sh scripts/vm/*.sh tools/pw-castkms/*.sh); \
+	bash -O nullglob -c 'files=(scripts/*.sh scripts/vm/*.sh $(GUEST_SMOKE_SCRIPTS) tools/pw-castkms/*.sh); \
 		bash -n "$${files[@]}"'
 	# Guest helpers use dynamic source paths, controlled sysfs names, and
-	# caller-owned result redirections around sudo commands.
+	# caller-owned result redirections around sudo commands. Smoke modules are
+	# ShellChecked through their static loader so shared cleanup state stays in
+	# the analysis graph.
 	bash -O nullglob -c 'files=(scripts/*.sh scripts/vm/*.sh tools/pw-castkms/*.sh); \
 		shellcheck --external-sources --source-path=scripts \
-		--source-path=scripts/vm \
+		--source-path=scripts/vm --source-path=scripts/vm/guest-smoke \
 		--exclude=SC1090,SC2012,SC2024 "$${files[@]}"'
 
 tools:
