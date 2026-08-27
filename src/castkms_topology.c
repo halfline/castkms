@@ -15,6 +15,7 @@ int castkms_topology_init(struct castkms_device *castkmsdev)
 	struct castkms_config_crtc *crtc_cfg;
 	struct castkms_config_encoder *encoder_cfg;
 	struct castkms_config_connector *connector_cfg;
+	unsigned int output_index = 0;
 	int ret;
 
 	if (!castkms_config_is_valid(castkmsdev->config))
@@ -100,7 +101,8 @@ int castkms_topology_init(struct castkms_device *castkmsdev)
 		struct castkms_config_encoder *possible_encoder;
 		unsigned long idx = 0;
 
-		connector_cfg->connector = castkms_connector_init(castkmsdev);
+		connector_cfg->connector = castkms_connector_init(
+			castkmsdev, output_index++);
 		if (IS_ERR(connector_cfg->connector)) {
 			DRM_ERROR("Failed to init connector\n");
 			return PTR_ERR(connector_cfg->connector);

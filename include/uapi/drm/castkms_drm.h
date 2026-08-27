@@ -231,6 +231,27 @@ struct drm_castkms_get_grant {
 };
 
 /**
+ * struct drm_castkms_get_output - query stable identity for a display output
+ * @connector_id: DRM object ID of a non-writeback CastKMS connector
+ * @flags: must be zero
+ * @output_index: stable device-local output identity returned by the driver
+ * @reserved: must be zero on input and is zero on output
+ *
+ * This read-only query is intended for ordinary primary-node discovery before
+ * a connector-scoped grant exists. The index is assigned once when CastKMS
+ * creates the output and is independent of DRM connector type IDs, resource
+ * array positions, CEC support, and primary-node numbering. Grant-bearing
+ * files reject this ioctl because their connector identity is already fixed by
+ * DRM_IOCTL_CASTKMS_GET_GRANT.
+ */
+struct drm_castkms_get_output {
+	__u32 connector_id;
+	__u32 flags;
+	__u32 output_index;
+	__u32 reserved;
+};
+
+/**
  * struct drm_castkms_capture_format - capture buffer format
  * @format: DRM_FORMAT_* fourcc value
  * @flags: format-specific flags; must be zero
@@ -669,6 +690,7 @@ struct drm_event_castkms_capture_frame {
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13
+#define DRM_CASTKMS_GET_OUTPUT			0x14
 
 /**
  * struct drm_castkms_capture_read_cursor_bitmap - read cursor image data
@@ -737,6 +759,9 @@ struct drm_castkms_capture_read_cursor_bitmap {
 #define DRM_IOCTL_CASTKMS_GET_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_GET_GRANT, \
 		 struct drm_castkms_get_grant)
+#define DRM_IOCTL_CASTKMS_GET_OUTPUT \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_GET_OUTPUT, \
+		 struct drm_castkms_get_output)
 
 #if defined(__cplusplus)
 }

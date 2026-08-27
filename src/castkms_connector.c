@@ -90,7 +90,8 @@ static const struct drm_connector_helper_funcs castkms_conn_helper_funcs = {
 	.best_encoder = castkms_conn_best_encoder,
 };
 
-struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsdev)
+struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsdev,
+						 unsigned int output_index)
 {
 	struct drm_device *dev = &castkmsdev->drm;
 	struct castkms_connector *castkms_connector;
@@ -102,6 +103,7 @@ struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsd
 	if (!castkms_connector)
 		return ERR_PTR(-ENOMEM);
 
+	castkms_connector->output_index = output_index;
 	connector = &castkms_connector->base;
 	ret = drmm_connector_init(dev, connector, &castkms_connector_funcs,
 				  DRM_MODE_CONNECTOR_VIRTUAL, NULL);

@@ -29,6 +29,8 @@ static_assert(sizeof(struct drm_castkms_revoke_grant) == 16,
 	      "revoke-grant ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
+static_assert(sizeof(struct drm_castkms_get_output) == 16,
+	      "get-output ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
 	      "grant-revoked event ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_state) == 32,
@@ -852,6 +854,10 @@ out:
 
 static int expect_plain_capture_denied(int fd, uint32_t connector_id)
 {
+	struct drm_castkms_get_output output = {
+		.connector_id = connector_id,
+		.output_index = UINT32_MAX,
+	};
 	struct drm_castkms_capture_attach_monitor attach = {
 		.connector_id = connector_id,
 	};
@@ -872,6 +878,15 @@ static int expect_plain_capture_denied(int fd, uint32_t connector_id)
 	};
 	struct drm_castkms_get_grant get_grant = {};
 
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_GET_OUTPUT, &output) < 0) {
+		perror("plain-fd GET_OUTPUT");
+		return -1;
+	}
+	if (output.connector_id != connector_id || output.flags ||
+	    output.output_index == UINT32_MAX || output.reserved) {
+		fprintf(stderr, "plain-fd GET_OUTPUT returned invalid metadata\n");
+		return -1;
+	}
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_GET_GRANT, &get_grant,
 			       ENODATA, "plain-fd GET_GRANT") ||
 	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
@@ -896,9 +911,14 @@ static int expect_holder_cannot_create_grant(int fd, uint32_t connector_id)
 		.connector_id = connector_id,
 		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 	};
+	struct drm_castkms_get_output output = {
+		.connector_id = connector_id,
+	};
 
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
-			       EACCES, "grant-holder CREATE_GRANT"))
+			       EACCES, "grant-holder CREATE_GRANT") ||
+	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_GET_OUTPUT, &output,
+			       EACCES, "grant-holder GET_OUTPUT"))
 		return -1;
 	return 0;
 }
@@ -1133,6 +1153,7 @@ int main(int argc, char **argv)
 	}
 	if (expect_plain_capture_denied(issuer, connector_id))
 		goto out;
+	printf("output_identity_query=pass\n");
 	printf("grant_plain_fd_denied=pass\n");
 	if (expect_create_flag_namespaces(issuer, connector_id))
 		goto out;

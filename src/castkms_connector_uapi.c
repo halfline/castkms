@@ -21,7 +21,40 @@
 static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24);
 static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24);
 static_assert(sizeof(struct drm_castkms_capture_detach_monitor) == 16);
+static_assert(sizeof(struct drm_castkms_get_output) == 16);
 static_assert(CASTKMS_MAX_EDID_SIZE == DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE);
+
+int castkms_get_output_ioctl(struct drm_device *dev, void *data,
+			     struct drm_file *file_priv)
+{
+	struct drm_castkms_get_output *args = data;
+	struct castkms_connector *castkms_connector;
+	struct drm_connector *connector;
+	int idx;
+	int ret = 0;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
+	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
+	if (!connector ||
+	    connector->connector_type == DRM_MODE_CONNECTOR_WRITEBACK) {
+		ret = -ENOENT;
+		goto out_connector;
+	}
+
+	castkms_connector = drm_connector_to_castkms_connector(connector);
+	args->output_index = castkms_connector->output_index;
+	args->reserved = 0;
+
+out_connector:
+	if (connector)
+		drm_connector_put(connector);
+	drm_dev_exit(idx);
+	return ret;
+}
 
 static int castkms_connector_uapi_edid_from_user(
 	u32 edid_size, u64 edid_ptr, const struct drm_edid **drm_edid)

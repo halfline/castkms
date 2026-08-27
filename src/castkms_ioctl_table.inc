@@ -33,3 +33,5 @@ CASTKMS_PRIVATE_IOCTL(CASTKMS_REVOKE_GRANT,
 			     castkms_grant_revoke_ioctl, DENIED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_GET_GRANT,
 			     castkms_grant_get_ioctl, ALLOWED)
+CASTKMS_PRIVATE_IOCTL(CASTKMS_GET_OUTPUT,
+			     castkms_get_output_ioctl, DENIED)
