@@ -86,6 +86,7 @@ Commands:
   wait        Wait until the guest accepts SSH connections
   provision   Start the VM, install the pinned kernel/toolchain, and reboot it
   desktop-provision   Provision a separate desktop instance with GNOME/Mutter
+  desktop-start       Start the desktop instance and attach a virtual monitor
   desktop-attach      Sync, build, and attach a virtual monitor
   sync        Mirror the current source tree into the guest
   test        Sync, build, load, and smoke-test castkms in the guest
@@ -355,6 +356,15 @@ ensure_desktop_attach()
 		"$GUEST_REPO"
 }
 
+start_desktop()
+{
+	apply_desktop_defaults
+	start
+	ensure_desktop_attach
+	printf 'Desktop guest is ready (VNC 127.0.0.1:%s)\n' \
+		"$((5900 + ${CASTKMS_VM_VNC_DISPLAY:-9}))"
+}
+
 sync_source()
 {
 	local sync_tree
@@ -495,6 +505,7 @@ case "$command" in
 	wait) wait_for_ssh ;;
 	provision) provision ;;
 	desktop-provision) provision_desktop ;;
+	desktop-start) start_desktop ;;
 	desktop-attach)
 		apply_desktop_defaults
 		ensure_desktop_attach

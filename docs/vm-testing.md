@@ -140,8 +140,9 @@ GNOME Shell, Mutter, GDM, and Mesa GBM/software renderers, enables the
 graphical target, and configures passwordless GDM autologin for the `castkms`
 user. After reboot it synchronizes and builds the current tree, installs the
 attachment service outside the home directory, and leaves `VirtualScreen`
-attached. `desktop-attach` repeats that runtime refresh on an already
-provisioned desktop guest.
+attached. `desktop-start` boots an already provisioned desktop guest and
+refreshes that runtime, while `desktop-attach` performs only the refresh on a
+guest that is already running.
 
 `desktop-test` loads `castkms` with a default disconnected virtual connector
 and no extra planes or writeback, checks that the card's udev properties do
