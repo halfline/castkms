@@ -73,7 +73,7 @@ static_assert(sizeof(struct drm_castkms_capture_start) == 24);
 static_assert(sizeof(struct drm_castkms_capture_stop) == 16);
 static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32);
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16);
-static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 32);
+static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 64);
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 60);
 
@@ -576,10 +576,15 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	struct castkms_capture_uapi_request *uapi_request;
 	struct castkms_capture_authority *authority;
 	struct castkms_capture_buffer *buffer;
+	enum castkms_capture_sync_mode sync_mode;
 	int ret;
 
 	if (args->reserved ||
-	    args->flags != DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC)
+	    (args->flags != DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
+	     args->flags != DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC))
+		return -EINVAL;
+	if (args->flags == DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC &&
+	    (args->ready_point || args->reuse_point))
 		return -EINVAL;
 
 	ret = castkms_grant_begin(file_priv, NULL,
@@ -608,8 +613,9 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOENT;
 		goto out_unlock;
 	}
-	if (castkms_capture_buffer_sync_mode(buffer) !=
-	    CASTKMS_CAPTURE_SYNC_IMPLICIT) {
+	sync_mode = args->flags == DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC ?
+		CASTKMS_CAPTURE_SYNC_EXPLICIT : CASTKMS_CAPTURE_SYNC_IMPLICIT;
+	if (castkms_capture_buffer_sync_mode(buffer) != sync_mode) {
 		ret = -EINVAL;
 		goto out_unlock;
 	}
@@ -622,6 +628,8 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	uapi_request->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_FRAME;
 	uapi_request->event.base.length = sizeof(uapi_request->event);
 	uapi_request->request.complete = castkms_capture_uapi_request_complete;
+	uapi_request->request.ready_point = args->ready_point;
+	uapi_request->request.reuse_point = args->reuse_point;
 	uapi_request->dev = dev;
 	uapi_request->user_data = args->user_data;
 	uapi_request->stream_id = args->stream_id;

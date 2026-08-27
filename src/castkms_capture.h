@@ -50,6 +50,8 @@ struct castkms_capture_result {
 /**
  * struct castkms_capture_request - One core capture submission
  * @complete: Called exactly once after an accepted request finishes
+ * @ready_point: Explicit-sync producer point, or zero for implicit sync
+ * @reuse_point: Explicit-sync reuse dependency, or zero for implicit sync
  *
  * The caller owns the request until submission succeeds. After a successful
  * submission the capture core owns it through the call to @complete. The
@@ -62,6 +64,8 @@ struct castkms_capture_result {
 struct castkms_capture_request {
 	void (*complete)(struct castkms_capture_request *request,
 			 const struct castkms_capture_result *result);
+	u64 ready_point;
+	u64 reuse_point;
 };
 
 /**

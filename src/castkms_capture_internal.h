@@ -52,6 +52,8 @@ struct castkms_capture_buffer {
 	ktime_t timestamp;
 	u64 sequence;
 	u64 mode_generation;
+	u64 last_ready_point;
+	u64 last_reuse_point;
 	u32 dropped_frames;
 	enum castkms_capture_sync_mode sync_mode;
 	bool reuse_callback_armed;

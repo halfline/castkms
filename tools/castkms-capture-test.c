@@ -34,7 +34,7 @@ static_assert(sizeof(struct drm_castkms_capture_register_buffer) == 32,
 	      "capture register ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
 	      "capture unregister ABI size changed");
-static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 32,
+static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48,
 	      "capture queue ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 64,
 	      "capture event ABI size changed");
@@ -194,10 +194,12 @@ static int unregister_capture_buffer(int fd, uint32_t stream_id,
 
 static int queue_capture_buffer(int fd, uint32_t stream_id,
 				uint32_t buffer_id, uint32_t flags,
-				uint64_t mode_generation, uint64_t user_data)
+				uint64_t mode_generation, uint64_t user_data,
+				uint64_t ready_point, uint64_t reuse_point)
 {
 	return castkms_test_capture_queue_buffer(
-		fd, stream_id, buffer_id, flags, mode_generation, user_data);
+		fd, stream_id, buffer_id, flags, mode_generation, user_data,
+		ready_point, reuse_point);
 }
 
 static int connector_drives_crtc(int fd, uint32_t connector_id,
@@ -289,7 +291,8 @@ static int find_display_connector(int fd, uint32_t crtc_id,
 static int
 queue_capture_when_available(int fd, uint32_t stream_id, uint32_t buffer_id,
 			     uint32_t flags, uint64_t mode_generation,
-			     uint64_t user_data)
+			     uint64_t user_data, uint64_t ready_point,
+			     uint64_t reuse_point)
 {
 	const struct timespec retry_delay = {
 		.tv_nsec = 1000000,
@@ -304,7 +307,8 @@ queue_capture_when_available(int fd, uint32_t stream_id, uint32_t buffer_id,
 
 	for (;;) {
 		ret = queue_capture_buffer(fd, stream_id, buffer_id, flags,
-					   mode_generation, user_data);
+					   mode_generation, user_data,
+					   ready_point, reuse_point);
 		if (ret != -EBUSY)
 			return ret;
 		if (nanosleep(&retry_delay, NULL) < 0)
@@ -795,6 +799,26 @@ static void destroy_syncobj(int fd, uint32_t *handle)
 	*handle = 0;
 }
 
+static int transfer_syncobj_point(int fd, uint32_t source_handle,
+				  uint64_t source_point,
+				  uint32_t destination_handle,
+				  uint64_t destination_point)
+{
+	struct drm_syncobj_transfer transfer = {
+		.src_handle = source_handle,
+		.dst_handle = destination_handle,
+		.src_point = source_point,
+		.dst_point = destination_point,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TRANSFER, &transfer) < 0) {
+		perror("DRM_IOCTL_SYNCOBJ_TRANSFER");
+		return -1;
+	}
+
+	return 0;
+}
+
 static int signal_syncobj_point(int fd, uint32_t handle, uint64_t point)
 {
 	struct drm_syncobj_timeline_array signal = {
@@ -805,6 +829,85 @@ static int signal_syncobj_point(int fd, uint32_t handle, uint64_t point)
 
 	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL, &signal) < 0) {
 		perror("DRM_IOCTL_SYNCOBJ_TIMELINE_SIGNAL");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int wait_syncobj_point(int fd, uint32_t handle, uint64_t point,
+			      uint32_t flags, int64_t timeout_ns)
+{
+	struct drm_syncobj_timeline_wait wait = {
+		.handles = (uint64_t)(uintptr_t)&handle,
+		.points = (uint64_t)(uintptr_t)&point,
+		.timeout_nsec = timeout_ns,
+		.count_handles = 1,
+		.flags = DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL | flags,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_SYNCOBJ_TIMELINE_WAIT, &wait) < 0)
+		return -errno;
+
+	return 0;
+}
+
+static int syncobj_point_is_available(int fd, uint32_t handle, uint64_t point)
+{
+	int ret;
+
+	ret = wait_syncobj_point(fd, handle, point,
+				 DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE, 0);
+	if (ret) {
+		errno = -ret;
+		perror("wait for syncobj point availability");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int inspect_syncobj_point(int fd, uint32_t handle, uint64_t point,
+				 bool *pending)
+{
+	int ret;
+
+	if (syncobj_point_is_available(fd, handle, point))
+		return -1;
+
+	ret = wait_syncobj_point(fd, handle, point, 0, 0);
+	if (!ret) {
+		*pending = false;
+		return 0;
+	}
+	if (ret != -ETIME) {
+		errno = -ret;
+		fprintf(stderr, "syncobj point has invalid state: %s\n",
+			strerror(errno));
+		return -1;
+	}
+	*pending = true;
+
+	return 0;
+}
+
+static int wait_for_signaled_syncobj_point(int fd, uint32_t handle,
+					   uint64_t point)
+{
+	struct timespec now;
+	int64_t deadline_ns;
+	int ret;
+
+	if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
+		perror("clock_gettime");
+		return -1;
+	}
+	deadline_ns = (int64_t)now.tv_sec * INT64_C(1000000000) +
+		      now.tv_nsec + INT64_C(2000000000);
+	ret = wait_syncobj_point(fd, handle, point, 0, deadline_ns);
+	if (ret) {
+		errno = -ret;
+		perror("ready point did not follow its completion event");
 		return -1;
 	}
 
@@ -916,7 +1019,8 @@ static int run_deliver_one(int inherited_fd, uint32_t crtc_id)
 
 	ioctl_ret = queue_capture_buffer(fd, stream.stream_id, buffer_id,
 					 DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
-					 stream.mode_generation, user_data);
+					 stream.mode_generation, user_data,
+					 0, 0);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("queue overlap capture buffer");
@@ -997,9 +1101,11 @@ int main(int argc, char **argv)
 	uint32_t second_ready_syncobj = 0;
 	uint32_t second_reuse_syncobj = 0;
 	uint32_t width;
+	uint64_t explicit_sequence;
 	uint64_t first_sequence;
 	bool capture_fence_pending;
 	bool dependent_fence_pending;
+	bool explicit_wait_observed = false;
 	bool implicit_wait_observed = false;
 	bool pixel_changed;
 	int capture_fence_fd = -1;
@@ -1288,13 +1394,25 @@ int main(int argc, char **argv)
 		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
 				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
 				     first_stream.mode_generation + 1,
-				     capture_user_data);
+				     capture_user_data, 0, 0);
 	if (ioctl_ret != -ESTALE) {
 		fprintf(stderr,
 			"stale capture queue returned %d, expected %d\n",
 			ioctl_ret, -ESTALE);
 		goto out_close;
 	}
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data, 1, 0);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"implicit capture point returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+
 	if (sync_dmabuf_cpu_access(dmabuf_fd,
 				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
 		goto out_close;
@@ -1313,7 +1431,7 @@ int main(int argc, char **argv)
 		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
 				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
 				     first_stream.mode_generation,
-				     capture_user_data);
+				     capture_user_data, 0, 0);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("queue implicit capture buffer");
@@ -1331,7 +1449,7 @@ int main(int argc, char **argv)
 						 second_buffer_id,
 					 DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
 					 first_stream.mode_generation,
-					 capture_user_data + 1);
+					 capture_user_data + 1, 0, 0);
 	if (ioctl_ret) {
 		fprintf(stderr,
 			"queue dependent capture buffer returned %d\n",
@@ -1341,7 +1459,7 @@ int main(int argc, char **argv)
 	ioctl_ret = queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
 					 DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
 					 first_stream.mode_generation,
-					 capture_user_data + 2);
+					 capture_user_data + 2, 0, 0);
 	if (ioctl_ret != -EBUSY) {
 		fprintf(stderr,
 			"queue with queued/in-flight work returned %d, expected %d\n",
@@ -1496,6 +1614,191 @@ int main(int argc, char **argv)
 		perror("register second explicit capture buffer");
 		goto out_close;
 	}
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data + 2, 0, 0);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"zero ready point returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data + 2, 1, 1);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"missing reuse point returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	memset(first_buffer.map, 0x55, first_buffer.size);
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	memset(second_buffer.map, 0x66, second_buffer.size);
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+
+	first_sequence = capture_event.sequence;
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data + 2, 1, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue first-use explicit capture buffer");
+		goto out_close;
+	}
+	if (syncobj_point_is_available(fd, ready_syncobj, 1) ||
+	    read_capture_event(fd, &capture_event) ||
+		    wait_for_signaled_syncobj_point(fd, ready_syncobj, 1) ||
+	    validate_capture_event(&capture_event, first_stream.stream_id,
+				   buffer_id, capture_user_data + 2,
+				   first_stream.mode_generation,
+				   first_sequence, false))
+		goto out_close;
+	explicit_sequence = capture_event.sequence;
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
+		goto out_close;
+	pixel_changed =
+		*(const uint32_t *)first_buffer.map != UINT32_C(0x55555555);
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ))
+		goto out_close;
+	if (!pixel_changed) {
+		fprintf(stderr, "explicit capture did not update its destination\n");
+		goto out_close;
+	}
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	memset(first_buffer.map, 0x55, first_buffer.size);
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+	memset(second_buffer.map, 0x66, second_buffer.size);
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE))
+		goto out_close;
+
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, second_buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data + 3, 1, 0);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("queue explicit dependency source");
+		goto out_close;
+	}
+	if (inspect_syncobj_point(fd, second_ready_syncobj, 1,
+				  &capture_fence_pending) ||
+	    transfer_syncobj_point(fd, second_ready_syncobj, 1,
+				   reuse_syncobj, 1))
+		goto out_close;
+	ioctl_ret = queue_capture_when_available(fd, first_stream.stream_id,
+						 buffer_id,
+					 DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+					 first_stream.mode_generation,
+					 capture_user_data + 4, 2, 1);
+	if (ioctl_ret) {
+		fprintf(stderr,
+			"queue explicit dependent buffer returned %d\n",
+			ioctl_ret);
+		goto out_close;
+	}
+	if (inspect_syncobj_point(fd, second_ready_syncobj, 1,
+				  &capture_fence_pending) ||
+	    inspect_syncobj_point(fd, ready_syncobj, 2,
+				  &dependent_fence_pending))
+		goto out_close;
+	explicit_wait_observed = capture_fence_pending;
+	if (read_capture_event(fd, &capture_event) ||
+	    wait_for_signaled_syncobj_point(fd, second_ready_syncobj, 1) ||
+	    validate_capture_event(&capture_event, first_stream.stream_id,
+				   second_buffer_id, capture_user_data + 3,
+				   first_stream.mode_generation,
+				   explicit_sequence, false))
+		goto out_close;
+	explicit_sequence = capture_event.sequence;
+	if (read_capture_event(fd, &capture_event) ||
+	    wait_for_signaled_syncobj_point(fd, ready_syncobj, 2) ||
+	    validate_capture_event(&capture_event, first_stream.stream_id,
+				   buffer_id, capture_user_data + 4,
+				   first_stream.mode_generation,
+				   explicit_sequence, true))
+		goto out_close;
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
+		goto out_close;
+	pixel_changed =
+		*(const uint32_t *)second_buffer.map != UINT32_C(0x66666666);
+	if (sync_dmabuf_cpu_access(second_dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ))
+		goto out_close;
+	if (!pixel_changed) {
+		fprintf(stderr,
+			"explicit dependency source did not update its destination\n");
+		goto out_close;
+	}
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ))
+		goto out_close;
+	pixel_changed =
+		*(const uint32_t *)first_buffer.map != UINT32_C(0x55555555);
+	if (sync_dmabuf_cpu_access(dmabuf_fd,
+				   DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ))
+		goto out_close;
+	if (!pixel_changed) {
+		fprintf(stderr,
+			"explicit dependent capture did not update its destination\n");
+		goto out_close;
+	}
+
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data + 5, 2, 2);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"repeated ready point returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	ioctl_ret =
+		queue_capture_buffer(fd, first_stream.stream_id, buffer_id,
+				     DRM_CASTKMS_CAPTURE_QUEUE_EXPLICIT_SYNC,
+				     first_stream.mode_generation,
+				     capture_user_data + 5, 3, 1);
+	if (ioctl_ret != -EINVAL) {
+		fprintf(stderr,
+			"repeated reuse point returned %d, expected %d\n",
+			ioctl_ret, -EINVAL);
+		goto out_close;
+	}
+	printf("capture_explicit_reuse_dependency=pass\n");
+	printf("capture_explicit_reuse_wait=%s\n",
+	       explicit_wait_observed ? "observed" : "not-observed");
+	printf("capture_explicit_timeline=pass\n");
 
 	ioctl_ret = unregister_capture_buffer(fd, first_stream.stream_id,
 					      buffer_id);
@@ -1530,7 +1833,7 @@ int main(int argc, char **argv)
 		queue_capture_buffer(fd, first_stream.stream_id, second_buffer_id,
 				     DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
 				     first_stream.mode_generation,
-				     capture_user_data + 5);
+				     capture_user_data + 5, 0, 0);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("queue dependency source for stop cleanup");
@@ -1551,7 +1854,7 @@ int main(int argc, char **argv)
 	}
 	ioctl_ret = queue_capture_when_available(fd, first_stream.stream_id,
 		buffer_id, DRM_CASTKMS_CAPTURE_QUEUE_IMPLICIT_SYNC,
-		first_stream.mode_generation, capture_user_data + 6);
+		first_stream.mode_generation, capture_user_data + 6, 0, 0);
 	if (ioctl_ret) {
 		errno = -ioctl_ret;
 		perror("queue cancellation target for stop cleanup");
