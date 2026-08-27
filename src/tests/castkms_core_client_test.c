@@ -379,7 +379,8 @@ static int castkms_core_client_get_completion_fence(
 
 static int castkms_core_client_test_init(struct kunit *test)
 {
-	const u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS;
+	const u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS |
+		CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT;
 	struct castkms_config_connector *connector_config;
 	struct castkms_config_crtc *crtc_config;
 	struct castkms_core_client *client;
@@ -436,6 +437,16 @@ static int castkms_core_client_test_init(struct kunit *test)
 		return PTR_ERR(authority);
 	client->authority = authority;
 
+	ret = castkms_capture_authority_begin(
+		authority, connector,
+		CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT);
+	if (!ret) {
+		mutex_lock(&client->config->dev->attach_transition_lock);
+		ret = castkms_connector_attach_monitor(connector, authority, NULL);
+		mutex_unlock(&client->config->dev->attach_transition_lock);
+		castkms_capture_authority_end(authority);
+	}
+
 	return ret;
 }
 
@@ -453,6 +464,8 @@ static void castkms_core_client_request_revocation(struct kunit *test)
 		-EBUSY);
 
 	castkms_capture_authority_revoke(authority, -EKEYREVOKED);
+	KUNIT_EXPECT_FALSE(test, castkms_connector_authority_is_attached(
+		&client->connector->base, authority));
 	KUNIT_EXPECT_EQ(test, client->stop_calls, 1U);
 	KUNIT_EXPECT_EQ(test, client->stop_status, -EKEYREVOKED);
 	KUNIT_EXPECT_EQ(test, client->request_calls, 1U);

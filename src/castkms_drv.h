@@ -52,6 +52,8 @@ struct castkms_config_plane;
  * @next_authority_id: Internal cyclic authority-registry cursor
  * @authorities_shutdown: Prevents new authorities during device teardown
  * @capture_owners: Device-global DRM ownership facts for composed content
+ * @attach_transition_lock: Serializes complete monitor state transitions
+ * @attach_lock: Protects connector attachment state and ownership
  */
 struct castkms_device {
 	struct drm_device drm;
@@ -62,6 +64,8 @@ struct castkms_device {
 	u32 next_authority_id;
 	bool authorities_shutdown;
 	struct castkms_capture_owner_state capture_owners;
+	struct mutex attach_transition_lock; /* Serializes attach transitions. */
+	struct mutex attach_lock; /* Protects connector attach ownership. */
 };
 
 /*

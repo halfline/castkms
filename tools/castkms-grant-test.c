@@ -215,10 +215,18 @@ static int set_display_framebuffer(int fd, uint32_t connector_id,
 	return 0;
 }
 
-static int setup_display(int issuer_fd, uint32_t connector_id,
+static int setup_display(int issuer_fd, int grant_fd, uint32_t connector_id,
 			 struct test_display *display)
 {
+	struct drm_castkms_capture_attach_monitor attach = {
+		.connector_id = connector_id,
+	};
+
 	*display = (struct test_display) {};
+	if (ioctl(grant_fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR, &attach) < 0) {
+		perror("capture setup ATTACH_MONITOR");
+		return -1;
+	}
 	if (find_connector_mode(issuer_fd, connector_id, &display->mode,
 				&display->crtc_id) ||
 	    create_test_framebuffer(issuer_fd, display->mode.hdisplay,
@@ -842,8 +850,11 @@ out:
 	return ret;
 }
 
-static int expect_plain_capture_denied(int fd)
+static int expect_plain_capture_denied(int fd, uint32_t connector_id)
 {
+	struct drm_castkms_capture_attach_monitor attach = {
+		.connector_id = connector_id,
+	};
 	struct drm_castkms_capture_register_buffer register_buffer = {
 		.stream_id = 1,
 		.fb_id = 1,
@@ -857,6 +868,8 @@ static int expect_plain_capture_denied(int fd)
 
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_GET_GRANT, &get_grant,
 			       ENODATA, "plain-fd GET_GRANT") ||
+	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
+			       &attach, EACCES, "plain-fd ATTACH_MONITOR") ||
 	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_REGISTER_BUFFER,
 			       &register_buffer, EACCES,
 			       "plain-fd REGISTER_BUFFER") ||
@@ -989,6 +1002,19 @@ static int expect_create_flag_namespaces(int fd, uint32_t connector_id)
 				  EINVAL, "CREATE_GRANT access mode in fd flags");
 }
 
+static int expect_foreign_connector_denied(int grant_fd,
+					   uint32_t connector_id)
+{
+	struct drm_castkms_capture_attach_monitor attach = {
+		.connector_id = connector_id,
+	};
+
+	return expect_ioctl_errno(grant_fd,
+				  DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
+				  &attach, EACCES,
+				  "grant holder foreign-connector ATTACH_MONITOR");
+}
+
 static void usage(const char *program)
 {
 	fprintf(stderr,
@@ -999,9 +1025,11 @@ static void usage(const char *program)
 int main(int argc, char **argv)
 {
 	const uint32_t full_rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+		DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT |
 		DRM_CASTKMS_GRANT_UPDATE_EDID |
 		DRM_CASTKMS_GRANT_READ_CURSOR |
 		DRM_CASTKMS_GRANT_MANAGE_CEC;
+	struct drm_castkms_capture_attach_monitor attach;
 	struct drm_castkms_capture_start admin_stream = {};
 	struct drm_castkms_capture_start delegated_stream = {};
 	struct drm_castkms_get_grant issuer_query;
@@ -1061,7 +1089,7 @@ int main(int argc, char **argv)
 		perror("issuer DRM_IOCTL_SET_MASTER");
 		goto out;
 	}
-	if (expect_plain_capture_denied(issuer))
+	if (expect_plain_capture_denied(issuer, connector_id))
 		goto out;
 	printf("grant_plain_fd_denied=pass\n");
 	if (expect_create_flag_namespaces(issuer, connector_id))
@@ -1089,12 +1117,16 @@ int main(int argc, char **argv)
 		if (create_grant(issuer, foreign_connector_id, full_rights, 0,
 				 &foreign_grant_fd, &foreign_grant_id) ||
 		    expect_holder_state(foreign_grant_fd, foreign_grant_id,
-					DRM_CASTKMS_GRANT_STATE_PENDING, 0))
+					DRM_CASTKMS_GRANT_STATE_PENDING, 0) ||
+		    expect_foreign_connector_denied(normal_fd,
+						    foreign_connector_id) ||
+		    expect_foreign_connector_denied(foreign_grant_fd,
+						    connector_id))
 			goto out;
-		printf("grant_cross_connector_created=pass\n");
+		printf("grant_cross_connector_denied=pass\n");
 	}
 
-	if (setup_display(issuer, connector_id, &display) ||
+	if (setup_display(issuer, normal_fd, connector_id, &display) ||
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE, 0) ||
 	    test_capture_access(normal_fd, &display))
@@ -1201,6 +1233,14 @@ int main(int argc, char **argv)
 				DRM_CASTKMS_GRANT_STATE_SUSPENDED_NO_MASTER,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN))
 		goto out;
+	attach = (struct drm_castkms_capture_attach_monitor) {
+		.connector_id = connector_id,
+	};
+	if (expect_ioctl_errno(masterless_admin_fd,
+			       DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
+			       &attach, EACCES,
+			       "capture-only grant ATTACH_MONITOR"))
+		goto out;
 	close(masterless_admin_fd);
 	masterless_admin_fd = -1;
 	printf("grant_admin_masterless_create=pass\n");
@@ -1210,7 +1250,7 @@ int main(int argc, char **argv)
 		perror("open replacement master");
 		goto out;
 	}
-	if (expect_plain_capture_denied(master_b) ||
+	if (expect_plain_capture_denied(master_b, connector_id) ||
 	    expect_holder_state(normal_fd, normal_id,
 					DRM_CASTKMS_GRANT_STATE_SUSPENDED_OTHER_MASTER,
 					0) ||
@@ -1335,6 +1375,14 @@ int main(int argc, char **argv)
 	    expect_revoke_event(normal_fd, normal_id, -EKEYREVOKED) ||
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_REVOKED, 0))
+		goto out;
+	attach = (struct drm_castkms_capture_attach_monitor) {
+		.connector_id = connector_id,
+	};
+	if (expect_ioctl_errno(normal_fd,
+			       DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
+			       &attach, EKEYREVOKED,
+			       "revoked-grant ATTACH_MONITOR"))
 		goto out;
 	printf("grant_explicit_revoke=pass\n");
 	close(normal_fd);

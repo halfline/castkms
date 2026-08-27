@@ -3,6 +3,20 @@
 This is for people changing the driver. The userspace grant contract is in
 [`capture-grants.md`](capture-grants.md).
 
+## Monitor attachment
+
+Virtual display connectors start disconnected. A grant with
+`MANAGE_ATTACHMENT` may attach its connector and optionally publish an EDID;
+that transition sets the connector status, updates the standard EDID property,
+and emits a KMS hotplug event. Revoking the owning grant reverses the
+attachment before releasing its authority reference.
+
+`castkms_connector_uapi.c` owns user-pointer validation and grant lookup for
+monitor operations. `castkms_connector.c` owns the connector state transition.
+The device attachment-transition mutex covers each complete transition, with
+the attachment mutex nested inside it to protect the attached bit and owner.
+Cross-authority capture cleanup runs after those transition locks are released.
+
 ## Cursor capture metadata
 
 Capture streams include cursor planes in frame pixels by default. A stream
@@ -24,8 +38,10 @@ those consumers and renders a separate cursor-free capture result.
 
 ## Source layout
 
-The cursor capture surface has one owning file:
+The current specialized interfaces have explicit owners:
 
 | Area | Owner |
 |---|---|
+| Monitor attachment ioctl translation | `castkms_connector_uapi.c` |
+| Connector attachment and EDID state | `castkms_connector.c` |
 | Captured cursor state and bitmap extraction | `castkms_capture_cursor.c` |

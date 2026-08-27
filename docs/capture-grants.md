@@ -115,6 +115,9 @@ Starting a stream without `READ_CURSOR` requires `EXCLUDE_CURSOR`; cursor
 metadata and bitmaps are also suppressed. `ATTACH_MONITOR` with an EDID
 requires both attachment and EDID rights. Unknown rights are rejected.
 
+A successful attachment belongs to the calling grant. Revoking that grant
+disconnects the monitor, clears its published EDID, and emits a hotplug event.
+
 Only one live grant with `MANAGE_ATTACHMENT` may exist per connector. Capture
 is exclusive per output. Additional capture-only grants are structurally
 possible, but attachment ownership is singular.

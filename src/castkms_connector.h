@@ -5,6 +5,9 @@
 
 #include "castkms_drv.h"
 
+struct castkms_capture_authority;
+struct drm_edid;
+
 #define drm_connector_to_castkms_connector(target) \
 	container_of(target, struct castkms_connector, base)
 
@@ -12,10 +15,12 @@
  * struct castkms_connector - CASTKMS custom type wrapping around the DRM connector
  *
  * @base: Base DRM connector
+ * @attachment_authority: Core authority owning the attachment, or NULL
  * @monitor_attached: Whether a virtual monitor is attached
  */
 struct castkms_connector {
 	struct drm_connector base;
+	struct castkms_capture_authority *attachment_authority;
 	bool monitor_attached;
 };
 
@@ -33,5 +38,26 @@ struct castkms_connector *castkms_connector_init(struct castkms_device *castkmsd
  * @castkmsdev: CASTKMS device to update
  */
 void castkms_trigger_connector_hotplug(struct castkms_device *castkmsdev);
+
+/*
+ * Callers must hold castkms_device.attach_transition_lock and a matching
+ * authority acquired with castkms_capture_authority_begin(). Stream teardown
+ * after a successful detach runs only after releasing the transition lock.
+ */
+int castkms_connector_attach_monitor(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority,
+	const struct drm_edid *drm_edid);
+int castkms_connector_detach_monitor(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority);
+bool castkms_connector_authority_is_attached(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority);
+int castkms_connector_require_authority_attached(
+	struct drm_connector *connector,
+	struct castkms_capture_authority *authority);
+bool castkms_connector_detach_authority(
+	struct castkms_capture_authority *authority);
 
 #endif /* _CASTKMS_CONNECTOR_H_ */

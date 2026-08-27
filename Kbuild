@@ -25,6 +25,7 @@ castkms-y := \
 	src/castkms_composer.o \
 	src/castkms_writeback.o \
 	src/castkms_connector.o \
+	src/castkms_connector_uapi.o \
 	src/castkms_config.o \
 	src/castkms_configfs.o \
 	src/castkms_colorop.o \

@@ -983,12 +983,12 @@ static void castkms_config_test_connector_status(struct kunit *test)
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, connector_cfg);
 
 	status = castkms_config_connector_get_status(connector_cfg);
-	KUNIT_EXPECT_EQ(test, status, connector_status_connected);
+	KUNIT_EXPECT_EQ(test, status, connector_status_disconnected);
 
 	castkms_config_connector_set_status(connector_cfg,
-					 connector_status_disconnected);
+					 connector_status_connected);
 	status = castkms_config_connector_get_status(connector_cfg);
-	KUNIT_EXPECT_EQ(test, status, connector_status_disconnected);
+	KUNIT_EXPECT_EQ(test, status, connector_status_connected);
 
 	castkms_config_destroy(config);
 }

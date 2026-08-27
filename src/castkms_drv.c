@@ -38,6 +38,7 @@
 #include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
 #include "castkms_capture_uapi.h"
+#include "castkms_connector_uapi.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_crc.h"
@@ -384,6 +385,8 @@ int castkms_create(struct castkms_config *config)
 	castkms_device->faux_dev = fdev;
 	castkms_device->config = config;
 	config->dev = castkms_device;
+	mutex_init(&castkms_device->attach_transition_lock);
+	mutex_init(&castkms_device->attach_lock);
 	ret = castkms_capture_authority_device_init(castkms_device);
 	if (ret)
 		goto out_devres;

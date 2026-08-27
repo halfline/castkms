@@ -51,6 +51,10 @@ reject 'buffer engine owns connector or CRTC scheduling' \
 	'castkms_connector|castkms_crtc|drmm_mutex_init|castkms_capture_prepare_frame|castkms_capture_stream_(attach|destroy)' \
 	src/castkms_capture_buffer.c
 
+reject 'capture stream UAPI owns connector attachment translation' \
+	'castkms_capture_attach_monitor_ioctl|drm_edid' \
+	src/castkms_capture_uapi.c src/castkms_capture_uapi.h
+
 reject 'ownership tracker imports authority policy' \
 	'castkms_capture_authority|reconcile_ownership' \
 	src/castkms_capture_owner.c src/castkms_capture_owner.h
@@ -71,6 +75,7 @@ test -f src/castkms_capture_job.c
 test -f src/castkms_capture_buffer.c
 test -f src/castkms_capture_cursor.c
 test -f src/castkms_capture_internal.h
+test -f src/castkms_connector_uapi.c
 test -f src/castkms_grant_core_ioctl_table.inc
 test ! -e src/castkms_composer_demand.h
 

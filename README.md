@@ -30,6 +30,11 @@ an ordinary primary-node client cannot create one. The returned descriptor is
 a fresh, unauthenticated DRM file that cannot become master, may be passed with
 `SCM_RIGHTS`, and owns the grant until its final close.
 
+A grant with `MANAGE_ATTACHMENT` may call `ATTACH_MONITOR` for its connector.
+The operation changes a disconnected virtual port into a connected monitor,
+optionally publishes its EDID, and emits the standard KMS hotplug event. Grant
+revocation disconnects an attachment owned by that grant.
+
 Public definitions are in
 [`include/uapi/drm/castkms_drm.h`](include/uapi/drm/castkms_drm.h), and
 [`docs/capture-grants.md`](docs/capture-grants.md) records the complete grant

@@ -23,6 +23,11 @@
 
 #include "castkms-test-drm.h"
 
+#ifndef DRM_MODE_CONNECTED
+#define DRM_MODE_CONNECTED 1
+#define DRM_MODE_DISCONNECTED 2
+#endif
+
 static_assert(sizeof(struct drm_castkms_capture_format) == 16,
 	      "capture format ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
@@ -37,6 +42,8 @@ static_assert(sizeof(struct drm_castkms_capture_unregister_buffer) == 16,
 	      "capture unregister ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48,
 	      "capture queue ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24,
+	      "capture attach-monitor ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
 	      "capture event ABI size changed");
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108,
@@ -203,6 +210,35 @@ static int queue_capture_buffer(int fd, uint32_t stream_id,
 	return castkms_test_capture_queue_buffer(
 		fd, stream_id, buffer_id, flags, mode_generation, user_data,
 		ready_point, reuse_point);
+}
+
+static int attach_monitor(int fd, uint32_t connector_id, const void *edid,
+			  uint32_t size)
+{
+	struct drm_castkms_capture_attach_monitor args = {
+		.connector_id = connector_id,
+		.edid_size = size,
+		.edid_ptr = (uint64_t)(uintptr_t)edid,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
+static int read_connector_connection(int fd, uint32_t connector_id,
+				     uint32_t *connection)
+{
+	struct drm_mode_get_connector connector = {
+		.connector_id = connector_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &connector) < 0)
+		return -1;
+
+	*connection = connector.connection;
+	return 0;
 }
 
 static int connector_drives_crtc(int fd, uint32_t connector_id,
@@ -1257,6 +1293,7 @@ static int run_cursor_test(const char *device, int inherited_fd,
 
 	grant_fd = open_capture_grant(inherited_fd,
 		DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+		DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT |
 		DRM_CASTKMS_GRANT_READ_CURSOR, false);
 	if (grant_fd < 0)
 		return EXIT_FAILURE;
@@ -1270,6 +1307,12 @@ static int run_cursor_test(const char *device, int inherited_fd,
 
 	if (find_display_connector(grant_fd, crtc_id, &connector_id))
 		goto out;
+	ioctl_ret = attach_monitor(grant_fd, connector_id, NULL, 0);
+	if (ioctl_ret && ioctl_ret != -EBUSY) {
+		errno = -ioctl_ret;
+		perror("ATTACH_MONITOR");
+		goto out;
+	}
 	if (set_connector_crtc(kms_fd, connector_id, crtc_id, &width, &height))
 		goto out;
 
@@ -1767,6 +1810,7 @@ int main(int argc, char **argv)
 
 	fd = open_capture_grant(inherited_fd,
 		DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+		DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT |
 		DRM_CASTKMS_GRANT_READ_CURSOR, true);
 	if (fd < 0)
 		return EXIT_FAILURE;
@@ -1826,11 +1870,44 @@ int main(int argc, char **argv)
 
 	{
 		uint32_t connector_id;
+		uint32_t connection;
 
 		if (find_display_connector(fd, crtc_id, &connector_id)) {
 			fprintf(stderr, "failed to find display connector\n");
 			goto out_close;
 		}
+		if (read_connector_connection(fd, connector_id, &connection) ||
+		    connection != DRM_MODE_DISCONNECTED) {
+			fprintf(stderr,
+				"display connector is not disconnected at rest\n");
+			goto out_close;
+		}
+		ioctl_ret = attach_monitor(fd, connector_id, NULL, 0);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("attach monitor");
+			goto out_close;
+		}
+		if (read_connector_connection(fd, connector_id, &connection) ||
+		    connection != DRM_MODE_CONNECTED) {
+			fprintf(stderr, "attached connector is not connected\n");
+			goto out_close;
+		}
+		ioctl_ret = attach_monitor(fd, connector_id, NULL, 0);
+		if (ioctl_ret != -EBUSY) {
+			fprintf(stderr,
+				"second attach returned %d, expected %d\n",
+				ioctl_ret, -EBUSY);
+			goto out_close;
+		}
+		ioctl_ret = attach_monitor(competitor_fd, connector_id, NULL, 0);
+		if (ioctl_ret != -EACCES) {
+			fprintf(stderr,
+				"ordinary-fd attach returned %d, expected %d\n",
+				ioctl_ret, -EACCES);
+			goto out_close;
+		}
+		printf("capture_attach_monitor=pass\n");
 		if (wait_crtc_size(fd, crtc_id, &width, &height))
 			goto out_close;
 		ioctl_ret = start_capture(fd, crtc_id, &first_stream);

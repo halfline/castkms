@@ -16,6 +16,7 @@
 
 #include "castkms_capture_authority.h"
 #include "castkms_capture_owner.h"
+#include "castkms_connector.h"
 #include "castkms_drv.h"
 #include "castkms_output.h"
 
@@ -722,6 +723,7 @@ void castkms_capture_authority_revoke(
 	struct castkms_capture_authority *authority, int status)
 {
 	bool cleanup = false;
+	bool detached;
 
 	if (status >= 0)
 		status = -EKEYREVOKED;
@@ -746,8 +748,13 @@ void castkms_capture_authority_revoke(
 
 	mutex_lock(&authority->resource_lock);
 	castkms_capture_authority_revoke_resources(authority, status);
+	detached = castkms_connector_detach_authority(authority);
 	mutex_unlock(&authority->resource_lock);
 
+	/* Never acquire a foreign authority lock while holding this one. */
+	if (detached)
+		castkms_capture_authority_cleanup_connector_resources(
+			authority->connector, authority, -ENOTCONN);
 	if (authority->ops && authority->ops->revoked)
 		authority->ops->revoked(authority, status, authority->data);
 	complete_all(&authority->cleanup_done);

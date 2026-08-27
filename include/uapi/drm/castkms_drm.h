@@ -434,6 +434,32 @@ struct drm_castkms_capture_queue_buffer {
 };
 
 /**
+ * struct drm_castkms_capture_attach_monitor - plug a sink into a connector
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @edid_size: EDID blob size in bytes; zero attaches without an EDID
+ * @reserved: must be zero
+ * @edid_ptr: userspace pointer to @edid_size bytes, or zero when no EDID
+ *
+ * The default device publishes a fixed set of disconnected virtual ports at
+ * load. This ioctl is the plug-in: the connector becomes connected, the
+ * optional EDID is published, and a standard KMS hotplug is emitted. The
+ * calling grant owns the attachment.
+ *
+ * When setting an EDID, @edid_size must be a non-zero multiple of 128 and at
+ * most DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE. Invalid EDIDs return -EINVAL. A
+ * writeback or unknown connector returns -ENOENT. A connector already
+ * attached by any grant returns -EBUSY.
+ */
+struct drm_castkms_capture_attach_monitor {
+	__u32 connector_id;
+	__u32 flags;
+	__u32 edid_size;
+	__u32 reserved;
+	__u64 edid_ptr;
+};
+
+/**
  * DRM_CASTKMS_CAPTURE_EVENT_FRAME:
  *
  * Driver-private event type carrying a completed capture frame.
@@ -584,6 +610,7 @@ struct drm_event_castkms_capture_frame {
 #define DRM_CASTKMS_CAPTURE_REGISTER_BUFFER	0x03
 #define DRM_CASTKMS_CAPTURE_UNREGISTER_BUFFER	0x04
 #define DRM_CASTKMS_CAPTURE_QUEUE_BUFFER	0x05
+#define DRM_CASTKMS_CAPTURE_ATTACH_MONITOR	0x07
 #define DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP	0x09
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
@@ -635,6 +662,9 @@ struct drm_castkms_capture_read_cursor_bitmap {
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUEUE_BUFFER \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUEUE_BUFFER, \
 		struct drm_castkms_capture_queue_buffer)
+#define DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_ATTACH_MONITOR, \
+		struct drm_castkms_capture_attach_monitor)
 #define DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, \
 		 struct drm_castkms_capture_read_cursor_bitmap)

@@ -24,6 +24,8 @@ capture-core src/castkms_capture_output.h
 
 capture-uapi src/castkms_capture_uapi.c
 capture-uapi src/castkms_capture_uapi.h
+capture-uapi src/castkms_connector_uapi.c
+capture-uapi src/castkms_connector_uapi.h
 
 config src/castkms_config.c
 config src/castkms_config.h
