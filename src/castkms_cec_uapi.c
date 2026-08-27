@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/build_bug.h>
+#include <linux/file.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 
 #include <drm/castkms_drm.h>
 #include <drm/drm_connector.h>
@@ -18,12 +20,24 @@
 
 /**
  * struct castkms_cec_uapi_transport - DRM-file CEC transport adapter
+ * @dev: Device used for DRM event delivery
+ * @file: Grant-bearing DRM file used for event delivery
  * @connector: Refcounted connector represented by UAPI object IDs
  * @transport_id: File-visible binding identifier
  */
 struct castkms_cec_uapi_transport {
+	struct drm_device *dev;
+	struct drm_file *file;
 	struct drm_connector *connector;
 	u32 transport_id;
+};
+
+/* @pending must remain first because DRM event cleanup frees its address. */
+struct castkms_cec_uapi_request {
+	struct drm_pending_event pending;
+	struct drm_castkms_cec_event_tx event;
+	struct castkms_cec_request request;
+	struct drm_device *dev;
 };
 
 static_assert(sizeof(struct drm_castkms_cec_query_caps) == 40);
@@ -31,6 +45,7 @@ static_assert(sizeof(struct drm_castkms_cec_bind_transport) == 48);
 static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44);
 static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16);
 static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16);
+static_assert(sizeof(struct drm_castkms_cec_event_tx) == 72);
 
 static struct castkms_cec_output *
 cec_uapi_lookup(struct drm_device *dev, struct drm_file *file_priv,
@@ -82,6 +97,76 @@ cec_uapi_lookup_granted(struct drm_device *dev, struct drm_file *file_priv,
 	return output;
 }
 
+static void castkms_cec_uapi_request_complete(struct castkms_cec_request *request,
+					      bool cancelled)
+{
+	struct castkms_cec_uapi_request *uapi_request = container_of(request,
+		struct castkms_cec_uapi_request, request);
+	struct drm_device *dev = uapi_request->dev;
+
+	if (cancelled)
+		drm_event_cancel_free(dev, &uapi_request->pending);
+	else
+		drm_send_event(dev, &uapi_request->pending);
+}
+
+static void castkms_cec_uapi_request_retire(void *data)
+{
+	fput(data);
+}
+
+static int castkms_cec_uapi_prepare_tx(void *data,
+				       const struct castkms_cec_tx *tx,
+				       struct castkms_cec_request **request)
+{
+	struct castkms_cec_uapi_transport *transport = data;
+	struct castkms_connector *connector =
+		drm_connector_to_castkms_connector(transport->connector);
+	struct castkms_cec_uapi_request *uapi_request;
+	struct file *active_file;
+	int ret;
+
+	*request = NULL;
+	active_file = get_file_active(&transport->file->filp);
+	if (!active_file)
+		return -ENONET;
+
+	uapi_request = kzalloc_obj(*uapi_request);
+	if (!uapi_request) {
+		fput(active_file);
+		return -ENOMEM;
+	}
+
+	uapi_request->event.base.type = DRM_CASTKMS_CEC_EVENT_TX;
+	uapi_request->event.base.length = sizeof(uapi_request->event);
+	uapi_request->event.transport_id = transport->transport_id;
+	uapi_request->event.transport_generation = tx->transport_generation;
+	uapi_request->event.state_generation = tx->state_generation;
+	uapi_request->event.cookie = tx->cookie;
+	uapi_request->event.connector_id = transport->connector->base.id;
+	uapi_request->event.output_index = connector->output_index;
+	uapi_request->event.attempts = tx->attempts;
+	uapi_request->event.signal_free_time = tx->signal_free_time;
+	uapi_request->event.length = tx->length;
+	memcpy(uapi_request->event.msg, tx->msg, tx->length);
+	uapi_request->request.complete = castkms_cec_uapi_request_complete;
+	uapi_request->request.retire = castkms_cec_uapi_request_retire;
+	uapi_request->request.retire_data = active_file;
+	uapi_request->dev = transport->dev;
+
+	ret = drm_event_reserve_init(transport->dev, transport->file,
+				     &uapi_request->pending,
+				     &uapi_request->event.base);
+	if (ret) {
+		kfree(uapi_request);
+		fput(active_file);
+		return ret;
+	}
+
+	*request = &uapi_request->request;
+	return 0;
+}
+
 static void castkms_cec_uapi_release(void *data)
 {
 	struct castkms_cec_uapi_transport *transport = data;
@@ -91,6 +176,7 @@ static void castkms_cec_uapi_release(void *data)
 }
 
 static const struct castkms_cec_transport_ops castkms_cec_uapi_ops = {
+	.prepare_tx = castkms_cec_uapi_prepare_tx,
 	.release = castkms_cec_uapi_release,
 };
 
@@ -147,7 +233,8 @@ int castkms_cec_query_caps_ioctl(struct drm_device *dev, void *data,
 
 	args->uapi_major = DRM_CASTKMS_CEC_UAPI_MAJOR;
 	args->uapi_minor = DRM_CASTKMS_CEC_UAPI_MINOR;
-	args->capabilities = DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE |
+	args->capabilities = DRM_CASTKMS_CEC_CAP_ASYNC_TX |
+			     DRM_CASTKMS_CEC_CAP_TRANSPORT_STATE |
 			     DRM_CASTKMS_CEC_CAP_EDID_PHYS_ADDR;
 	args->max_msg_size = CASTKMS_CEC_MAX_MSG_SIZE;
 	args->output_index = connector->output_index;
@@ -189,6 +276,8 @@ int castkms_cec_bind_transport_ioctl(struct drm_device *dev, void *data,
 		ret = -ENOMEM;
 		goto out_authority;
 	}
+	transport->dev = dev;
+	transport->file = file_priv;
 	transport->connector = base;
 	drm_connector_get(transport->connector);
 

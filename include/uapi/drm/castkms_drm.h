@@ -865,7 +865,39 @@ struct drm_castkms_cec_set_transport_state {
 
 
 /* CEC DRM event types */
+#define DRM_CASTKMS_CEC_EVENT_TX	0x80000001U
 #define DRM_CASTKMS_CEC_EVENT_STATE	0x80000002U
+
+/**
+ * struct drm_castkms_cec_event_tx - outbound CEC transmit event
+ * @base: DRM event header with type DRM_CASTKMS_CEC_EVENT_TX
+ * @transport_id: file-local owner identifier
+ * @transport_generation: detect stale bindings
+ * @state_generation: associate request with adapter state
+ * @cookie: match completion
+ * @connector_id: direct connector identity
+ * @output_index: stable A/V/C identity
+ * @attempts: requested CEC attempt count
+ * @signal_free_time: CEC-core timing request
+ * @length: message length
+ * @msg: up to 16 bytes of CEC message
+ * @reserved: future extension
+ */
+struct drm_castkms_cec_event_tx {
+	struct drm_event base;
+	__u32 transport_id;
+	__u32 pad0;
+	__u64 transport_generation;
+	__u64 state_generation;
+	__u64 cookie;
+	__u32 connector_id;
+	__u32 output_index;
+	__u8 attempts;
+	__u8 length;
+	__u8 msg[16];
+	__u16 reserved;
+	__u32 signal_free_time;
+};
 
 /* CEC ioctl command numbers (after capture range 0x00-0x09) */
 #define DRM_CASTKMS_CEC_QUERY_CAPS		0x0a
