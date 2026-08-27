@@ -11,6 +11,7 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_writeback.h>
 
+#include "castkms_capture_output.h"
 #include "castkms_frame_dispatch_demand.h"
 
 struct castkms_crtc_state;
@@ -23,25 +24,27 @@ struct workqueue_struct;
  * @wb_connector: DRM writeback connector for this output
  * @wb_encoder: DRM encoder used by @wb_connector
  * @dispatch_workq: Ordered frame-consumer dispatch workqueue
- * @lock: Protects demand, scheduling, and state assignment
+ * @lock: Protects demand, scheduling, state assignment, and capture ownership
  * @dispatch_demand: Consumers keeping frame dispatch active
  * @dispatch_state: Current state assigned to the dispatch worker
  * @dispatch_lock: Protects per-frame pending flags and worker fields
- * @capture_owner: Refcounted owner of the currently presented content
- * @capture_owner_generation: Monotonic presented-content generation
- * @capture_owner_updating: Whether an atomic commit is replacing content
+ * @capture_owner: Refcounted master whose content is safe to expose
+ * @capture_owner_generation: Changes when safe ownership is republished
+ * @capture_owner_updating: Whether an atomic commit is replacing safe content
+ * @capture: Capture stream, buffer, and mode-generation state
  *
  * Lock ordering (outermost first):
  *
  * 1. @lock
- * 2. @dispatch_lock
+ * 2. capture state_lock (in castkms_capture.c)
+ * 3. @dispatch_lock
  */
 struct castkms_output {
 	struct drm_crtc crtc;
 	struct drm_writeback_connector wb_connector;
 	struct drm_encoder wb_encoder;
 	struct workqueue_struct *dispatch_workq;
-	spinlock_t lock; /* Protects commit and vblank state. */
+	spinlock_t lock; /* Protects commit, vblank, and capture-owner state. */
 
 	struct castkms_frame_dispatch_demand dispatch_demand;
 	struct castkms_crtc_state *dispatch_state;
@@ -50,6 +53,8 @@ struct castkms_output {
 	struct drm_master *capture_owner;
 	u64 capture_owner_generation;
 	bool capture_owner_updating;
+
+	struct castkms_capture_output capture;
 };
 
 #define drm_crtc_to_castkms_output(target) \

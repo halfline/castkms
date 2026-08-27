@@ -18,6 +18,7 @@
 #include <kunit/visibility.h>
 
 #include "castkms_crc.h"
+#include "castkms_capture.h"
 #include "castkms_capture_owner.h"
 #include "castkms_crtc.h"
 #include "castkms_drv.h"
@@ -343,6 +344,10 @@ static void castkms_crtc_atomic_flush(struct drm_crtc *crtc,
 	}
 
 	castkms_output->dispatch_state = to_castkms_crtc_state(crtc->state);
+	if (crtc->state->mode_changed || crtc->state->active_changed ||
+	    crtc->state->connectors_changed)
+		castkms_capture_mode_changed(castkms_output, crtc->state);
+
 	spin_unlock_irq(&castkms_output->lock);
 }
 
@@ -410,6 +415,9 @@ struct castkms_output *castkms_crtc_init(struct drm_device *dev, struct drm_plan
 	err = drmm_add_action_or_reset(dev,
 				       castkms_crtc_capture_owner_cleanup,
 				       castkms_out);
+	if (err)
+		return ERR_PTR(err);
+	err = castkms_capture_output_init(dev, castkms_out);
 	if (err)
 		return ERR_PTR(err);
 

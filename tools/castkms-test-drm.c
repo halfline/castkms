@@ -119,3 +119,16 @@ void castkms_test_framebuffer_destroy(
 		perror("DRM_IOCTL_MODE_DESTROY_DUMB");
 	*buffer = (struct castkms_test_framebuffer) {};
 }
+
+int castkms_test_capture_start(int fd, uint32_t crtc_id, uint32_t flags,
+			       struct drm_castkms_capture_start *start)
+{
+	*start = (struct drm_castkms_capture_start) {
+		.crtc_id = crtc_id,
+		.flags = flags,
+	};
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_START, start) < 0)
+		return -errno;
+
+	return 0;
+}

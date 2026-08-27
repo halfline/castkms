@@ -8,4 +8,6 @@ struct drm_file;
 
 int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 				     struct drm_file *file_priv);
+int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
+				struct drm_file *file_priv);
 #endif /* _CASTKMS_CAPTURE_UAPI_H_ */

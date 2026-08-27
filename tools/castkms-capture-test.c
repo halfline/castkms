@@ -22,6 +22,8 @@ static_assert(sizeof(struct drm_castkms_capture_format) == 16,
 	      "capture format ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_query_caps) == 40,
 	      "capture query ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_start) == 24,
+	      "capture start ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
@@ -73,7 +75,8 @@ static int parse_fd(const char *text, int *fd)
 	return 0;
 }
 
-static int open_capture_source(int inherited_fd, const char *path, bool report)
+static int open_capture_grant(int inherited_fd, uint32_t required_rights,
+			      bool report)
 {
 	struct drm_castkms_get_grant grant = {};
 	const char *environment;
@@ -81,11 +84,9 @@ static int open_capture_source(int inherited_fd, const char *path, bool report)
 
 	if (inherited_fd < 0) {
 		environment = getenv("CASTKMS_GRANT_FD");
-		if (!environment)
-			return open_capture_device(path, report);
-		if (parse_fd(environment, &inherited_fd)) {
-			fprintf(stderr, "invalid CASTKMS_GRANT_FD: %s\n",
-				environment);
+		if (!environment || parse_fd(environment, &inherited_fd)) {
+			fprintf(stderr,
+				"an inherited CastKMS grant fd is required\n");
 			return -1;
 		}
 	}
@@ -106,6 +107,7 @@ static int open_capture_source(int inherited_fd, const char *path, bool report)
 		goto fail;
 	}
 	if (!grant.grant_id || !grant.connector_id ||
+	    (grant.rights & required_rights) != required_rights ||
 	    grant.rights & ~DRM_CASTKMS_GRANT_RIGHTS_MASK ||
 	    grant.flags & ~DRM_CASTKMS_GRANT_FLAGS_MASK ||
 	    grant.state == DRM_CASTKMS_GRANT_STATE_REVOKED ||
@@ -122,6 +124,99 @@ static int open_capture_source(int inherited_fd, const char *path, bool report)
 
 fail:
 	close(fd);
+	return -1;
+}
+
+static int start_capture(int fd, uint32_t crtc_id,
+			 struct drm_castkms_capture_start *start)
+{
+	return castkms_test_capture_start(
+		fd, crtc_id, DRM_CASTKMS_CAPTURE_START_EXCLUSIVE, start);
+}
+
+static int connector_drives_crtc(int fd, uint32_t connector_id,
+				 uint32_t crtc_id, bool *drives)
+{
+	uint32_t crtc_ids[8];
+	uint32_t encoder_ids[8];
+	struct drm_mode_card_res res = {
+		.count_crtcs = 8,
+		.crtc_id_ptr = (uint64_t)(uintptr_t)crtc_ids,
+	};
+	struct drm_mode_get_connector conn = {
+		.connector_id = connector_id,
+	};
+	int crtc_idx = -1;
+	uint32_t i;
+
+	*drives = false;
+	if (ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0)
+		return -1;
+	if (!res.count_crtcs || res.count_crtcs > 8)
+		return -1;
+	for (i = 0; i < res.count_crtcs; i++) {
+		if (crtc_ids[i] == crtc_id) {
+			crtc_idx = (int)i;
+			break;
+		}
+	}
+	if (crtc_idx < 0)
+		return -1;
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0)
+		return -1;
+	if (conn.connector_type == DRM_MODE_CONNECTOR_WRITEBACK)
+		return 0;
+	if (!conn.count_encoders || conn.count_encoders > 8)
+		return -1;
+	conn.count_modes = 0;
+	conn.count_props = 0;
+	conn.encoders_ptr = (uint64_t)(uintptr_t)encoder_ids;
+	if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) < 0)
+		return -1;
+	if (conn.count_encoders > 8)
+		return -1;
+	for (i = 0; i < conn.count_encoders; i++) {
+		struct drm_mode_get_encoder enc = {
+			.encoder_id = encoder_ids[i],
+		};
+
+		if (ioctl(fd, DRM_IOCTL_MODE_GETENCODER, &enc) < 0)
+			return -1;
+		if (enc.possible_crtcs & (1u << crtc_idx)) {
+			*drives = true;
+			return 0;
+		}
+	}
+
+	return 0;
+}
+
+static int find_display_connector(int fd, uint32_t crtc_id,
+				  uint32_t *connector_id)
+{
+	uint32_t connector_ids[32];
+	struct drm_mode_card_res res = {
+		.count_connectors = 32,
+		.connector_id_ptr = (uint64_t)(uintptr_t)connector_ids,
+	};
+	uint32_t i;
+
+	if (ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0)
+		return -1;
+	if (!res.count_connectors || res.count_connectors > 32)
+		return -1;
+	for (i = 0; i < res.count_connectors; i++) {
+		bool drives = false;
+
+		if (connector_drives_crtc(fd, connector_ids[i], crtc_id,
+					  &drives))
+			return -1;
+		if (drives) {
+			*connector_id = connector_ids[i];
+			return 0;
+		}
+	}
+
 	return -1;
 }
 
@@ -171,7 +266,7 @@ static int validate_query(const struct drm_castkms_capture_query_caps *query,
 static void usage(const char *program)
 {
 	fprintf(stderr,
-		"usage: %s [--grant-fd FD] DRM-DEVICE CRTC-ID\n",
+		"usage: %s [--grant-fd FD] [--mode-generation] DRM-DEVICE CRTC-ID\n",
 		program);
 }
 
@@ -179,10 +274,15 @@ int main(int argc, char **argv)
 {
 	struct drm_castkms_capture_format format = {};
 	struct drm_castkms_capture_query_caps query = {};
+	struct drm_castkms_capture_start first_stream;
+	struct drm_castkms_capture_start second_stream;
 	uint32_t crtc_id;
+	int competitor_fd = -1;
 	int fd;
+	int ioctl_ret;
 	int ret = EXIT_FAILURE;
 	const char *device;
+	const char *mode = NULL;
 	int inherited_fd = -1;
 	int argument = 1;
 
@@ -199,6 +299,9 @@ int main(int argc, char **argv)
 		}
 		argument += 2;
 	}
+	if (argument < argc &&
+	    !strcmp(argv[argument], "--mode-generation"))
+		mode = argv[argument++];
 	if (argc - argument != 2) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
@@ -207,7 +310,30 @@ int main(int argc, char **argv)
 	if (parse_crtc_id(argv[argument + 1], &crtc_id))
 		return EXIT_FAILURE;
 
-	fd = open_capture_source(inherited_fd, device, true);
+	if (mode) {
+		struct drm_castkms_capture_start stream;
+
+		fd = open_capture_grant(inherited_fd,
+			DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+			DRM_CASTKMS_GRANT_READ_CURSOR, false);
+		if (fd < 0)
+			return EXIT_FAILURE;
+		ioctl_ret = start_capture(fd, crtc_id, &stream);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("start capture stream");
+			close(fd);
+			return EXIT_FAILURE;
+		}
+		printf("capture_mode_generation=%llu\n",
+		       (unsigned long long)stream.mode_generation);
+		close(fd);
+		return EXIT_SUCCESS;
+	}
+
+	fd = open_capture_grant(inherited_fd,
+		DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
+		DRM_CASTKMS_GRANT_READ_CURSOR, true);
 	if (fd < 0)
 		return EXIT_FAILURE;
 
@@ -248,9 +374,55 @@ int main(int argc, char **argv)
 	       "supported" : "unsupported");
 	printf("capture_query=pass\n");
 
+	competitor_fd = open_capture_device(device, false);
+	if (competitor_fd < 0)
+		goto out_close;
+	ioctl_ret = start_capture(competitor_fd, crtc_id, &second_stream);
+	if (ioctl_ret != -EACCES) {
+		fprintf(stderr,
+			"ordinary-fd capture start returned %d, expected %d\n",
+			ioctl_ret, -EACCES);
+		goto out_close;
+	}
+	printf("capture_plain_fd_denied=pass\n");
+
+	{
+		uint32_t connector_id;
+
+		if (find_display_connector(fd, crtc_id, &connector_id)) {
+			fprintf(stderr, "failed to find display connector\n");
+			goto out_close;
+		}
+		ioctl_ret = start_capture(fd, crtc_id, &first_stream);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("start capture stream");
+			goto out_close;
+		}
+		if (!first_stream.stream_id || !first_stream.mode_generation) {
+			fprintf(stderr,
+				"capture start returned invalid stream metadata\n");
+			goto out_close;
+		}
+	}
+
+	ioctl_ret = start_capture(fd, crtc_id, &second_stream);
+	if (ioctl_ret != -EBUSY) {
+		fprintf(stderr,
+			"second capture start returned %d, expected %d\n",
+			ioctl_ret, -EBUSY);
+		goto out_close;
+	}
+
+	printf("capture_stream_exclusive=pass\n");
+	printf("capture_mode_generation=%llu\n",
+	       (unsigned long long)first_stream.mode_generation);
+	printf("capture_stream_start=pass\n");
 	ret = EXIT_SUCCESS;
 
 out_close:
+	if (competitor_fd >= 0)
+		close(competitor_fd);
 	close(fd);
 	return ret;
 }

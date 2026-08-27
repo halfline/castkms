@@ -230,6 +230,27 @@ static int setup_display(int issuer_fd, uint32_t connector_id,
 	return 0;
 }
 
+static int start_capture(int fd, uint32_t crtc_id,
+			 struct drm_castkms_capture_start *start)
+{
+	return castkms_test_capture_start(
+		fd, crtc_id, DRM_CASTKMS_CAPTURE_START_EXCLUSIVE, start);
+}
+
+static int expect_capture_start_errno(int fd, uint32_t crtc_id,
+				      int expected)
+{
+	struct drm_castkms_capture_start start;
+	int ret = start_capture(fd, crtc_id, &start);
+
+	if (ret != -expected) {
+		fprintf(stderr, "CAPTURE_START returned %d, expected -%d\n",
+			ret, expected);
+		return -1;
+	}
+	return 0;
+}
+
 static int get_holder_grant(int grant_fd, struct drm_castkms_get_grant *grant)
 {
 	*grant = (struct drm_castkms_get_grant) {};
@@ -447,6 +468,70 @@ static int expect_revoke_event(int grant_fd, uint32_t grant_id, int status)
 
 	fprintf(stderr, "timed out waiting for grant %u revocation\n", grant_id);
 	return -1;
+}
+
+static int prepare_capture_stream(
+	int grant_fd, const struct test_display *display,
+	struct drm_castkms_capture_start *stream)
+{
+	int ioctl_ret;
+
+	ioctl_ret = start_capture(grant_fd, display->crtc_id, stream);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("grant CAPTURE_START");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int validate_prepared_stream(int grant_fd,
+				    const struct test_display *display)
+{
+	struct drm_castkms_capture_start competing_stream;
+	int ioctl_ret;
+
+	ioctl_ret = start_capture(grant_fd, display->crtc_id,
+				  &competing_stream);
+	if (ioctl_ret != -EBUSY) {
+		fprintf(stderr,
+			"second CAPTURE_START returned %d, expected %d\n",
+			ioctl_ret, -EBUSY);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int test_master_cleanup_generation(int issuer_fd, int grant_fd,
+					  const struct test_display *display)
+{
+	unsigned int iteration;
+
+	for (iteration = 0; iteration < 32; iteration++) {
+		struct drm_castkms_capture_start stream;
+		int ioctl_ret;
+
+		if (ioctl(issuer_fd, DRM_IOCTL_DROP_MASTER, 0) < 0 ||
+		    ioctl(issuer_fd, DRM_IOCTL_SET_MASTER, 0) < 0) {
+			perror("drop/reacquire master during capture stress");
+			return -1;
+		}
+		ioctl_ret = start_capture(grant_fd, display->crtc_id, &stream);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("post-reacquire CAPTURE_START");
+			return -1;
+		}
+	}
+	if (ioctl(issuer_fd, DRM_IOCTL_DROP_MASTER, 0) < 0 ||
+	    ioctl(issuer_fd, DRM_IOCTL_SET_MASTER, 0) < 0) {
+		perror("final drop/reacquire master during capture stress");
+		return -1;
+	}
+
+	return 0;
 }
 
 static int test_crc_access(int drm_fd, int expected_errno)
@@ -783,6 +868,8 @@ int main(int argc, char **argv)
 		DRM_CASTKMS_GRANT_UPDATE_EDID |
 		DRM_CASTKMS_GRANT_READ_CURSOR |
 		DRM_CASTKMS_GRANT_MANAGE_CEC;
+	struct drm_castkms_capture_start admin_stream = {};
+	struct drm_castkms_capture_start delegated_stream = {};
 	struct drm_castkms_get_grant issuer_query;
 	struct castkms_test_framebuffer master_b_source = {};
 	struct test_display display = {};
@@ -871,6 +958,11 @@ int main(int argc, char **argv)
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE, 0))
 		goto out;
+	if (test_master_cleanup_generation(issuer, normal_fd, &display))
+		goto out;
+	printf("grant_capture_access=pass\n");
+	printf("grant_master_cleanup_generation=pass\n");
+
 	delegated_creator = open(argv[1], O_RDWR | O_CLOEXEC);
 	if (delegated_creator < 0) {
 		perror("open delegated grant creator");
@@ -889,17 +981,19 @@ int main(int argc, char **argv)
 			 &delegated_fd, &delegated_id) ||
 	    expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
-				DRM_CASTKMS_GRANT_FLAG_DELEGATED))
+				DRM_CASTKMS_GRANT_FLAG_DELEGATED) ||
+	    prepare_capture_stream(delegated_fd, &display, &delegated_stream))
 		goto out;
 	close(delegated_creator);
 	delegated_creator = -1;
 	if (expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
-				DRM_CASTKMS_GRANT_FLAG_DELEGATED))
+				DRM_CASTKMS_GRANT_FLAG_DELEGATED) ||
+	    validate_prepared_stream(delegated_fd, &display))
 		goto out;
 	printf("grant_delegated_creator_close=pass\n");
 	if (ioctl(issuer, DRM_IOCTL_DROP_MASTER, 0) < 0) {
-		perror("issuer DRM_IOCTL_DROP_MASTER for delegated grant");
+		perror("issuer DRM_IOCTL_DROP_MASTER for delegated stream");
 		goto out;
 	}
 	if (expect_holder_state(normal_fd, normal_id,
@@ -913,7 +1007,7 @@ int main(int argc, char **argv)
 		    EAGAIN, "masterless CREATE_GRANT with DELEGATED"))
 		goto out;
 	if (ioctl(issuer, DRM_IOCTL_SET_MASTER, 0) < 0) {
-		perror("issuer DRM_IOCTL_SET_MASTER after delegated grant");
+		perror("issuer DRM_IOCTL_SET_MASTER after delegated stream");
 		goto out;
 	}
 	if (expect_holder_state(normal_fd, normal_id,
@@ -922,6 +1016,8 @@ int main(int argc, char **argv)
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_DELEGATED))
 		goto out;
+	printf("grant_delegated_stream_cleanup=pass\n");
+
 	if (create_grant(issuer, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS |
 			 DRM_CASTKMS_GRANT_READ_CURSOR,
@@ -929,8 +1025,10 @@ int main(int argc, char **argv)
 			 &admin_fd, &admin_id) ||
 	    expect_holder_state(admin_fd, admin_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
-				DRM_CASTKMS_GRANT_FLAG_ADMIN))
+				DRM_CASTKMS_GRANT_FLAG_ADMIN) ||
+	    prepare_capture_stream(admin_fd, &display, &admin_stream))
 		goto out;
+	printf("grant_admin_stream_before_handoff=pass\n");
 
 	if (ioctl(issuer, DRM_IOCTL_DROP_MASTER, 0) < 0) {
 		perror("issuer DRM_IOCTL_DROP_MASTER");
@@ -985,6 +1083,8 @@ int main(int argc, char **argv)
 	    expect_holder_state(
 		    master_b_grant_fd, master_b_grant_id,
 		    DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT, 0) ||
+	    expect_capture_start_errno(master_b_grant_fd, display.crtc_id,
+				       ESTALE) ||
 	    test_crc_access(master_b, EACCES) ||
 	    expect_foreign_writeback_denied(master_b, &display))
 		goto out;
@@ -1005,6 +1105,7 @@ int main(int argc, char **argv)
 		goto out;
 	if (test_crc_access(master_b, 0))
 		goto out;
+	printf("grant_admin_stream_handoff=pass\n");
 	printf("grant_new_master_content=pass\n");
 
 	close(master_b_grant_fd);
@@ -1026,6 +1127,7 @@ int main(int argc, char **argv)
 	    expect_holder_state(admin_fd, admin_id,
 				DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN) ||
+	    expect_capture_start_errno(normal_fd, display.crtc_id, ESTALE) ||
 	    set_display_framebuffer(issuer, connector_id, &display,
 				    &display.source) ||
 	    expect_holder_state(normal_fd, normal_id,

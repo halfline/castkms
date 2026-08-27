@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+struct drm_castkms_capture_start;
+
 struct castkms_test_framebuffer {
 	uint32_t handle;
 	uint32_t fb_id;
@@ -23,4 +25,6 @@ void castkms_test_framebuffer_unmap(struct castkms_test_framebuffer *buffer);
 void castkms_test_framebuffer_destroy(int fd,
 				      struct castkms_test_framebuffer *buffer);
 
+int castkms_test_capture_start(int fd, uint32_t crtc_id, uint32_t flags,
+			       struct drm_castkms_capture_start *start);
 #endif /* CASTKMS_TEST_DRM_H */

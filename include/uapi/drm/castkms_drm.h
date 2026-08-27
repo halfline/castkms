@@ -259,6 +259,32 @@ struct drm_castkms_capture_query_caps {
 };
 
 /**
+ * DRM_CASTKMS_CAPTURE_START_EXCLUSIVE:
+ *
+ * Request exclusive capture ownership of the selected CRTC.
+ */
+#define DRM_CASTKMS_CAPTURE_START_EXCLUSIVE	(1U << 0)
+
+/**
+ * struct drm_castkms_capture_start - start an exclusive capture stream
+ * @crtc_id: DRM object ID of the CRTC to observe
+ * @flags: must be DRM_CASTKMS_CAPTURE_START_EXCLUSIVE
+ * @stream_id: file-local stream identifier returned by the driver
+ * @reserved: must be zero
+ * @mode_generation: current CRTC mode generation returned by the driver
+ *
+ * Starting capture does not activate or otherwise change the selected CRTC.
+ * Only one live capture stream may own a CRTC at a time.
+ */
+struct drm_castkms_capture_start {
+	__u32 crtc_id;
+	__u32 flags;
+	__u32 stream_id;
+	__u32 reserved;
+	__u64 mode_generation;
+};
+
+/**
  * DRM_CASTKMS_CAPTURE_EVENT_GRANT_REVOKED:
  *
  * Reliable notification that a grant has become permanently inert. This is
@@ -304,6 +330,7 @@ struct drm_event_castkms_grant_state {
 };
 
 #define DRM_CASTKMS_CAPTURE_QUERY_CAPS	0x00
+#define DRM_CASTKMS_CAPTURE_START	0x01
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
 #define DRM_CASTKMS_GET_GRANT			0x13
@@ -311,6 +338,9 @@ struct drm_event_castkms_grant_state {
 #define DRM_IOCTL_CASTKMS_CAPTURE_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_QUERY_CAPS, \
 		 struct drm_castkms_capture_query_caps)
+#define DRM_IOCTL_CASTKMS_CAPTURE_START \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_START, \
+		 struct drm_castkms_capture_start)
 #define DRM_IOCTL_CASTKMS_CREATE_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
 		 struct drm_castkms_create_grant)
