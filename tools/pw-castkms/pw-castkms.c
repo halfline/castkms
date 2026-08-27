@@ -164,18 +164,15 @@ static int build_output_edid(const struct options *options,
 
 	if (options->edid_path)
 		return read_edid_file(options->edid_path, data, size);
-	if (!options->monitor_name) {
-		*data = NULL;
-		*size = 0;
-		return 0;
-	}
 
 	generated = malloc(CASTKMS_EDID_BLOCK);
 	if (!generated)
 		return -ENOMEM;
 	result = castkms_fill_named_edid(generated, options->monitor_name);
 	if (result < 0) {
-		fprintf(stderr, "monitor name must be at most 13 characters\n");
+		fprintf(stderr, "%s\n", options->monitor_name ?
+			"monitor name must be at most 13 characters" :
+			"failed to build default output EDID");
 		free(generated);
 		return result;
 	}
