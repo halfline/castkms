@@ -220,7 +220,8 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 
 static const struct drm_driver castkms_driver = {
 	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM |
-				  DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE,
+			  DRIVER_SYNCOBJ | DRIVER_SYNCOBJ_TIMELINE |
+			  DRIVER_CURSOR_HOTSPOT,
 	.ioctls			= castkms_ioctls,
 	.num_ioctls		= ARRAY_SIZE(castkms_ioctls),
 	.open			= castkms_file_open,

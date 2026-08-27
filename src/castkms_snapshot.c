@@ -256,6 +256,7 @@ castkms_frame_snapshot_create(const struct castkms_frame_stage *frame)
 
 	kref_init(&snapshot->refcount);
 	snapshot->frame = *frame;
+	snapshot->frame.cursor = (struct castkms_cursor_snapshot) {};
 	snapshot->frame.num_planes = 0;
 	snapshot->frame.gamma_lut = (struct castkms_color_lut) {};
 

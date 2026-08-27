@@ -120,6 +120,27 @@ struct castkms_color_lut {
 };
 
 /**
+ * struct castkms_cursor_snapshot - Cursor metadata for one frame
+ * @visible: Whether the cursor is visible
+ * @x: Output x coordinate
+ * @y: Output y coordinate
+ * @hotspot_x: Hotspot x coordinate within the cursor image
+ * @hotspot_y: Hotspot y coordinate within the cursor image
+ * @width: Cursor image width
+ * @height: Cursor image height
+ * @serial: Image-state generation, excluding position-only movement
+ * @fb: Optional refcounted cursor image framebuffer
+ */
+struct castkms_cursor_snapshot {
+	bool visible;
+	s32 x, y;
+	s32 hotspot_x, hotspot_y;
+	u32 width, height;
+	u32 serial;
+	struct drm_framebuffer *fb;
+};
+
+/**
  * struct castkms_frame_stage - Complete renderer input for one frame
  * @planes: Render planes in normalized z-order
  * @num_planes: Number of entries in @planes
@@ -129,6 +150,7 @@ struct castkms_color_lut {
  * @background_color: Background fill color
  * @damage: Bounding box of frame damage in output coordinates
  * @full_damage: Whether @damage covers the complete output
+ * @cursor: Cursor metadata and optional image framebuffer
  *
  * A frame stage contains no DRM atomic state. Live commits and owned capture
  * snapshots both produce it, and the renderer consumes only this interface.
@@ -142,6 +164,7 @@ struct castkms_frame_stage {
 	u64 background_color;
 	struct drm_rect damage;
 	bool full_damage;
+	struct castkms_cursor_snapshot cursor;
 };
 
 #endif /* _CASTKMS_FRAME_H_ */
