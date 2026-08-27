@@ -38,6 +38,10 @@ an ordinary primary-node client cannot create one. The returned descriptor is
 a fresh, unauthenticated DRM file that cannot become master, may be passed with
 `SCM_RIGHTS`, and owns the grant until its final close.
 
+For lab work, `castkms-grant-launch` can issue an administrative grant; a
+production compositor should instead issue a normal grant bound to its own
+DRM master.
+
 A grant with `MANAGE_ATTACHMENT` may call `ATTACH_MONITOR` for its connector.
 The operation changes a disconnected virtual port into a connected monitor,
 optionally publishes its EDID, and emits the standard KMS hotplug event. Grant
@@ -54,6 +58,15 @@ make tools
 
 `make check` builds that probe, checks shell and architecture rules, and runs
 its command-line smoke test without requiring a loaded device.
+
+`castkms-grant-launch` creates an administrative grant and passes it to a
+child. Use it in the VM and in the lab; a production compositor should issue a
+normal grant instead:
+
+```sh
+sudo ./tools/castkms-grant-launch /dev/dri/cardN CONNECTOR-ID -- \
+  ./tools/castkms-capture-test /dev/dri/cardN CRTC-ID
+```
 
 ## PipeWire video
 

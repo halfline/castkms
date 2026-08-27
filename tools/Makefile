@@ -9,8 +9,8 @@ ALSA_LIBS := $(shell pkg-config --libs alsa 2>/dev/null)
 
 .PHONY: all check clean
 
-all: castkms-capture-test castkms-grant-test castkms-attach \
-	castkms-edid-test castkms-cec-test
+all: castkms-capture-test castkms-grant-launch castkms-grant-test \
+	castkms-attach castkms-edid-test castkms-cec-test
 	$(MAKE) -C pw-castkms
 ifneq ($(ALSA_LIBS),)
 	$(MAKE) castkms-audio-test
@@ -28,6 +28,12 @@ castkms-grant-test: castkms-grant-test.c \
 		../include/uapi/drm/castkms_drm.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ \
 		castkms-grant-test.c castkms-test-drm.c
+
+castkms-grant-launch: castkms-grant-launch.c \
+		castkms-test-drm.c castkms-test-drm.h \
+		../include/uapi/drm/castkms_drm.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ \
+		castkms-grant-launch.c castkms-test-drm.c
 
 castkms-attach: castkms-attach.c \
 		castkms-test-drm.c castkms-test-drm.h \
@@ -47,6 +53,7 @@ castkms-cec-test: castkms-cec-test.c castkms-test-drm.c castkms-test-drm.h \
 
 check: all
 	./castkms-capture-test -h >/dev/null 2>&1
+	./castkms-grant-launch -h >/dev/null 2>&1
 	./castkms-grant-test -h >/dev/null 2>&1
 	./castkms-attach -h >/dev/null 2>&1
 	./castkms-cec-test -h >/dev/null 2>&1
@@ -61,6 +68,7 @@ castkms-audio-test: castkms-audio-test.c
 		-o $@ $< $(ALSA_LIBS) -lm
 
 clean:
-	$(RM) castkms-capture-test castkms-grant-test castkms-attach \
-		castkms-edid-test castkms-cec-test castkms-audio-test
+	$(RM) castkms-capture-test castkms-grant-launch castkms-grant-test \
+		castkms-attach castkms-edid-test castkms-cec-test \
+		castkms-audio-test
 	$(MAKE) -C pw-castkms clean
