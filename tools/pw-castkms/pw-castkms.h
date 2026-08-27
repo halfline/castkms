@@ -11,11 +11,47 @@
 
 #include <pipewire/pipewire.h>
 
+#define PW_CASTKMS_BUFFER_LIMIT 4U
+
+/*
+ * A destination moves through this cycle:
+ *
+ *   IN_PIPEWIRE -> AVAILABLE -> QUEUED -> READY -> IN_PIPEWIRE
+ *
+ * PipeWire returns an IN_PIPEWIRE buffer to the producer. CastKMS captures
+ * into an AVAILABLE buffer after it is QUEUED. A frame event makes it READY,
+ * and publishing the completed buffer gives it back to PipeWire.
+ */
+enum capture_buffer_state {
+	CAPTURE_BUFFER_IN_PIPEWIRE,
+	CAPTURE_BUFFER_AVAILABLE,
+	CAPTURE_BUFFER_QUEUED,
+	CAPTURE_BUFFER_READY,
+};
+
 struct captured_frame {
 	uint64_t sequence;
 	int64_t timestamp_ns;
 	uint32_t flags;
 	uint32_t dropped_frames;
+};
+
+struct capture_buffer {
+	/* GEM and framebuffer objects live in the DRM file's private namespace. */
+	uint32_t gem_handle;
+	uint32_t fb_id;
+	uint32_t pitch;
+	uint64_t size;
+	int dmabuf_fd;
+
+	/* CastKMS registration and queue identity. */
+	uint32_t buffer_id;
+	uint64_t user_data;
+
+	/* PipeWire association and the shared ownership state machine. */
+	struct pw_buffer *pipewire_buffer;
+	enum capture_buffer_state state;
+	struct captured_frame frame;
 };
 
 struct pw_castkms {
@@ -32,6 +68,16 @@ struct pw_castkms {
 	uint32_t refresh;
 	bool attached_here;
 
+	/* Active CastKMS capture stream and its destination pool. */
+	uint64_t capture_caps;
+	uint32_t max_registered_buffers;
+	uint32_t stream_id;
+	uint64_t mode_generation;
+	bool capture_active;
+	struct capture_buffer buffers[PW_CASTKMS_BUFFER_LIMIT];
+	uint32_t buffer_count;
+	uint64_t user_data_sequence;
+
 	/* Process lifetime and diagnostics. */
 	bool failed;
 	bool shutting_down;
@@ -42,5 +88,27 @@ struct pw_castkms {
 
 void pw_castkms_fail(struct pw_castkms *bridge, const char *operation,
 		     int status);
+
+/* CastKMS device, output, stream, and event handling. */
+int castkms_open_device(struct pw_castkms *bridge, const char *device_path);
+int castkms_configure_output(struct pw_castkms *bridge,
+			     uint32_t preferred_crtc,
+			     const void *edid, uint32_t edid_size);
+int castkms_start_capture(struct pw_castkms *bridge);
+int castkms_stop_capture(struct pw_castkms *bridge);
+void castkms_close(struct pw_castkms *bridge);
+void castkms_on_fd_ready(void *data, int fd, uint32_t mask);
+
+/* DRM destination allocation and ownership transitions. */
+struct capture_buffer *
+castkms_find_buffer_by_pipewire(struct pw_castkms *bridge,
+			       struct pw_buffer *pipewire_buffer);
+struct capture_buffer *
+castkms_find_buffer_by_id(struct pw_castkms *bridge, uint32_t buffer_id);
+int castkms_create_destination(struct pw_castkms *bridge,
+			       struct capture_buffer *buffer);
+int castkms_destroy_destination(struct pw_castkms *bridge,
+				struct capture_buffer *buffer);
+void castkms_queue_available(struct pw_castkms *bridge);
 
 #endif /* PW_CASTKMS_H */
