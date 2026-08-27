@@ -69,7 +69,11 @@ struct castkms_cec_transport_ops {
  * @state_generation: Generation of the complete state snapshot
  * @pending_cookie: Outstanding outbound transaction, or zero
  * @stats_tx_submitted: Transactions submitted to the transport
+ * @stats_tx_completed: Successful transmit completions
+ * @stats_tx_nack: NACK transmit completions
+ * @stats_tx_error: Other transmit errors
  * @stats_tx_timeout: Timed-out transactions
+ * @stats_invalid: Rejected transport requests
  * @phys_addr: Current EDID-derived physical address
  * @logical_addr_mask: Logical addresses assigned by the CEC core
  * @transport_online: Whether the transport is accepting transactions
@@ -81,7 +85,11 @@ struct castkms_cec_state {
 	u64 state_generation;
 	u64 pending_cookie;
 	u64 stats_tx_submitted;
+	u64 stats_tx_completed;
+	u64 stats_tx_nack;
+	u64 stats_tx_error;
 	u64 stats_tx_timeout;
+	u64 stats_invalid;
 	u16 phys_addr;
 	u16 logical_addr_mask;
 	bool transport_online;
@@ -103,8 +111,36 @@ int castkms_cec_core_unbind(struct castkms_cec_output *output,
 int castkms_cec_core_set_online(struct castkms_cec_output *output,
 				struct castkms_capture_authority *authority,
 				u64 transport_generation, bool online);
+int castkms_cec_core_tx_complete(struct castkms_cec_output *output,
+				 struct castkms_capture_authority *authority,
+				 u64 transport_generation, u64 cookie, u8 status,
+				 u8 arb_lost_cnt, u8 nack_cnt, u8 low_drive_cnt,
+				 u8 error_cnt);
 int castkms_cec_core_get_state(struct castkms_cec_output *output,
 			       struct castkms_capture_authority *authority,
 			       struct castkms_cec_state *state);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+/**
+ * struct castkms_cec_test_ops - notifications observed by the fake CEC sink
+ * @tx_done: A transaction completed, timed out, or was aborted
+ */
+struct castkms_cec_test_ops {
+	void (*tx_done)(void *data, u8 status, u8 arb_lost_cnt, u8 nack_cnt,
+			u8 low_drive_cnt, u8 error_cnt);
+};
+
+struct castkms_cec_output *
+castkms_cec_core_test_output_create(struct castkms_connector *connector,
+				    const struct castkms_cec_test_ops *ops,
+				    void *data);
+void castkms_cec_core_test_output_destroy(struct castkms_cec_output *output);
+int castkms_cec_core_test_enable(struct castkms_cec_output *output,
+				 bool enable);
+int castkms_cec_core_test_transmit(struct castkms_cec_output *output,
+				   u8 attempts, u32 signal_free_time,
+				   const u8 *message, u8 length);
+void castkms_cec_core_test_timeout(struct castkms_cec_output *output);
+#endif
 
 #endif /* _CASTKMS_CEC_CORE_H_ */

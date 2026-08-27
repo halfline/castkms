@@ -2,6 +2,7 @@
 
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
@@ -12,6 +13,8 @@
 #include <drm/display/drm_hdmi_cec_helper.h>
 
 #include <media/cec.h>
+
+#include <kunit/visibility.h>
 
 #include "castkms_capture_authority.h"
 #include "castkms_cec_core.h"
@@ -58,7 +61,11 @@ struct castkms_cec_transport {
  * @pending_msg: Pending outbound CEC message bytes
  * @tx_timeout_work: Completes abandoned transactions
  * @stats_tx_submitted: Transactions submitted to the transport
+ * @stats_tx_completed: Successful transmit completions
+ * @stats_tx_nack: NACK transmit completions
+ * @stats_tx_error: Other transmit errors
  * @stats_tx_timeout: Timed-out transactions
+ * @stats_invalid: Rejected transport requests
  */
 struct castkms_cec_output {
 	struct castkms_connector *connector;
@@ -84,7 +91,16 @@ struct castkms_cec_output {
 	struct delayed_work tx_timeout_work;
 
 	u64 stats_tx_submitted;
+	u64 stats_tx_completed;
+	u64 stats_tx_nack;
+	u64 stats_tx_error;
 	u64 stats_tx_timeout;
+	u64 stats_invalid;
+
+#if IS_ENABLED(CONFIG_KUNIT)
+	const struct castkms_cec_test_ops *test_ops;
+	void *test_data;
+#endif
 };
 
 static struct castkms_cec_output *
@@ -143,6 +159,15 @@ static void castkms_cec_core_tx_done(struct castkms_cec_output *output,
 				     u8 nack_cnt, u8 low_drive_cnt,
 				     u8 error_cnt)
 {
+#if IS_ENABLED(CONFIG_KUNIT)
+	if (output->test_ops) {
+		if (output->test_ops->tx_done)
+			output->test_ops->tx_done(output->test_data, status,
+					      arb_lost_cnt, nack_cnt,
+					      low_drive_cnt, error_cnt);
+		return;
+	}
+#endif
 	drm_connector_hdmi_cec_transmit_done(&output->connector->base,
 					     status, arb_lost_cnt, nack_cnt,
 					     low_drive_cnt, error_cnt);
@@ -338,7 +363,11 @@ static void castkms_cec_copy_state(struct castkms_cec_output *output,
 	state->state_generation = output->state_generation;
 	state->pending_cookie = output->pending_cookie;
 	state->stats_tx_submitted = output->stats_tx_submitted;
+	state->stats_tx_completed = output->stats_tx_completed;
+	state->stats_tx_nack = output->stats_tx_nack;
+	state->stats_tx_error = output->stats_tx_error;
 	state->stats_tx_timeout = output->stats_tx_timeout;
+	state->stats_invalid = output->stats_invalid;
 	state->phys_addr =
 		output->connector->base.display_info.source_physical_address;
 	state->logical_addr_mask = output->logical_addr_mask;
@@ -489,6 +518,7 @@ out_free:
 	kfree(transport);
 	return ret;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_bind);
 
 int castkms_cec_core_unbind(struct castkms_cec_output *output,
 			    struct castkms_capture_authority *authority,
@@ -534,6 +564,7 @@ int castkms_cec_core_unbind(struct castkms_cec_output *output,
 	castkms_cec_core_finish_cleanup(output, transport, aborted, true);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_unbind);
 
 int castkms_cec_core_set_online(struct castkms_cec_output *output,
 				struct castkms_capture_authority *authority,
@@ -577,6 +608,57 @@ int castkms_cec_core_set_online(struct castkms_cec_output *output,
 		castkms_cec_core_finish_cleanup(output, transport, aborted, false);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_set_online);
+
+int castkms_cec_core_tx_complete(struct castkms_cec_output *output,
+				 struct castkms_capture_authority *authority,
+				 u64 transport_generation, u64 cookie, u8 status,
+				 u8 arb_lost_cnt, u8 nack_cnt, u8 low_drive_cnt,
+				 u8 error_cnt)
+{
+	struct castkms_cec_transport *transport;
+	unsigned long flags;
+	int ret = 0;
+
+	if (!output)
+		return -ENOENT;
+	spin_lock_irqsave(&output->lock, flags);
+	transport = output->transport;
+	if (!transport || transport->authority != authority) {
+		output->stats_invalid++;
+		ret = -EACCES;
+		goto out_unlock;
+	}
+	if (transport->generation != transport_generation) {
+		output->stats_invalid++;
+		ret = -ESTALE;
+		goto out_unlock;
+	}
+	if (!output->pending_cookie || output->pending_cookie != cookie) {
+		output->stats_invalid++;
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	output->pending_cookie = 0;
+	if (status & CEC_TX_STATUS_OK)
+		output->stats_tx_completed++;
+	else if (status & CEC_TX_STATUS_NACK)
+		output->stats_tx_nack++;
+	else
+		output->stats_tx_error++;
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	cancel_delayed_work_sync(&output->tx_timeout_work);
+	castkms_cec_core_tx_done(output, status, arb_lost_cnt, nack_cnt,
+				 low_drive_cnt, error_cnt);
+	return 0;
+
+out_unlock:
+	spin_unlock_irqrestore(&output->lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_tx_complete);
 
 int castkms_cec_core_get_state(struct castkms_cec_output *output,
 			       struct castkms_capture_authority *authority,
@@ -599,8 +681,86 @@ int castkms_cec_core_get_state(struct castkms_cec_output *output,
 	spin_unlock_irqrestore(&output->lock, flags);
 	return 0;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_get_state);
 
 void castkms_cec_core_suspend_connector(struct drm_connector *connector)
 {
 	(void)connector;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_suspend_connector);
+
+#if IS_ENABLED(CONFIG_KUNIT)
+struct castkms_cec_output *
+castkms_cec_core_test_output_create(struct castkms_connector *connector,
+				    const struct castkms_cec_test_ops *ops,
+				    void *data)
+{
+	struct castkms_cec_output *output;
+
+	if (!connector || !ops)
+		return ERR_PTR(-EINVAL);
+	if (connector->cec)
+		return ERR_PTR(-EBUSY);
+
+	output = kzalloc_obj(*output);
+	if (!output)
+		return ERR_PTR(-ENOMEM);
+	output->connector = connector;
+	spin_lock_init(&output->lock);
+	init_waitqueue_head(&output->transport_wait);
+	INIT_DELAYED_WORK(&output->tx_timeout_work, cec_tx_timeout_work_fn);
+	output->next_cookie = 1;
+	output->test_ops = ops;
+	output->test_data = data;
+	connector->cec = output;
+	return output;
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_test_output_create);
+
+void castkms_cec_core_test_output_destroy(struct castkms_cec_output *output)
+{
+	if (!output)
+		return;
+	if (WARN_ON(output->transport || output->transport_users ||
+		    output->transport_cleanup))
+		return;
+	cancel_delayed_work_sync(&output->tx_timeout_work);
+	output->connector->cec = NULL;
+	kfree(output);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_test_output_destroy);
+
+int castkms_cec_core_test_enable(struct castkms_cec_output *output, bool enable)
+{
+	if (!output)
+		return -ENOENT;
+	return castkms_cec_enable(&output->connector->base, enable);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_test_enable);
+
+int castkms_cec_core_test_transmit(struct castkms_cec_output *output,
+				   u8 attempts, u32 signal_free_time,
+				   const u8 *message, u8 length)
+{
+	struct cec_msg msg = {};
+
+	if (!output)
+		return -ENOENT;
+	if (!message || !length || length > sizeof(msg.msg))
+		return -EINVAL;
+	msg.len = length;
+	memcpy(msg.msg, message, length);
+	return castkms_cec_transmit(&output->connector->base, attempts,
+				    signal_free_time, &msg);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_test_transmit);
+
+void castkms_cec_core_test_timeout(struct castkms_cec_output *output)
+{
+	if (!output)
+		return;
+	cancel_delayed_work_sync(&output->tx_timeout_work);
+	cec_tx_timeout_work_fn(&output->tx_timeout_work.work);
+}
+EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_test_timeout);
+#endif

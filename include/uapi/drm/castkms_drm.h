@@ -863,6 +863,32 @@ struct drm_castkms_cec_set_transport_state {
 	__u32 reserved;
 };
 
+/**
+ * struct drm_castkms_cec_tx_complete - complete an outbound CEC transaction
+ * @connector_id: DRM object ID of the display connector
+ * @transport_id: file-local transport ID from bind
+ * @transport_generation: generation from the TX event
+ * @cookie: transaction cookie from the TX event
+ * @status: Linux CEC transmit status (CEC_TX_STATUS_*)
+ * @arb_lost_cnt: arbitration-lost counter
+ * @nack_cnt: NACK counter
+ * @low_drive_cnt: low-drive counter
+ * @error_cnt: generic error counter
+ * @reserved: must be zero
+ */
+struct drm_castkms_cec_tx_complete {
+	__u32 connector_id;
+	__u32 transport_id;
+	__u64 transport_generation;
+	__u64 cookie;
+	__u8 status;
+	__u8 arb_lost_cnt;
+	__u8 nack_cnt;
+	__u8 low_drive_cnt;
+	__u8 error_cnt;
+	__u8 reserved[3];
+};
+
 
 /* CEC DRM event types */
 #define DRM_CASTKMS_CEC_EVENT_TX	0x80000001U
@@ -904,6 +930,7 @@ struct drm_castkms_cec_event_tx {
 #define DRM_CASTKMS_CEC_BIND_TRANSPORT		0x0b
 #define DRM_CASTKMS_CEC_UNBIND_TRANSPORT	0x0c
 #define DRM_CASTKMS_CEC_SET_TRANSPORT_STATE	0x0d
+#define DRM_CASTKMS_CEC_TX_COMPLETE		0x0e
 
 #define DRM_IOCTL_CASTKMS_CEC_QUERY_CAPS \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_QUERY_CAPS, \
@@ -917,6 +944,9 @@ struct drm_castkms_cec_event_tx {
 #define DRM_IOCTL_CASTKMS_CEC_SET_TRANSPORT_STATE \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_SET_TRANSPORT_STATE, \
 		struct drm_castkms_cec_set_transport_state)
+#define DRM_IOCTL_CASTKMS_CEC_TX_COMPLETE \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CEC_TX_COMPLETE, \
+		struct drm_castkms_cec_tx_complete)
 #if defined(__cplusplus)
 }
 #endif

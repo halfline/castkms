@@ -45,6 +45,7 @@ static_assert(sizeof(struct drm_castkms_cec_bind_transport) == 48);
 static_assert(offsetof(struct drm_castkms_cec_bind_transport, pad0) == 44);
 static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16);
 static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16);
+static_assert(sizeof(struct drm_castkms_cec_tx_complete) == 32);
 static_assert(sizeof(struct drm_castkms_cec_event_tx) == 72);
 
 static struct castkms_cec_output *
@@ -370,6 +371,47 @@ int castkms_cec_set_transport_state_ioctl(struct drm_device *dev, void *data,
 						  state.transport_generation,
 						  args->flags &
 						  DRM_CASTKMS_CEC_TRANSPORT_ONLINE);
+
+	castkms_grant_end(authority);
+	drm_connector_put(connector);
+out_dev:
+	drm_dev_exit(idx);
+	return ret;
+}
+
+int castkms_cec_tx_complete_ioctl(struct drm_device *dev, void *data,
+				  struct drm_file *file_priv)
+{
+	struct drm_castkms_cec_tx_complete *args = data;
+	struct castkms_capture_authority *authority;
+	struct castkms_cec_state state;
+	struct castkms_cec_output *output;
+	struct drm_connector *connector;
+	int idx;
+	int ret;
+
+	if (args->reserved[0] || args->reserved[1] || args->reserved[2] ||
+	    !args->status)
+		return -EINVAL;
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
+
+	output = cec_uapi_lookup_granted(dev, file_priv, args->connector_id,
+					 &connector, &authority);
+	if (IS_ERR(output)) {
+		ret = PTR_ERR(output);
+		goto out_dev;
+	}
+	ret = castkms_cec_uapi_get_transport(output, authority,
+					     args->transport_id, &state);
+	if (!ret)
+		ret = castkms_cec_core_tx_complete(output, authority,
+						   args->transport_generation,
+						   args->cookie, args->status,
+						   args->arb_lost_cnt,
+						   args->nack_cnt,
+						   args->low_drive_cnt,
+						   args->error_cnt);
 
 	castkms_grant_end(authority);
 	drm_connector_put(connector);

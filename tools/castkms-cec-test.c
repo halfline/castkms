@@ -32,6 +32,8 @@ static_assert(sizeof(struct drm_castkms_cec_unbind_transport) == 16,
 	      "cec unbind transport ABI size changed");
 static_assert(sizeof(struct drm_castkms_cec_set_transport_state) == 16,
 	      "cec set transport state ABI size changed");
+static_assert(sizeof(struct drm_castkms_cec_tx_complete) == 32,
+	      "cec tx complete ABI size changed");
 static_assert(sizeof(struct drm_castkms_cec_event_tx) == 72,
 	      "cec event tx ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
@@ -190,6 +192,24 @@ static int cec_set_online(int fd, uint32_t connector_id, uint32_t transport_id,
 }
 
 
+static int cec_tx_complete(int fd, uint32_t connector_id,
+			   uint32_t transport_id, uint64_t generation,
+			   uint64_t cookie, uint8_t status)
+{
+	struct drm_castkms_cec_tx_complete args = {
+		.connector_id = connector_id,
+		.transport_id = transport_id,
+		.transport_generation = generation,
+		.cookie = cookie,
+		.status = status,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CEC_TX_COMPLETE, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
 static int open_cec_adapter(uint32_t connector_id)
 {
 	for (unsigned int index = 0; index < 64; index++) {
@@ -265,6 +285,79 @@ static int read_cec_tx_event(int fd, struct drm_castkms_cec_event_tx *event)
 		}
 	}
 	return -ETIMEDOUT;
+}
+
+static int read_cec_tx_result(int fd, struct cec_msg *message)
+{
+	struct pollfd poll_fd = {
+		.fd = fd,
+		.events = POLLIN,
+	};
+	int ret;
+
+	do {
+		ret = poll(&poll_fd, 1, 3000);
+	} while (ret < 0 && errno == EINTR);
+	if (ret <= 0)
+		return ret ? -errno : -ETIMEDOUT;
+
+	*message = (struct cec_msg) {};
+	if (ioctl(fd, CEC_RECEIVE, message) < 0)
+		return -errno;
+	return 0;
+}
+
+static int configure_cec_adapter(int fd)
+{
+	struct cec_log_addrs addresses = {
+		.cec_version = CEC_OP_CEC_VERSION_2_0,
+		.num_log_addrs = 1,
+		.vendor_id = CEC_VENDOR_ID_NONE,
+	};
+	struct cec_caps caps = {};
+	int flags;
+	int ret = 0;
+
+	if (ioctl(fd, CEC_ADAP_G_CAPS, &caps) < 0)
+		return -errno;
+	if (!(caps.capabilities & CEC_CAP_LOG_ADDRS))
+		return 0;
+
+	addresses.primary_device_type[0] = CEC_OP_PRIM_DEVTYPE_SWITCH;
+	addresses.log_addr_type[0] = CEC_LOG_ADDR_TYPE_UNREGISTERED;
+	addresses.all_device_types[0] = CEC_OP_ALL_DEVTYPE_SWITCH;
+	memcpy(addresses.osd_name, "CastKMS test", sizeof("CastKMS test"));
+
+	/*
+	 * The adapter fd is nonblocking so CEC_TRANSMIT returns a sequence for
+	 * later completion.  Logical-address setup has different semantics in
+	 * that mode: the ioctl returns before the core has installed the address.
+	 * Configure this unregistered switch synchronously, then restore the fd.
+	 */
+	flags = fcntl(fd, F_GETFL);
+	if (flags < 0)
+		return -errno;
+	if (fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) < 0)
+		return -errno;
+	if (ioctl(fd, CEC_ADAP_S_LOG_ADDRS, &addresses) < 0)
+		ret = -errno;
+	if (fcntl(fd, F_SETFL, flags) < 0 && !ret)
+		ret = -errno;
+	if (ret)
+		return ret;
+	if (addresses.num_log_addrs != 1 ||
+	    addresses.log_addr[0] != CEC_LOG_ADDR_UNREGISTERED)
+		return -EPROTO;
+	return 0;
+}
+
+static int unconfigure_cec_adapter(int fd)
+{
+	struct cec_log_addrs addresses = {};
+
+	if (ioctl(fd, CEC_ADAP_S_LOG_ADDRS, &addresses) < 0)
+		return -errno;
+	return 0;
 }
 
 /* --- Tests --- */
@@ -480,7 +573,10 @@ static void test_real_cec_transmit(int fd, uint32_t connector_id)
 	struct drm_castkms_cec_event_tx event = {};
 	struct drm_castkms_cec_bind_transport bind;
 	struct cec_msg message;
+	struct cec_msg result;
 	uint32_t mode = CEC_MODE_INITIATOR;
+	bool adapter_configured = false;
+	bool request_found = false;
 	int cec_fd = -1;
 	int ret;
 
@@ -506,6 +602,14 @@ static void test_real_cec_transmit(int fd, uint32_t connector_id)
 		     strerror(errno));
 		goto out_close;
 	}
+	ret = configure_cec_adapter(cec_fd);
+	if (ret) {
+		FAIL("real_cec_transmit", "CEC adapter setup failed: %s",
+		     strerror(-ret));
+		goto out_close;
+	}
+	adapter_configured = true;
+
 	cec_msg_init(&message, CEC_LOG_ADDR_UNREGISTERED,
 		     CEC_LOG_ADDR_BROADCAST);
 	message.msg[message.len++] = CEC_MSG_REQUEST_ACTIVE_SOURCE;
@@ -519,31 +623,136 @@ static void test_real_cec_transmit(int fd, uint32_t connector_id)
 		goto out_close;
 	}
 
-	ret = read_cec_tx_event(fd, &event);
+	for (unsigned int attempt = 0; attempt < 8; attempt++) {
+		ret = read_cec_tx_event(fd, &event);
+		if (ret) {
+			FAIL("real_cec_transmit", "TX event failed: %s",
+			     strerror(-ret));
+			goto out_close;
+		}
+		if (event.transport_id != bind.transport_id ||
+		    event.transport_generation != bind.transport_generation ||
+		    event.connector_id != connector_id || !event.cookie) {
+			FAIL("real_cec_transmit", "TX event identity mismatch");
+			goto out_close;
+		}
+		if (event.length == 2 && event.msg[0] == 0xff &&
+		    event.msg[1] == CEC_MSG_REQUEST_ACTIVE_SOURCE) {
+			request_found = true;
+			break;
+		}
+
+		/* Complete CEC-core setup traffic before the queued test message. */
+		ret = cec_tx_complete(fd, connector_id, bind.transport_id,
+				      event.transport_generation, event.cookie,
+				      CEC_TX_STATUS_OK);
+		if (ret) {
+			FAIL("real_cec_transmit", "setup TX completion failed: %s",
+			     strerror(-ret));
+			goto out_close;
+		}
+	}
+	if (!request_found) {
+		FAIL("real_cec_transmit", "test TX event was not delivered");
+		goto out_close;
+	}
+
+	ret = cec_tx_complete(fd, connector_id, bind.transport_id,
+			      event.transport_generation, event.cookie,
+			      CEC_TX_STATUS_OK);
 	if (ret) {
-		FAIL("real_cec_transmit", "TX event failed: %s",
+		FAIL("real_cec_transmit", "TX completion failed: %s",
 		     strerror(-ret));
 		goto out_close;
 	}
-	if (event.transport_id != bind.transport_id ||
-	    event.transport_generation != bind.transport_generation ||
-	    event.connector_id != connector_id || !event.cookie) {
-		FAIL("real_cec_transmit", "TX event identity mismatch");
+	ret = read_cec_tx_result(cec_fd, &result);
+	if (ret) {
+		FAIL("real_cec_transmit", "CEC result failed: %s", strerror(-ret));
 		goto out_close;
 	}
-	if (event.length != message.len ||
-	    memcmp(event.msg, message.msg, message.len)) {
-		FAIL("real_cec_transmit", "TX event payload mismatch");
+	if (result.sequence != message.sequence ||
+	    !(result.tx_status & CEC_TX_STATUS_OK)) {
+		FAIL("real_cec_transmit", "CEC completion payload mismatch");
 		goto out_close;
 	}
+	ret = unconfigure_cec_adapter(cec_fd);
+	if (ret) {
+		FAIL("real_cec_transmit", "CEC adapter cleanup failed: %s",
+		     strerror(-ret));
+		goto out_close;
+	}
+	adapter_configured = false;
 
 	PASS("real_cec_transmit");
 
 out_close:
+	if (adapter_configured)
+		(void)unconfigure_cec_adapter(cec_fd);
 	close(cec_fd);
 out_unbind:
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
+
+static void test_tx_complete_no_pending(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("tx_complete_no_pending", "bind failed: %s",
+		     strerror(-ret));
+		return;
+	}
+
+	ret = cec_set_online(fd, connector_id, bind.transport_id, true);
+	if (ret) {
+		FAIL("tx_complete_no_pending", "set_online failed: %s",
+		     strerror(-ret));
+		cec_unbind(fd, connector_id, bind.transport_id);
+		return;
+	}
+
+	/* No TX pending - completing with a bogus cookie should fail */
+	ret = cec_tx_complete(fd, connector_id, bind.transport_id,
+			      bind.transport_generation, 0xdeadbeef, 1);
+	if (ret != -ENOENT) {
+		FAIL("tx_complete_no_pending",
+		     "expected ENOENT, got %s",
+		     ret ? strerror(-ret) : "success");
+	} else {
+		PASS("tx_complete_no_pending");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
+static void test_tx_complete_bad_status(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int ret;
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret) {
+		FAIL("tx_complete_bad_status", "bind failed: %s",
+		     strerror(-ret));
+		return;
+	}
+
+	/* status=0 should be rejected even without a pending TX */
+	ret = cec_tx_complete(fd, connector_id, bind.transport_id,
+			      bind.transport_generation, 1, 0);
+	if (ret != -EINVAL) {
+		FAIL("tx_complete_bad_status",
+		     "expected EINVAL for status=0, got %s",
+		     ret ? strerror(-ret) : "success");
+	} else {
+		PASS("tx_complete_bad_status");
+	}
+
+	cec_unbind(fd, connector_id, bind.transport_id);
+}
+
 
 static void usage(const char *program)
 {
@@ -601,6 +810,8 @@ int main(int argc, char **argv)
 	test_unbind_wrong_owner(fd, connector_id);
 	test_set_transport_online(fd, connector_id);
 	test_real_cec_transmit(fd, connector_id);
+	test_tx_complete_no_pending(fd, connector_id);
+	test_tx_complete_bad_status(fd, connector_id);
 	detach_monitor(fd, connector_id);
 
 	printf("\n%d/%d tests passed\n", tests_pass, tests_run);

@@ -13,3 +13,4 @@ castkms-kunit-tests-y := \
 	castkms_grant_test.o
 
 obj-$(CONFIG_DRM_CASTKMS_KUNIT_TEST) += castkms-kunit-tests.o
+castkms-kunit-tests-y += castkms_cec_test.o
