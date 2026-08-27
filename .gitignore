@@ -9,6 +9,7 @@ Module.symvers
 modules.order
 tools/castkms-grant-test
 tools/castkms-capture-test
+tools/castkms-edid-test
 tools/pw-castkms/pw-castkms
 tools/pw-castkms/pw-castkms-test
 tools/pw-castkms/pw-castkms-view

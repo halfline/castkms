@@ -7,7 +7,8 @@ CPPFLAGS += -I../include/uapi
 
 .PHONY: all check clean
 
-all: castkms-capture-test castkms-grant-test castkms-attach
+all: castkms-capture-test castkms-grant-test castkms-attach \
+	castkms-edid-test
 	$(MAKE) -C pw-castkms
 
 castkms-capture-test: castkms-capture-test.c \
@@ -30,12 +31,17 @@ castkms-attach: castkms-attach.c \
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ \
 		castkms-attach.c castkms-test-drm.c
 
+castkms-edid-test: castkms-edid-test.c virtualscreen-edid.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARN_CFLAGS) -o $@ $<
+
 check: all
 	./castkms-capture-test -h >/dev/null 2>&1
 	./castkms-grant-test -h >/dev/null 2>&1
 	./castkms-attach -h >/dev/null 2>&1
+	./castkms-edid-test
 	$(MAKE) -C pw-castkms check
 
 clean:
-	$(RM) castkms-capture-test castkms-grant-test castkms-attach
+	$(RM) castkms-capture-test castkms-grant-test castkms-attach \
+		castkms-edid-test
 	$(MAKE) -C pw-castkms clean
