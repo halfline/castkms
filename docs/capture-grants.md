@@ -64,7 +64,9 @@ grant would promise authority the driver cannot represent.
 
 A delegated grant retains a reference to that exact `drm_master`. It cannot
 activate for a later login session or a restarted compositor with a new
-master identity.
+master identity. The current compositor may query delegated grants bound to
+itself, so it does not depend on the helper remaining alive. Host root may
+query any grant by its live ID.
 
 An administrative grant follows safe content across compositor handoffs. Root
 may create it while the device is masterless; the grant is then dormant until
@@ -112,6 +114,19 @@ Permanent validity and temporary pixel activation are separate.
 A grant remains valid until final holder-file close or connector/device
 teardown or unplug. Closing its creating file does not affect that lifetime.
 
+`GET_GRANT.state` reports whether pixel capture may proceed. Several states
+turn on *capture-safe content*, pixels the current master owns and may safely
+read, which the **Capture-safe content** section below defines in full:
+
+| State | Meaning |
+|---|---|
+| `PENDING` | No attached, routed, active output is ready yet. |
+| `ACTIVE` | The current master owns a capture-safe composition. |
+| `SUSPENDED_NO_MASTER` | No DRM master is current. |
+| `SUSPENDED_OTHER_MASTER` | A normal or delegated grant's bound master is not current. |
+| `SUSPENDED_FOREIGN_CONTENT` | The authority is current, but residual or mixed-owner pixels are not safe. |
+| `REVOKED` | The grant is permanently inert. |
+
 For a normal or delegated grant, pixel capture is usable only when its bound
 `drm_master` is current and owns safe content on the authorized connector. A
 drop suspends it synchronously. If the same master returns, or returns after an
@@ -120,13 +135,14 @@ safe composition. A compositor restart creates a new master identity and
 cannot revive the old grant. Every capture stream is canceled on master loss
 and must be created again, including streams held by administrative grants.
 
-An administrative grant follows the current master's safe content across
-handoffs rather than suspending merely because the master changes. It still
-cannot capture while there is no current master or while the output contains
-residual foreign content. Non-pixel administrative rights, such as attachment
-or EDID management, remain authorized during a handoff or masterless interval.
+An administrative grant does not enter `SUSPENDED_OTHER_MASTER`; it follows
+the current master's safe content across handoffs. It still cannot capture
+while there is no current master or while the output contains residual foreign
+content. Non-pixel administrative rights, such as attachment or EDID
+management, remain authorized during a handoff or masterless interval.
 
-Grant `fdinfo` reports the most recently reconciled state.
+Grant `fdinfo` reports the most recently reconciled state. Use `GET_GRANT`
+when an authoritative point-in-time state is required.
 
 The direct operation errors are:
 
@@ -196,8 +212,8 @@ walks that list in registration order, so clients must not rely on capture
 cleanup happening before or after CEC cleanup. Cleaning a stream cancels
 queued and in-flight work and places an error on each producer fence. Cleaning
 a CEC binding aborts and unbinds its transport work. A grant fd that remains
-open during device teardown stays usable for ordinary DRM resource release and
-close, but can never regain authority.
+open during device teardown stays usable for state queries, ordinary DRM
+resource release, and close, but can never regain authority.
 
 Temporary foreign-content states leave the stream allocated; queue and vblank
 eligibility checks return or suppress `-ESTALE` work until the composition
@@ -239,8 +255,10 @@ serialized through their hotplug, audio, and CEC side effects.
 CEC teardown blocks replacement binding until any transport callback that is
 preparing a request has retired.
 
-Grant `fdinfo` does not acquire KMS modeset locks. Frame checksumming cannot be
-turned on against unsafe content, vblank does not arm checksum work while
-content is unsafe, and a worker for an old CRTC state rechecks that state's
-owner before publishing a checksum.
+`GET_GRANT` reads connector routing under the interruptible connection mutex
+rather than locking the complete modeset object set. Grant `fdinfo` does not
+acquire KMS modeset locks. Frame checksumming cannot be turned on against
+unsafe content, vblank does not arm checksum work while content is unsafe, and
+a worker for an old CRTC state rechecks that state's owner before publishing a
+checksum.
 CEC-core callbacks do not wait while holding the core adapter mutex.

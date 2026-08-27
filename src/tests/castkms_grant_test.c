@@ -197,6 +197,18 @@ static void castkms_grant_creation_policy(struct kunit *test)
 		-EINVAL);
 }
 
+static void castkms_grant_id_access_policy(struct kunit *test)
+{
+	KUNIT_EXPECT_TRUE(test,
+		castkms_grant_id_access_allowed(true, false, false));
+	KUNIT_EXPECT_TRUE(test,
+		castkms_grant_id_access_allowed(false, true, true));
+	KUNIT_EXPECT_FALSE(test,
+		castkms_grant_id_access_allowed(false, true, false));
+	KUNIT_EXPECT_FALSE(test,
+		castkms_grant_id_access_allowed(false, false, true));
+}
+
 static void castkms_master_cleanup_preserves_current_streams(struct kunit *test)
 {
 	KUNIT_EXPECT_TRUE(test,
@@ -262,6 +274,7 @@ static struct kunit_case castkms_grant_test_cases[] = {
 	KUNIT_CASE(castkms_capture_owner_requires_current_master),
 	KUNIT_CASE(castkms_grant_rejects_lease_master),
 	KUNIT_CASE(castkms_grant_creation_policy),
+	KUNIT_CASE(castkms_grant_id_access_policy),
 	KUNIT_CASE(castkms_master_cleanup_preserves_current_streams),
 	KUNIT_CASE(castkms_admin_stream_expires_after_master_cleanup),
 	KUNIT_CASE(castkms_grant_explicit_revoke_is_terminal),

@@ -99,6 +99,8 @@ bool castkms_crc_enabled(void)
 static const struct drm_ioctl_desc castkms_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(CASTKMS_CREATE_GRANT,
 			  castkms_grant_create_ioctl, 0),
+	DRM_IOCTL_DEF_DRV(CASTKMS_GET_GRANT,
+			  castkms_grant_get_ioctl, 0),
 };
 
 static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)

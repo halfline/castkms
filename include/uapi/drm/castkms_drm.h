@@ -78,6 +78,13 @@ extern "C" {
 	(DRM_CASTKMS_GRANT_CREATE_ADMIN | \
 	 DRM_CASTKMS_GRANT_CREATE_DELEGATED)
 
+/** DRM_CASTKMS_GRANT_FLAG_ADMIN: Grant has roaming administrative semantics. */
+#define DRM_CASTKMS_GRANT_FLAG_ADMIN		(1U << 0)
+/** DRM_CASTKMS_GRANT_FLAG_DELEGATED: Grant is holder-lived and master-bound. */
+#define DRM_CASTKMS_GRANT_FLAG_DELEGATED	(1U << 1)
+#define DRM_CASTKMS_GRANT_FLAGS_MASK \
+	(DRM_CASTKMS_GRANT_FLAG_ADMIN | DRM_CASTKMS_GRANT_FLAG_DELEGATED)
+
 /**
  * struct drm_castkms_create_grant - create a connector-scoped capability fd
  * @connector_id: DRM object ID of a non-writeback CastKMS connector
@@ -115,11 +122,53 @@ struct drm_castkms_create_grant {
 	__u32 fd_flags;
 };
 
+#define DRM_CASTKMS_GRANT_STATE_PENDING			0
+#define DRM_CASTKMS_GRANT_STATE_ACTIVE			1
+#define DRM_CASTKMS_GRANT_STATE_SUSPENDED_NO_MASTER	2
+#define DRM_CASTKMS_GRANT_STATE_SUSPENDED_OTHER_MASTER	3
+#define DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT 4
+#define DRM_CASTKMS_GRANT_STATE_REVOKED			5
+
+/**
+ * struct drm_castkms_get_grant - query a held or otherwise accessible grant
+ * @grant_id: holder input zero/output identity; other caller input identifier
+ * @connector_id: output authorized connector ID
+ * @rights: output DRM_CASTKMS_GRANT_* mask
+ * @state: output DRM_CASTKMS_GRANT_STATE_* value
+ * @flags: must be zero on input; output DRM_CASTKMS_GRANT_FLAG_* mask
+ * @reserved: must be zero on input and is zero on output
+ * @reserved2: must be zero on input and is zero on output
+ *
+ * A holder queries its own grant with @grant_id zero. The current top-level
+ * owner master may query a delegated grant bound to its exact drm_master, and
+ * initial-user-namespace CAP_SYS_ADMIN may query any live grant by ID; another
+ * ordinary DRM file returns -ENODATA. A
+ * normal or delegated suspended grant becomes active again whenever its bound
+ * DRM master returns and reestablishes a capture-safe composition, even after
+ * an intervening owner. A delegated holder reports
+ * DRM_CASTKMS_GRANT_FLAG_DELEGATED. Mode-specific streams must still be
+ * recreated after any master loss. A revoked grant remains queryable but can
+ * never regain authority.
+ */
+struct drm_castkms_get_grant {
+	__u32 grant_id;
+	__u32 connector_id;
+	__u32 rights;
+	__u32 state;
+	__u32 flags;
+	__u32 reserved;
+	__u64 reserved2;
+};
+
 #define DRM_CASTKMS_CREATE_GRANT			0x11
+#define DRM_CASTKMS_GET_GRANT			0x13
 
 #define DRM_IOCTL_CASTKMS_CREATE_GRANT \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CREATE_GRANT, \
 		 struct drm_castkms_create_grant)
+#define DRM_IOCTL_CASTKMS_GET_GRANT \
+	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_GET_GRANT, \
+		 struct drm_castkms_get_grant)
 
 #if defined(__cplusplus)
 }
