@@ -1,0 +1,34 @@
+# Every production C source and header under src/ must have exactly one owner.
+# The architecture check rejects missing, stale, duplicate, and unclassified
+# entries. Keep the layer names stable so dependency rules remain exhaustive.
+
+assembly src/castkms_device.h
+assembly src/castkms_drv.c
+assembly src/castkms_topology.c
+assembly src/castkms_topology.h
+
+capture-core src/castkms_capture.c
+capture-core src/castkms_capture.h
+capture-core src/castkms_capture_output.h
+
+config src/castkms_config.c
+config src/castkms_config.h
+config src/castkms_configfs.c
+config src/castkms_configfs.h
+
+drm-runtime src/castkms_connector.c
+drm-runtime src/castkms_connector.h
+drm-runtime src/castkms_crtc.c
+drm-runtime src/castkms_output.h
+drm-runtime src/castkms_plane.c
+drm-runtime src/castkms_writeback.c
+
+render-core src/castkms_colorop.c
+render-core src/castkms_composer.c
+render-core src/castkms_composer.h
+render-core src/castkms_formats.c
+render-core src/castkms_formats.h
+render-core src/castkms_luts.c
+render-core src/castkms_luts.h
+render-core src/castkms_output_buffer.c
+render-core src/castkms_output_buffer.h
