@@ -14,6 +14,7 @@
 
 struct castkms_output;
 struct castkms_output_buffer;
+struct drm_master;
 struct drm_plane;
 
 /**
@@ -21,6 +22,7 @@ struct drm_plane;
  * @base: Base DRM CRTC state
  * @dispatch_work: Work item that services requested frame consumers
  * @frame: Renderer input produced during atomic check
+ * @capture_owner: Refcounted owner of the content in @frame
  * @active_writeback: Current writeback destination buffer
  * @crc_pending: Whether CRC composition is pending
  * @wb_pending: Whether writeback composition is pending
@@ -35,6 +37,7 @@ struct castkms_crtc_state {
 	struct work_struct dispatch_work;
 
 	struct castkms_frame_stage frame;
+	struct drm_master *capture_owner;
 	struct castkms_output_buffer *active_writeback;
 
 	bool crc_pending;

@@ -30,10 +30,12 @@
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_vblank.h>
 
+#include "castkms_capture_owner.h"
 #include "castkms_config.h"
 #include "castkms_configfs.h"
 #include "castkms_crc.h"
 #include "castkms_drv.h"
+#include "castkms_framebuffer.h"
 
 #define DRIVER_NAME	"castkms"
 #define DRIVER_DESC	"CASTKMS virtual display capture"
@@ -85,6 +87,7 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 	drm_atomic_helper_commit_planes(dev, old_state, 0);
 
 	drm_atomic_helper_commit_modeset_enables(dev, old_state);
+	castkms_capture_owner_publish(old_state);
 
 	drm_atomic_helper_fake_vblank(old_state);
 
@@ -103,6 +106,8 @@ static void castkms_atomic_commit_tail(struct drm_atomic_commit *old_state)
 
 static const struct drm_driver castkms_driver = {
 	.driver_features	= DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_GEM,
+	.master_set		= castkms_capture_owner_master_set,
+	.master_drop		= castkms_capture_owner_master_drop,
 	.fops			= &castkms_driver_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
@@ -136,7 +141,7 @@ static int castkms_atomic_check(struct drm_device *dev, struct drm_atomic_commit
 }
 
 static const struct drm_mode_config_funcs castkms_mode_funcs = {
-	.fb_create = drm_gem_fb_create,
+	.fb_create = castkms_framebuffer_create,
 	.atomic_check = castkms_atomic_check,
 	.atomic_commit = drm_atomic_helper_commit,
 };
@@ -173,6 +178,15 @@ static int castkms_modeset_init(struct castkms_device *castkmsdev)
 	return castkms_output_init(castkmsdev);
 }
 
+static void castkms_capture_owner_fini_action(struct drm_device *dev,
+					      void *data)
+{
+	struct castkms_device *castkmsdev = data;
+
+	(void)dev;
+	castkms_capture_owner_device_fini(castkmsdev);
+}
+
 int castkms_create(struct castkms_config *config)
 {
 	int ret;
@@ -202,6 +216,12 @@ int castkms_create(struct castkms_config *config)
 	castkms_device->faux_dev = fdev;
 	castkms_device->config = config;
 	config->dev = castkms_device;
+	castkms_capture_owner_device_init(castkms_device, NULL, NULL);
+	ret = drmm_add_action_or_reset(&castkms_device->drm,
+				       castkms_capture_owner_fini_action,
+				       castkms_device);
+	if (ret)
+		goto out_devres;
 
 	ret = dma_coerce_mask_and_coherent(castkms_device->drm.dev,
 					   DMA_BIT_MASK(64));

@@ -14,6 +14,7 @@
 #include "castkms_frame_dispatch_demand.h"
 
 struct castkms_crtc_state;
+struct drm_master;
 struct workqueue_struct;
 
 /**
@@ -26,6 +27,9 @@ struct workqueue_struct;
  * @dispatch_demand: Consumers keeping frame dispatch active
  * @dispatch_state: Current state assigned to the dispatch worker
  * @dispatch_lock: Protects per-frame pending flags and worker fields
+ * @capture_owner: Refcounted owner of the currently presented content
+ * @capture_owner_generation: Monotonic presented-content generation
+ * @capture_owner_updating: Whether an atomic commit is replacing content
  *
  * Lock ordering (outermost first):
  *
@@ -43,6 +47,9 @@ struct castkms_output {
 	struct castkms_crtc_state *dispatch_state;
 
 	spinlock_t dispatch_lock; /* Protects pending frame consumers. */
+	struct drm_master *capture_owner;
+	u64 capture_owner_generation;
+	bool capture_owner_updating;
 };
 
 #define drm_crtc_to_castkms_output(target) \

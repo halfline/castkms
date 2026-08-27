@@ -13,6 +13,7 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_writeback.h>
 
+#include "castkms_capture_owner.h"
 #include "castkms_frame.h"
 #include "castkms_crtc.h"
 #include "castkms_output.h"
@@ -44,11 +45,13 @@ struct castkms_config_plane;
  * @config: Configuration used in this CASTKMS device. Runtime callbacks must
  *          hold a drm_dev_enter() reference while accessing it because its
  *          configfs owner may release it after unplug.
+ * @capture_owners: Device-global DRM ownership facts for composed content
  */
 struct castkms_device {
 	struct drm_device drm;
 	struct faux_device *faux_dev;
 	struct castkms_config *config;
+	struct castkms_capture_owner_state capture_owners;
 };
 
 /*

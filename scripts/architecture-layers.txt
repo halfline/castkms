@@ -7,6 +7,9 @@ assembly src/castkms_drv.c
 assembly src/castkms_topology.c
 assembly src/castkms_topology.h
 
+authority-core src/castkms_capture_owner.c
+authority-core src/castkms_capture_owner.h
+
 capture-core src/castkms_capture.c
 capture-core src/castkms_capture.h
 capture-core src/castkms_capture_output.h
@@ -24,6 +27,8 @@ drm-runtime src/castkms_crtc.h
 drm-runtime src/castkms_frame_dispatch.c
 drm-runtime src/castkms_frame_dispatch.h
 drm-runtime src/castkms_frame_dispatch_demand.h
+drm-runtime src/castkms_framebuffer.c
+drm-runtime src/castkms_framebuffer.h
 drm-runtime src/castkms_output.h
 drm-runtime src/castkms_plane.c
 drm-runtime src/castkms_plane.h

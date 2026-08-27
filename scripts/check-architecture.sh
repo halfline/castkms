@@ -27,6 +27,10 @@ reject 'pixel composer coordinates mutable frame consumers' \
 	'castkms_capture|castkms_capture_owner|castkms_crtc|castkms_frame_dispatch|drm_writeback|drm_crtc_add_crc' \
 	src/castkms_composer.c src/castkms_composer.h
 
+reject 'ownership tracker imports authority policy' \
+	'castkms_capture_authority|reconcile_ownership' \
+	src/castkms_capture_owner.c src/castkms_capture_owner.h
+
 rg -q '^castkms_colorop_snapshot_init\(' src/castkms_colorop.c
 reject 'plane layer owns color-operation snapshots' \
 	'^castkms_colorop_snapshot_init\(' \

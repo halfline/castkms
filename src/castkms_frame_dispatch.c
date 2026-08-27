@@ -11,6 +11,7 @@
 
 #include <kunit/visibility.h>
 
+#include "castkms_capture_owner.h"
 #include "castkms_composer.h"
 #include "castkms_crc.h"
 #include "castkms_crtc.h"
@@ -75,7 +76,9 @@ void castkms_frame_dispatch_worker(struct work_struct *work)
 		drm_writeback_signal_completion(&out->wb_connector, wb_ret);
 	}
 
-	if (ret || !crc_pending)
+	if (ret || !crc_pending ||
+	    !castkms_capture_owner_is_active_current(
+		    crtc->dev, crtc_state->capture_owner))
 		return;
 
 	while (frame_start <= frame_end)
