@@ -253,21 +253,26 @@ provision()
 
 sync_source()
 {
+	local sync_tree
+
 	vm_running || die 'VM is not running; run provision first'
 	wait_for_ssh
+	require_command git
+	require_command rsync
+	sync_tree=$(mktemp -d)
+	mkdir "$sync_tree/source"
+	if ! git -C "$REPO_DIR" \
+		ls-files --cached --others --exclude-standard -z | \
+		rsync -a --from0 --files-from=- --ignore-missing-args \
+			"$REPO_DIR/" "$sync_tree/source/"; then
+		rm -rf -- "$sync_tree"
+		die 'could not construct the Git source manifest'
+	fi
 	ssh_guest mkdir -p "$GUEST_REPO"
-	rsync -az --delete --delete-excluded \
+	rsync -az --delete \
 		-e "ssh ${SSH_OPTIONS[*]}" \
-		--exclude .git/ \
-		--exclude '*.ko' \
-		--exclude '*.mod' \
-		--exclude '*.mod.c' \
-		--exclude '*.o' \
-		--exclude '.*.cmd' \
-		--exclude Module.symvers \
-		--exclude modules.order \
-		--exclude test-results/ \
-		"$REPO_DIR/" "$SSH_USER@127.0.0.1:$GUEST_REPO/"
+		"$sync_tree/source/" "$SSH_USER@127.0.0.1:$GUEST_REPO/"
+	rm -rf -- "$sync_tree"
 	printf 'Source synchronized to %s:%s\n' "$INSTANCE_NAME" "$GUEST_REPO"
 }
 
