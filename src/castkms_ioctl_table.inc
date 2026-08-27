@@ -23,6 +23,8 @@ CASTKMS_PRIVATE_IOCTL(CASTKMS_CAPTURE_SET_OUTPUT_EDID,
 			     castkms_capture_set_output_edid_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_CAPTURE_ATTACH_MONITOR,
 			     castkms_capture_attach_monitor_ioctl, ALLOWED)
+CASTKMS_PRIVATE_IOCTL(CASTKMS_CAPTURE_DETACH_MONITOR,
+			     castkms_capture_detach_monitor_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_CAPTURE_READ_CURSOR_BITMAP,
 			     castkms_capture_read_cursor_bitmap_ioctl, ALLOWED)
 CASTKMS_PRIVATE_IOCTL(CASTKMS_CREATE_GRANT,

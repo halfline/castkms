@@ -90,6 +90,17 @@ static int attach_monitor(int fd, uint32_t connector_id,
 	return 0;
 }
 
+static int detach_monitor(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_capture_detach_monitor detach = {
+		.connector_id = connector_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR, &detach) < 0)
+		return -errno;
+	return 0;
+}
+
 static int connector_is_connected(int fd, uint32_t connector_id)
 {
 	struct drm_mode_get_connector connector = {
@@ -146,11 +157,16 @@ int main(int argc, char **argv)
 	}
 	if (connector_is_connected(fd, connector_id)) {
 		fprintf(stderr, "attached connector is not connected\n");
-		goto out_close;
+		goto out_detach;
 	}
 
 	ret = EXIT_SUCCESS;
 
+out_detach:
+	if (detach_monitor(fd, connector_id) && ret == EXIT_SUCCESS) {
+		perror("DETACH_MONITOR");
+		ret = EXIT_FAILURE;
+	}
 out_close:
 	close(fd);
 	return ret;

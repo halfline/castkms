@@ -70,7 +70,8 @@ extern "C" {
 /**
  * DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT:
  *
- * Permit monitor attachment for the connector named by the grant.
+ * Permit monitor attachment and detachment for the connector named by the
+ * grant.
  */
 #define DRM_CASTKMS_GRANT_MANAGE_ATTACHMENT	(1U << 1)
 
@@ -445,8 +446,9 @@ struct drm_castkms_capture_queue_buffer {
  * it owns an attachment on this connector. The driver copies and validates the
  * blob, updates the connector, and emits a standard KMS hotplug so compositors
  * reread identity and modes. Call again when the sink identity changes. A
- * zero-length blob clears the published EDID while retaining the attachment.
- * Stream stop leaves the attachment and EDID in place.
+ * zero-length blob clears the published EDID without detaching. Stream stop
+ * leaves the attachment and EDID in place. DETACH_MONITOR or grant revocation
+ * unplugs the monitor and clears the EDID.
  *
  * This ioctl is fire-and-forget. Capture completion events do not report
  * EDID changes; the client is the source of truth and already knows what it
@@ -476,7 +478,8 @@ struct drm_castkms_capture_set_output_edid {
  * The default device publishes a fixed set of disconnected virtual ports at
  * load. This ioctl is the plug-in: the connector becomes connected, the
  * optional EDID is published, and a standard KMS hotplug is emitted. The
- * calling grant owns the attachment.
+ * calling grant owns the attachment until DETACH_MONITOR, revocation, or final
+ * holder close.
  *
  * When setting an EDID, @edid_size must be a non-zero multiple of 128 and at
  * most DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE. Invalid EDIDs return -EINVAL. A
@@ -489,6 +492,23 @@ struct drm_castkms_capture_attach_monitor {
 	__u32 edid_size;
 	__u32 reserved;
 	__u64 edid_ptr;
+};
+
+/**
+ * struct drm_castkms_capture_detach_monitor - unplug a sink from a connector
+ * @connector_id: DRM object ID of the display connector
+ * @flags: must be zero
+ * @reserved: must be zero
+ *
+ * Clears the published EDID, marks the connector disconnected, and emits a
+ * standard KMS hotplug. Only the attachment-owning grant may detach. A
+ * connector that is not attached returns -ENOTCONN. A connector attached by
+ * another grant returns -EACCES.
+ */
+struct drm_castkms_capture_detach_monitor {
+	__u32 connector_id;
+	__u32 flags;
+	__u64 reserved;
 };
 
 /**
@@ -644,6 +664,7 @@ struct drm_event_castkms_capture_frame {
 #define DRM_CASTKMS_CAPTURE_QUEUE_BUFFER	0x05
 #define DRM_CASTKMS_CAPTURE_SET_OUTPUT_EDID	0x06
 #define DRM_CASTKMS_CAPTURE_ATTACH_MONITOR	0x07
+#define DRM_CASTKMS_CAPTURE_DETACH_MONITOR	0x08
 #define DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP	0x09
 #define DRM_CASTKMS_CREATE_GRANT			0x11
 #define DRM_CASTKMS_REVOKE_GRANT			0x12
@@ -701,6 +722,9 @@ struct drm_castkms_capture_read_cursor_bitmap {
 #define DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR \
 	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_ATTACH_MONITOR, \
 		struct drm_castkms_capture_attach_monitor)
+#define DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR \
+	DRM_IOW(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_DETACH_MONITOR, \
+		struct drm_castkms_capture_detach_monitor)
 #define DRM_IOCTL_CASTKMS_CAPTURE_READ_CURSOR_BITMAP \
 	DRM_IOWR(DRM_COMMAND_BASE + DRM_CASTKMS_CAPTURE_READ_CURSOR_BITMAP, \
 		 struct drm_castkms_capture_read_cursor_bitmap)

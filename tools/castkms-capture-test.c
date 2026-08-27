@@ -47,6 +47,8 @@ static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24,
 	      "capture set-output-edid ABI size changed");
 static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24,
 	      "capture attach-monitor ABI size changed");
+static_assert(sizeof(struct drm_castkms_capture_detach_monitor) == 16,
+	      "capture detach-monitor ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112,
 	      "capture event ABI size changed");
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108,
@@ -247,6 +249,18 @@ static int attach_monitor(int fd, uint32_t connector_id, const void *edid,
 	};
 
 	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR, &args) < 0)
+		return -errno;
+
+	return 0;
+}
+
+static int detach_monitor(int fd, uint32_t connector_id)
+{
+	struct drm_castkms_capture_detach_monitor args = {
+		.connector_id = connector_id,
+	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_CAPTURE_DETACH_MONITOR, &args) < 0)
 		return -errno;
 
 	return 0;
@@ -1363,6 +1377,7 @@ static int run_cursor_test(const char *device, int inherited_fd,
 	struct drm_mode_map_dumb cursor_map_req = {};
 	void *cursor_pixels = NULL;
 	uint32_t connector_id = 0;
+	bool attached = false;
 
 	struct drm_castkms_capture_start stream = {};
 	struct castkms_test_framebuffer capture_buf = {};
@@ -1405,6 +1420,7 @@ static int run_cursor_test(const char *device, int inherited_fd,
 		perror("ATTACH_MONITOR");
 		goto out;
 	}
+	attached = ioctl_ret == 0;
 	if (set_connector_crtc(kms_fd, connector_id, crtc_id, &width, &height))
 		goto out;
 
@@ -1787,6 +1803,14 @@ out:
 		};
 		ioctl(kms_fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy);
 	}
+	if (attached) {
+		ioctl_ret = detach_monitor(grant_fd, connector_id);
+		if (ioctl_ret && ret == EXIT_SUCCESS) {
+			errno = -ioctl_ret;
+			perror("DETACH_MONITOR");
+			ret = EXIT_FAILURE;
+		}
+	}
 	if (kms_fd >= 0)
 		close(kms_fd);
 	if (grant_fd >= 0)
@@ -2012,6 +2036,13 @@ int main(int argc, char **argv)
 		if (ioctl_ret != -EACCES) {
 			fprintf(stderr,
 				"ordinary-fd attach returned %d, expected %d\n",
+				ioctl_ret, -EACCES);
+			goto out_close;
+		}
+		ioctl_ret = detach_monitor(competitor_fd, connector_id);
+		if (ioctl_ret != -EACCES) {
+			fprintf(stderr,
+				"ordinary-fd detach returned %d, expected %d\n",
 				ioctl_ret, -EACCES);
 			goto out_close;
 		}
@@ -2740,6 +2771,7 @@ int main(int argc, char **argv)
 		uint8_t observed[512];
 		uint8_t edid[TEST_EDID_BLOCK];
 		uint32_t connector_id;
+		uint32_t connection;
 		uint32_t observed_size;
 
 		if (fill_named_edid(edid, "CastKMS Test")) {
@@ -2772,6 +2804,42 @@ int main(int argc, char **argv)
 		if (ioctl_ret) {
 			errno = -ioctl_ret;
 			perror("stop restarted capture stream");
+			goto out_close;
+		}
+		ioctl_ret = start_capture(fd, crtc_id, &second_stream);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("start capture stream before detach");
+			goto out_close;
+		}
+
+		ioctl_ret = detach_monitor(fd, connector_id);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("detach monitor after stream stop");
+			goto out_close;
+		}
+		if (read_connector_connection(fd, connector_id, &connection) ||
+		    connection != DRM_MODE_DISCONNECTED ||
+		    read_connector_edid(fd, connector_id, observed,
+					sizeof(observed), &observed_size) ||
+		    observed_size) {
+			fprintf(stderr,
+				"monitor remained after explicit detach\n");
+			goto out_close;
+		}
+		ioctl_ret = detach_monitor(fd, connector_id);
+		if (ioctl_ret != -ENOTCONN) {
+			fprintf(stderr,
+				"detach of idle connector returned %d, expected %d\n",
+				ioctl_ret, -ENOTCONN);
+			goto out_close;
+		}
+		ioctl_ret = stop_capture(fd, second_stream.stream_id);
+		if (ioctl_ret != -ENOENT) {
+			fprintf(stderr,
+				"detached stream stop returned %d, expected %d\n",
+				ioctl_ret, -ENOENT);
 			goto out_close;
 		}
 	}

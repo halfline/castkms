@@ -52,7 +52,7 @@ reject 'buffer engine owns connector or CRTC scheduling' \
 	src/castkms_capture_buffer.c
 
 reject 'capture stream UAPI owns connector attachment translation' \
-	'castkms_capture_(set_output_edid|attach_monitor)_ioctl|drm_edid' \
+	'castkms_capture_(set_output_edid|attach_monitor|detach_monitor)_ioctl|drm_edid' \
 	src/castkms_capture_uapi.c src/castkms_capture_uapi.h
 
 reject 'ownership tracker imports authority policy' \

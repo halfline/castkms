@@ -20,6 +20,7 @@
 
 static_assert(sizeof(struct drm_castkms_capture_set_output_edid) == 24);
 static_assert(sizeof(struct drm_castkms_capture_attach_monitor) == 24);
+static_assert(sizeof(struct drm_castkms_capture_detach_monitor) == 16);
 static_assert(CASTKMS_MAX_EDID_SIZE == DRM_CASTKMS_CAPTURE_MAX_EDID_SIZE);
 
 static int castkms_connector_uapi_edid_from_user(
@@ -139,6 +140,46 @@ int castkms_capture_attach_monitor_ioctl(struct drm_device *dev, void *data,
 out_free_edid:
 	if (drm_edid)
 		drm_edid_free(drm_edid);
+
+	return ret;
+}
+
+int castkms_capture_detach_monitor_ioctl(struct drm_device *dev, void *data,
+					 struct drm_file *file_priv)
+{
+	struct drm_castkms_capture_detach_monitor *args = data;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_capture_authority *authority;
+	struct drm_connector *connector;
+	bool detached = false;
+	int ret;
+
+	if (args->flags || args->reserved)
+		return -EINVAL;
+
+	connector = drm_connector_lookup(dev, file_priv, args->connector_id);
+	if (!connector)
+		return -ENOENT;
+
+	mutex_lock(&castkmsdev->attach_transition_lock);
+	ret = castkms_grant_begin(file_priv, connector,
+				  CASTKMS_CAPTURE_AUTHORITY_MANAGE_ATTACHMENT,
+				  &authority);
+	if (!ret) {
+		ret = castkms_connector_require_authority_attached(connector,
+							    authority);
+		if (!ret) {
+			ret = castkms_connector_detach_monitor(connector,
+							 authority);
+			detached = true;
+		}
+		castkms_grant_end(authority);
+	}
+	mutex_unlock(&castkmsdev->attach_transition_lock);
+	if (detached)
+		castkms_capture_authority_cleanup_connector_resources(
+			connector, NULL, -ENOTCONN);
+	drm_connector_put(connector);
 
 	return ret;
 }

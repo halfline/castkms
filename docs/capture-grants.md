@@ -106,7 +106,7 @@ Rights are immutable and connector-scoped:
 | Right | Operations |
 |---|---|
 | `CAPTURE_PIXELS` | Start streams and register or queue capture buffers. |
-| `MANAGE_ATTACHMENT` | Attach a remote monitor. |
+| `MANAGE_ATTACHMENT` | Attach or detach a remote monitor. |
 | `UPDATE_EDID` | Publish or clear the attached connector's EDID. |
 | `READ_CURSOR` | Include cursor pixels or receive cursor metadata/bitmaps. |
 | `MANAGE_CEC` | Bind and operate HDMI-CEC (the HDMI command channel) on the connector. |
@@ -173,7 +173,7 @@ The direct operation errors are:
 - `-EKEYREVOKED`: terminal revocation;
 - `-EAGAIN`: temporary master suspension or an obsolete capture stream;
 - `-ESTALE`: unsafe content ownership or a stale mode generation;
-- `-ENOTCONN`: the connector is not attached;
+- `-ENOTCONN`: the connector is detached;
 - `-ENOLINK`: the connector is attached but has no active routed output;
 - `-ENODEV`: device teardown or unplug.
 
@@ -227,6 +227,9 @@ revoke the grant. A modeset increments `mode_generation`, returns queued work
 with `-ESTALE` and `MODE_CHANGED`, and requires a replacement stream and
 mode-sized buffers on the same grant fd.
 
+Detaching a monitor stops capture streams on that connector but does not
+revoke the grant. The holder may attach it again.
+
 ## Revocation and events
 
 Revocation first makes the grant permanently unable to authorize another
@@ -238,9 +241,11 @@ happening before or after CEC cleanup. The complete sequence is:
 1. Walk that list. Cleaning a stream cancels queued and in-flight work and
    places an error on each producer fence. Cleaning a CEC binding aborts and
    unbinds its transport work.
-2. Send the pre-reserved `GRANT_REVOKED` event.
+2. Detach the grant-owned monitor and clear its EDID state.
+3. Send the pre-reserved `GRANT_REVOKED` event.
 
-The first step finishes every registered entry before event delivery begins.
+The first step finishes every registered entry before monitor detachment or
+event delivery begins.
 
 The driver reserves the reliable revoke event when the grant is created, so it
 does not need to allocate memory while cleaning up. `GRANT_STATE` events report
@@ -283,15 +288,15 @@ DRM master mutex. Deferred cleanup removes only streams whose authority
 generation predates the observed cleanup sequence, so a replacement stream
 created after reacquisition cannot be collected by an older work item.
 
-Authority checks are repeated in the vblank path so revocation racing stream
+Attachment checks are repeated in the vblank path so detach racing stream
 startup cannot disclose a later frame. Complete attachment and EDID
 transitions are serialized through their hotplug, audio, and CEC side effects.
 CEC teardown blocks replacement binding until any transport callback that is
 preparing a request has retired. The DRM adapter owns event reservation and
 publication; CEC core owns only the publish-or-cancel decision. Attachment
-ioctls acquire the transition lock before the holder grant lock, so an
-attachment operation cannot deadlock against an EDID operation from another
-grant on that connector.
+ioctls acquire the transition lock before the holder grant lock, so detaching
+one connector cannot deadlock against an EDID operation from another grant on
+that connector.
 
 `GET_GRANT` reads connector routing under the interruptible connection mutex
 rather than locking the complete modeset object set. Grant `fdinfo` does not
