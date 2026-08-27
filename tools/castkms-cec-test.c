@@ -55,6 +55,29 @@ static int tests_pass;
 #define FAIL(name, ...) do { tests_run++; \
 	printf("%-55s FAIL: ", name); printf(__VA_ARGS__); printf("\n"); } while (0)
 
+static int open_device(const char *path)
+{
+	int fd;
+
+	fd = open(path, O_RDWR | O_CLOEXEC);
+	if (fd < 0) {
+		perror("open DRM device");
+		return -1;
+	}
+
+	if (castkms_test_check_driver_name(fd)) {
+		close(fd);
+		return -1;
+	}
+
+	if (ioctl(fd, DRM_IOCTL_DROP_MASTER, 0) < 0 && errno != EINVAL) {
+		close(fd);
+		return -1;
+	}
+
+	return fd;
+}
+
 static int parse_fd(const char *text, int *fd)
 {
 	char *end = NULL;
@@ -1020,6 +1043,30 @@ static void test_state_generation_advances(int fd, uint32_t connector_id)
 	cec_unbind(fd, connector_id, bind.transport_id);
 }
 
+static void test_plain_fd_denied(uint32_t connector_id, const char *path)
+{
+	struct drm_castkms_cec_bind_transport bind;
+	int fd;
+	int ret;
+
+	fd = open_device(path);
+	if (fd < 0) {
+		FAIL("plain_fd_denied", "could not open ordinary fd");
+		return;
+	}
+
+	ret = cec_bind(fd, connector_id, &bind);
+	if (ret != -EACCES) {
+		FAIL("plain_fd_denied", "expected EACCES, got %s",
+		     ret ? strerror(-ret) : "success");
+		if (!ret)
+			cec_unbind(fd, connector_id, bind.transport_id);
+	} else {
+		PASS("plain_fd_denied");
+	}
+	close(fd);
+}
+
 static void test_stale_generation_reject(int fd, uint32_t connector_id)
 {
 	struct drm_castkms_cec_bind_transport bind;
@@ -1057,11 +1104,12 @@ static void test_stale_generation_reject(int fd, uint32_t connector_id)
 
 static void usage(const char *program)
 {
-	fprintf(stderr, "usage: %s [--grant-fd FD]\n", program);
+	fprintf(stderr, "usage: %s [--grant-fd FD] [DRM-DEVICE]\n", program);
 }
 
 int main(int argc, char **argv)
 {
+	const char *path = "/dev/dri/card0";
 	uint32_t connector_id;
 	int inherited_fd = -1;
 	int argument = 1;
@@ -1080,10 +1128,12 @@ int main(int argc, char **argv)
 		}
 		argument += 2;
 	}
-	if (argc - argument > 0) {
+	if (argc - argument > 1) {
 		usage(argv[0]);
 		return EXIT_FAILURE;
 	}
+	if (argument < argc)
+		path = argv[argument];
 
 	fd = open_grant(inherited_fd, &connector_id);
 	if (fd < 0) {
@@ -1119,6 +1169,8 @@ int main(int argc, char **argv)
 	test_tx_complete_no_pending(fd, connector_id);
 	test_tx_complete_bad_status(fd, connector_id);
 	test_stale_generation_reject(fd, connector_id);
+	test_plain_fd_denied(connector_id, path);
+
 	detach_monitor(fd, connector_id);
 
 	printf("\n%d/%d tests passed\n", tests_pass, tests_run);

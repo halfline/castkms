@@ -371,9 +371,112 @@ static void castkms_cec_test_timeout_rejects_late_completion(struct kunit *test)
 			(u8)CEC_TX_STATUS_ERROR);
 }
 
+static void castkms_cec_test_suspend_aborts_pending(struct kunit *test)
+{
+	static const u8 message[] = { 0x4f, CEC_MSG_REQUEST_ACTIVE_SOURCE };
+	struct castkms_cec_test_context *context = test->priv;
+	struct castkms_cec_state state;
+	int ret;
+
+	ret = castkms_cec_core_test_transmit(context->cec, 1, 0, message,
+					     sizeof(message));
+	KUNIT_ASSERT_EQ(test, ret, 0);
+	castkms_cec_core_suspend_connector(&context->connector->base);
+	KUNIT_ASSERT_EQ(test, castkms_cec_test_get_state(context, &state), 0);
+	KUNIT_EXPECT_EQ(test, state.pending_cookie, (u64)0);
+	KUNIT_EXPECT_TRUE(test, state.transport_online);
+	KUNIT_EXPECT_EQ(test, state.stats_tx_timeout, (u64)0);
+	KUNIT_EXPECT_EQ(test, atomic_read(&context->tx_notifications), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&context->releases), 0);
+
+	ret = castkms_cec_test_complete_tx(context, context->tx.cookie,
+					   CEC_TX_STATUS_OK);
+	KUNIT_EXPECT_EQ(test, ret, -ENOENT);
+}
+
+static int castkms_cec_test_transmit_thread(void *data)
+{
+	static const u8 message[] = { 0x4f, CEC_MSG_REQUEST_ACTIVE_SOURCE };
+	struct castkms_cec_test_context *context = data;
+
+	context->transmit_status = castkms_cec_core_test_transmit(
+		context->cec, 1, 0, message, sizeof(message));
+	complete(&context->transmit_done);
+	return 0;
+}
+
+static int castkms_cec_test_revoke_thread(void *data)
+{
+	struct castkms_cec_test_context *context = data;
+
+	complete(&context->revoke_started);
+	castkms_capture_authority_revoke(context->authority, -EKEYREVOKED);
+	complete(&context->revoke_done);
+	return 0;
+}
+
+static void castkms_cec_test_revoke_during_prepare(struct kunit *test)
+{
+	struct castkms_cec_test_context *context = test->priv;
+	unsigned long completed;
+	bool revoked = false;
+
+	context->block_prepare = true;
+	context->transmit_task = kthread_run(castkms_cec_test_transmit_thread,
+					     context, "castkms-cec-tx-test");
+	KUNIT_ASSERT_FALSE(test, IS_ERR(context->transmit_task));
+	completed = wait_for_completion_timeout(&context->prepare_entered,
+						msecs_to_jiffies(1000));
+	if (!completed) {
+		complete(&context->prepare_continue);
+		kthread_stop(context->transmit_task);
+		KUNIT_FAIL(test, "transmit did not enter prepare callback");
+		return;
+	}
+
+	context->revoke_task = kthread_run(castkms_cec_test_revoke_thread,
+					   context, "castkms-cec-revoke-test");
+	if (IS_ERR(context->revoke_task)) {
+		complete(&context->prepare_continue);
+		kthread_stop(context->transmit_task);
+		KUNIT_FAIL(test, "could not start revoke thread");
+		return;
+	}
+	wait_for_completion_timeout(&context->revoke_started,
+				    msecs_to_jiffies(1000));
+	for (unsigned int attempt = 0; attempt < 1000; attempt++) {
+		if (castkms_capture_authority_is_revoked(context->authority)) {
+			revoked = true;
+			break;
+		}
+		usleep_range(100, 200);
+	}
+	complete(&context->prepare_continue);
+	completed = wait_for_completion_timeout(&context->transmit_done,
+						msecs_to_jiffies(1000));
+	KUNIT_EXPECT_NE(test, completed, 0UL);
+	completed = wait_for_completion_timeout(&context->revoke_done,
+						msecs_to_jiffies(1000));
+	KUNIT_EXPECT_NE(test, completed, 0UL);
+	kthread_stop(context->transmit_task);
+	kthread_stop(context->revoke_task);
+	context->transmit_task = NULL;
+	context->revoke_task = NULL;
+
+	KUNIT_EXPECT_TRUE(test, revoked);
+	KUNIT_EXPECT_EQ(test, context->transmit_status, -ENONET);
+	KUNIT_EXPECT_EQ(test, atomic_read(&context->request_completions), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&context->request_cancellations), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&context->retirements), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&context->releases), 1);
+	KUNIT_EXPECT_EQ(test, atomic_read(&context->tx_notifications), 1);
+}
+
 static struct kunit_case castkms_cec_test_cases[] = {
 	KUNIT_CASE(castkms_cec_test_completion_beats_timeout),
 	KUNIT_CASE(castkms_cec_test_timeout_rejects_late_completion),
+	KUNIT_CASE(castkms_cec_test_suspend_aborts_pending),
+	KUNIT_CASE(castkms_cec_test_revoke_during_prepare),
 	{}
 };
 

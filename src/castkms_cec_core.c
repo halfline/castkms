@@ -439,8 +439,25 @@ int castkms_cec_core_init(struct drm_device *dev)
 static void castkms_cec_resource_suspend(struct castkms_capture_authority_resource *resource,
 					 int status)
 {
-	(void)resource;
+	struct castkms_cec_transport *transport =
+		container_of(resource, struct castkms_cec_transport, resource);
+	struct castkms_cec_output *output = transport->output;
+	unsigned long flags;
+	bool aborted;
+
 	(void)status;
+	spin_lock_irqsave(&output->lock, flags);
+	if (output->transport != transport) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		return;
+	}
+	aborted = cec_abort_pending_transmission(output);
+	output->transport_online = false;
+	output->transport_cleanup++;
+	output->state_generation++;
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	castkms_cec_core_finish_cleanup(output, transport, aborted, false);
 }
 
 static void castkms_cec_resource_revoke(struct castkms_capture_authority_resource *resource,
@@ -450,18 +467,27 @@ static void castkms_cec_resource_revoke(struct castkms_capture_authority_resourc
 		container_of(resource, struct castkms_cec_transport, resource);
 	struct castkms_cec_output *output = transport->output;
 	unsigned long flags;
+	bool aborted = false;
+	bool attached = false;
 
 	(void)status;
 	spin_lock_irqsave(&output->lock, flags);
 	if (output->transport == transport) {
+		aborted = cec_abort_pending_transmission(output);
 		output->transport = NULL;
 		output->transport_online = false;
+		output->transport_cleanup++;
 		output->state_generation++;
+		attached = true;
 	}
 	spin_unlock_irqrestore(&output->lock, flags);
 
-	transport->ops->release(transport->data);
-	kfree(transport);
+	if (attached) {
+		castkms_cec_core_finish_cleanup(output, transport, aborted, true);
+	} else {
+		transport->ops->release(transport->data);
+		kfree(transport);
+	}
 }
 
 static const struct castkms_capture_authority_resource_ops
@@ -754,7 +780,27 @@ EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_get_state);
 
 void castkms_cec_core_suspend_connector(struct drm_connector *connector)
 {
-	(void)connector;
+	struct castkms_cec_output *output = connector_to_cec(connector);
+	struct castkms_cec_transport *transport;
+	unsigned long flags;
+	bool aborted;
+
+	if (!output)
+		return;
+
+	/* Keep the binding and online preference across monitor reattachment. */
+	spin_lock_irqsave(&output->lock, flags);
+	transport = output->transport;
+	if (!transport) {
+		spin_unlock_irqrestore(&output->lock, flags);
+		return;
+	}
+	aborted = cec_abort_pending_transmission(output);
+	output->transport_cleanup++;
+	output->state_generation++;
+	spin_unlock_irqrestore(&output->lock, flags);
+
+	castkms_cec_core_finish_cleanup(output, transport, aborted, false);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_cec_core_suspend_connector);
 
