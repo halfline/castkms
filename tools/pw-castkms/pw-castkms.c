@@ -13,7 +13,7 @@
 
 #include "../virtualscreen-edid.h"
 
-#define REFERENCE_EDID_MAX_SIZE (4 * CASTKMS_EDID_BLOCK)
+#define INPUT_EDID_MAX_SIZE (4 * CASTKMS_EDID_BLOCK)
 
 struct options {
 	const char *device_path;
@@ -149,11 +149,11 @@ static int read_edid_file(const char *path, uint8_t **data,
 	}
 	rewind(file);
 
-	if (!size || size > REFERENCE_EDID_MAX_SIZE ||
+	if (!size || size > INPUT_EDID_MAX_SIZE ||
 	    size % CASTKMS_EDID_BLOCK) {
 		fprintf(stderr,
 			"%s: EDID must be a 128-byte multiple up to %u bytes\n",
-			path, REFERENCE_EDID_MAX_SIZE);
+			path, INPUT_EDID_MAX_SIZE);
 		fclose(file);
 		return -EINVAL;
 	}
@@ -185,10 +185,12 @@ static int build_output_edid(const struct options *options,
 	if (options->edid_path)
 		return read_edid_file(options->edid_path, data, size);
 
-	generated = malloc(CASTKMS_EDID_BLOCK);
+	generated = malloc(CASTKMS_REFERENCE_EDID_MAX_SIZE);
 	if (!generated)
 		return -ENOMEM;
-	result = castkms_fill_named_edid(generated, options->monitor_name);
+	result = castkms_fill_edid(generated, CASTKMS_REFERENCE_EDID_MAX_SIZE,
+				  options->monitor_name,
+				  CASTKMS_EDID_FLAG_AUDIO);
 	if (result < 0) {
 		fprintf(stderr, "%s\n", options->monitor_name ?
 			"monitor name must be at most 13 characters" :
@@ -198,7 +200,7 @@ static int build_output_edid(const struct options *options,
 	}
 
 	*data = generated;
-	*size = CASTKMS_EDID_BLOCK;
+	*size = (uint32_t)result;
 	return 0;
 }
 

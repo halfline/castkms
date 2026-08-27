@@ -4,6 +4,11 @@ copies frames into linear `XRGB8888` buffers, and publishes them as one
 PipeWire source. It is meant to be read as a protocol and buffer-lifetime
 walkthrough, not used as a session broker.
 
+When no EDID file is supplied, the generated virtual monitor advertises basic
+stereo HDMI audio. An audio-enabled CastKMS build exposes the corresponding
+ALSA sink; a local agent can capture that sink's PipeWire monitor alongside
+this video source.
+
 ## Reading order
 
 1. [`pw-castkms.c`](pw-castkms.c) is the application. Its `main()` shows the

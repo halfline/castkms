@@ -49,6 +49,11 @@ The optional ALSA device is a single device-global card with one playback-only
 PCM endpoint per virtual output. Its timer-backed presentation clock exposes
 pause, resume, and timestamps without retaining sample data for capture.
 
+The reference `pw-castkms` bridge generates an EDID that advertises basic
+stereo audio, making the corresponding ALSA sink available. To capture audio
+locally, read the PipeWire sink's monitor; access to that PipeWire node is
+a userspace policy decision.
+
 ## Source layout
 
 The current specialized interfaces have explicit owners:
