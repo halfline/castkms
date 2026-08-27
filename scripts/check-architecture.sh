@@ -25,7 +25,7 @@ reject 'output runtime header imports a complete subsystem API' \
 
 reject 'core device exposes grant-fd registry state' \
 	'grant_registry|next_grant_id|struct xarray grants' \
-	src/castkms_drv.h
+	src/castkms_device.h
 
 reject 'CEC core depends on the CastKMS device layout' \
 	'castkms_device\.h|struct castkms_device' \
