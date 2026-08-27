@@ -149,7 +149,7 @@ prepare()
 start()
 {
 	local -a display_args network_args
-	local memory_mb cpus vnc_display lan_bridge
+	local memory_mb cpus vnc_display lan_bridge attempt
 
 	if vm_running; then
 		printf 'VM %s is already running (pid %s)\n' "$INSTANCE_NAME" "$(vm_pid)"
@@ -198,6 +198,19 @@ start()
 		-daemonize \
 		-pidfile "$PID_FILE" \
 		-D "$QEMU_LOG"
+
+	for attempt in $(seq 1 20); do
+		if vm_running; then
+			break
+		fi
+		sleep 0.1
+	done
+	if ! vm_running; then
+		if test -s "$QEMU_LOG"; then
+			cat "$QEMU_LOG" >&2
+		fi
+		die "VM $INSTANCE_NAME failed to start"
+	fi
 
 	if test -n "${CASTKMS_VM_VNC_DISPLAY:-}"; then
 		printf 'Started VM %s (pid %s, SSH port %s, VNC 127.0.0.1:%s)\n' \
