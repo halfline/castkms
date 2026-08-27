@@ -4,10 +4,15 @@ This is the operational guide for the QEMU/KVM test guest. Use it when the
 host cannot load an unsigned module, or when you want a clean kernel that
 matches the VKMS baseline in `UPSTREAM.md`.
 
-It uses a checksum-pinned Fedora 43 cloud image, a qcow2 overlay, a dedicated
-local SSH key, QEMU user networking, and the Fedora `7.1.7-100.fc43.x86_64` kernel
-that matches the source baseline in `UPSTREAM.md`. QEMU uses its ordinary BIOS
-firmware, so the guest does not enforce Secure Boot module signatures.
+Under the hood it uses a checksum-pinned Fedora 43 cloud image, a qcow2
+overlay, a dedicated local SSH key, QEMU user networking, and the Fedora
+`7.2.0-61.fc45.x86_64` kernel built from the source baseline in
+`UPSTREAM.md`. QEMU boots with ordinary BIOS firmware, so the guest does not
+enforce Secure Boot module signatures, which is what lets it load the
+unsigned module. Userspace packages are resolved from the Fedora repositories
+when an overlay is provisioned; every run records the exact installed NEVRAs
+in `guest-packages.txt`, plus the smaller desktop package manifest when
+applicable.
 
 ## Quick start
 
