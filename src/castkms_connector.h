@@ -70,6 +70,9 @@ bool castkms_connector_authority_is_attached(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority);
 bool castkms_connector_is_attached(struct drm_connector *connector);
+/* Observe the published attachment bit without stabilizing its transition. */
+bool castkms_connector_peek_at_attachment_state(
+	struct drm_connector *connector);
 int castkms_connector_require_authority_attached(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority);

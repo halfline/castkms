@@ -22,6 +22,7 @@
 #include "castkms_capture.h"
 #include "castkms_capture_authority.h"
 #include "castkms_capture_uapi.h"
+#include "castkms_connector.h"
 #include "castkms_file.h"
 #include "castkms_grant.h"
 #include "castkms_limits.h"
@@ -296,6 +297,7 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 	struct castkms_capture_authority *authority;
 	struct castkms_capture_stream *stream;
 	struct castkms_output *output;
+	struct castkms_output *routed_output;
 	struct drm_crtc *crtc;
 	u32 rights = CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS;
 	u32 stream_id;
@@ -366,8 +368,10 @@ int castkms_capture_start_ioctl(struct drm_device *dev, void *data,
 		ret = castkms_capture_stream_validate_mode(
 			stream, args->mode_generation);
 	if (!ret) {
-		ret = castkms_capture_stream_status(stream);
-		if (ret == -EACCES)
+		ret = castkms_connector_get_routed_output(
+			castkms_capture_authority_connector(authority),
+			&routed_output);
+		if (!ret && routed_output != output)
 			ret = -ESTALE;
 	}
 	if (ret) {

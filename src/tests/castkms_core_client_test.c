@@ -292,6 +292,10 @@ castkms_core_client_activate_output(struct castkms_core_client *client)
 	client->output->crtc.hwmode = mode;
 	state->enable = true;
 	state->active = true;
+	/* Preserve the reference and mask invariants of a committed route. */
+	drm_connector_get(&client->connector->base);
+	client->connector->base.state->crtc = &client->output->crtc;
+	state->connector_mask |= drm_connector_mask(&client->connector->base);
 	drm_crtc_vblank_on(&client->output->crtc);
 	client->vblank_on = true;
 }
@@ -300,9 +304,9 @@ static int castkms_core_client_start_stream(struct castkms_core_client *client)
 {
 	int ret;
 
-	ret = castkms_capture_authority_begin(client->authority,
-					      &client->connector->base,
-					      CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS);
+	ret = castkms_capture_authority_begin_output(
+		client->authority, client->output,
+		CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS);
 	if (!ret) {
 		client->stream = castkms_capture_stream_create(client->output,
 							       client->authority,

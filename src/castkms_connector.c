@@ -341,6 +341,15 @@ bool castkms_connector_is_attached(struct drm_connector *connector)
 	return attached;
 }
 
+bool castkms_connector_peek_at_attachment_state(
+	struct drm_connector *connector)
+{
+	struct castkms_connector *castkms_connector =
+		drm_connector_to_castkms_connector(connector);
+
+	return READ_ONCE(castkms_connector->monitor_attached);
+}
+
 int castkms_connector_require_authority_attached(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority)

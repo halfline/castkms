@@ -883,19 +883,31 @@ static int capture_prepared_stream(
 		grant_fd, stream->stream_id, buffer_id, user_data);
 }
 
-static int retire_prepared_stream(
-	int grant_fd, const struct drm_castkms_capture_start *stream)
+static int expect_capture_stream_collected(
+	int grant_fd, const struct drm_castkms_capture_start *stream,
+	uint32_t buffer_id)
 {
-	int ioctl_ret = stop_capture(grant_fd, stream->stream_id);
+	const uint64_t user_data = UINT64_C(0x5354414c4541444d);
+	unsigned int attempt;
 
-	if (ioctl_ret && ioctl_ret != -ENOENT) {
-		fprintf(stderr,
-			"prepared CAPTURE_STOP returned %d, expected 0 or %d\n",
-			ioctl_ret, -ENOENT);
-		return -1;
+	for (attempt = 0; attempt < 100; attempt++) {
+		int ioctl_ret = queue_capture_buffer(
+			grant_fd, stream->stream_id, buffer_id,
+			stream->mode_generation, user_data);
+
+		if (ioctl_ret == -ENOENT)
+			return 0;
+		if (ioctl_ret != -EAGAIN) {
+			fprintf(stderr,
+				"stale grant QUEUE_BUFFER returned %d, expected %d or %d\n",
+				ioctl_ret, -EAGAIN, -ENOENT);
+			return -1;
+		}
+		usleep(20000);
 	}
 
-	return 0;
+	fprintf(stderr, "timed out waiting for stale grant stream cleanup\n");
+	return -1;
 }
 
 static int test_master_cleanup_generation(int issuer_fd, int grant_fd,
@@ -931,13 +943,31 @@ static int test_master_cleanup_generation(int issuer_fd, int grant_fd,
 		if (ioctl_ret || !buffer_id) {
 			errno = ioctl_ret ? -ioctl_ret : EPROTO;
 			perror("post-reacquire REGISTER_BUFFER");
-			stop_capture(grant_fd, stream.stream_id);
+			goto out_stop;
+		}
+
+		usleep(20000);
+		ioctl_ret = queue_capture_buffer(
+			grant_fd, stream.stream_id, buffer_id,
+			stream.mode_generation, iteration + 1);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("post-reacquire QUEUE_BUFFER");
+			goto out_stop;
+		}
+		if (expect_capture_frame(grant_fd, stream.stream_id, buffer_id,
+					 iteration + 1))
+			goto out_stop;
+		ioctl_ret = stop_capture(grant_fd, stream.stream_id);
+		if (ioctl_ret) {
+			errno = -ioctl_ret;
+			perror("post-reacquire CAPTURE_STOP");
 			goto out;
 		}
-	}
-	if (ioctl(issuer_fd, DRM_IOCTL_DROP_MASTER, 0) < 0 ||
-	    ioctl(issuer_fd, DRM_IOCTL_SET_MASTER, 0) < 0) {
-		perror("final drop/reacquire master during capture stress");
+		continue;
+
+out_stop:
+		stop_capture(grant_fd, stream.stream_id);
 		goto out;
 	}
 
@@ -1713,7 +1743,8 @@ int main(int argc, char **argv)
 	    expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_DELEGATED) ||
-	    retire_prepared_stream(delegated_fd, &delegated_stream))
+	    expect_capture_stream_collected(
+		    delegated_fd, &delegated_stream, delegated_buffer_id))
 		goto out;
 	delegated_stream_prepared = false;
 	destroy_test_framebuffer(delegated_fd, &delegated_destination);
@@ -1832,7 +1863,8 @@ int main(int argc, char **argv)
 	    expect_holder_state(admin_fd, admin_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN) ||
-	    retire_prepared_stream(admin_fd, &admin_stream))
+	    expect_capture_stream_collected(admin_fd, &admin_stream,
+					    admin_buffer_id))
 		goto out;
 	admin_stream_prepared = false;
 	destroy_test_framebuffer(admin_fd, &admin_destination);

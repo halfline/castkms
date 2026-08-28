@@ -339,6 +339,11 @@ int castkms_capture_authority_evaluate_capture_status(
 		status = -EAGAIN;
 	else if (!authority->administrative && !ownership.bound_master_current)
 		status = -EAGAIN;
+	else if (!castkms_connector_peek_at_attachment_state(
+			 authority->connector))
+		status = -ENOTCONN;
+	else if (!output->capture.active)
+		status = -ENOLINK;
 	else if (!ownership.content_safe)
 		status = -ESTALE;
 
@@ -349,22 +354,12 @@ int castkms_capture_authority_capture_status(
 	const struct castkms_capture_authority *authority,
 	struct castkms_output *output)
 {
-	struct castkms_output *routed_output;
 	unsigned long flags;
 	int status;
 
 	status = castkms_capture_authority_status(authority);
 	if (status)
 		return status;
-	status = castkms_connector_get_routed_output(
-		authority->connector, &routed_output);
-	if (status)
-		return status;
-	if (!routed_output)
-		return -ENOLINK;
-	if (routed_output != output)
-		return -EACCES;
-
 	spin_lock_irqsave(&output->lock, flags);
 	status = castkms_capture_authority_evaluate_capture_status(authority,
 							      output);
@@ -446,6 +441,11 @@ int castkms_capture_authority_evaluate_stream_status(
 		status = -EAGAIN;
 	else if (!authority->administrative && !ownership.bound_master_current)
 		status = -EAGAIN;
+	else if (!castkms_connector_peek_at_attachment_state(
+			 authority->connector))
+		status = -ENOTCONN;
+	else if (!output->capture.active)
+		status = -ENOLINK;
 	else if (!ownership.content_safe)
 		status = -ESTALE;
 
@@ -456,18 +456,8 @@ int castkms_capture_authority_stream_status(
 	const struct castkms_capture_authority *authority,
 	struct castkms_output *output, u64 stream_generation)
 {
-	struct castkms_output *routed_output;
 	unsigned long flags;
 	int status;
-
-	status = castkms_connector_get_routed_output(
-		authority->connector, &routed_output);
-	if (status)
-		return status;
-	if (!routed_output)
-		return -ENOLINK;
-	if (routed_output != output)
-		return -EACCES;
 
 	spin_lock_irqsave(&output->lock, flags);
 	status = castkms_capture_authority_evaluate_stream_status(
@@ -503,25 +493,41 @@ int castkms_capture_authority_begin_output(
 	struct castkms_capture_authority *authority,
 	struct castkms_output *output, u32 rights)
 {
+	struct drm_connector *connector;
+	struct castkms_output *routed_output;
 	int status;
 
 	if (!authority)
 		return -EACCES;
+	connector = authority->connector;
 	status = castkms_capture_authority_lifetime_status(authority);
 	if (status)
 		return status;
 	if (!castkms_capture_authority_has_rights(authority, rights))
 		return -EACCES;
+	if (!castkms_connector_is_attached(connector))
+		return -ENOTCONN;
+	status = castkms_connector_get_routed_output(connector, &routed_output);
+	if (status)
+		return status;
+	if (!routed_output)
+		return -ENOLINK;
+	if (routed_output != output)
+		return -EACCES;
 
 	status = castkms_capture_authority_begin(authority, NULL, rights);
 	if (status)
 		return status;
-	status = castkms_capture_authority_capture_status(authority, output);
+	if (!castkms_connector_is_attached(connector))
+		status = -ENOTCONN;
+	else
+		status = castkms_capture_authority_capture_status(authority, output);
 	if (status)
 		castkms_capture_authority_end(authority);
 
 	return status;
 }
+EXPORT_SYMBOL_IF_KUNIT(castkms_capture_authority_begin_output);
 
 void castkms_capture_authority_end(
 	struct castkms_capture_authority *authority)
