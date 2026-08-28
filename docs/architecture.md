@@ -16,8 +16,11 @@ CastKMS is a virtual monitor. The product path is:
 Configfs topology construction, per-frame checksums, writeback, and fbdev are
 optional VKMS-derived test facilities. They are disabled on the default device.
 The capture protocol does not depend on them. Frame checksums and writeback
-enforce the same rule as capture: only the current master's own content may be
-read, so neither can expose a previous master's leftover composition.
+enforce the same content-owner rule as capture, so those CastKMS pixel-export
+paths do not automatically expose retained composition during a master
+handoff. This rule does not replace DRM's intentional framebuffer handoff
+semantics: a current master may use `CLOSEFB` and `GETFB2` to preserve and
+adopt scanout across a flicker-free compositor transition.
 
 ## Capture and writeback
 
@@ -179,8 +182,9 @@ must not infer adoption from the generation reported by a cancellation event.
 ## Ownership
 
 The grant UAPI is described in [`capture-grants.md`](capture-grants.md). The
-architectural invariant underneath it is: no client may capture residual
-content from a previous owner.
+architectural invariant underneath it is: no CastKMS capture, checksum, or
+writeback path may treat residual content as owned merely because DRM master
+changed.
 
 Framebuffers created by the current DRM master, and atomic CRTC compositions
 of those framebuffers, carry refcounted master ownership. A non-master
@@ -190,6 +194,13 @@ durable authorization, attachment is durable connector state, and a capture
 stream is bound to one CRTC and mode generation. Master loss makes every
 existing capture stream obsolete; the holder must create a fresh stream in
 each master epoch.
+
+This capture-owner label is deliberately narrower than generic DRM access.
+DRM permits retained scanout to cross a master transition for seamless
+handoff. A never-master grant file cannot use `GETFB2`, and capture buffer
+registration accepts only framebuffers in that grant file's own framebuffer
+namespace; a device-global framebuffer ID returned by `GETCRTC` is not
+ownership of a capture destination.
 
 See [`capture-grants.md`](capture-grants.md) for creation forms, states,
 errors, and teardown.

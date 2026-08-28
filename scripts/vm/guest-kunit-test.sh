@@ -169,6 +169,8 @@ grep -Fxq 'grant_cross_connector_denied=pass' \
 	"$result_dir/grant-live.log"
 grep -Fxq 'grant_cross_connector_independent=pass' \
 	"$result_dir/grant-live.log"
+grep -Fxq 'grant_foreign_framebuffer_denied=pass' \
+	"$result_dir/grant-live.log"
 sudo rmmod castkms
 cast_loaded=0
 castkms_capture_kernel_log "$result_dir/grant-dmesg.txt"

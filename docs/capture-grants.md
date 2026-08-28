@@ -179,9 +179,10 @@ The direct operation errors are:
 
 ## Capture-safe content
 
-Current DRM master alone is not enough. A new master must not capture the
-previous master's residual frame, and a returning master must not capture the
-last frame presented by an intervening owner.
+Current DRM master alone is not enough for a CastKMS pixel-export operation.
+A new master must not use capture, checksum, or writeback to claim the
+previous master's residual frame, and a returning master must not use those
+paths to claim the last frame presented by an intervening owner.
 
 CastKMS stamps a framebuffer with a refcounted DRM-master pointer only when
 the file creating it is current master. A non-master primary client may be
@@ -205,10 +206,16 @@ atomic commit is in flight the output is marked unsafe.
 
 CastKMS withholds a frame rather than guessing that retained pixels belong to
 the new owner. Frame checksums and writeback are additional pixel-derived
-export paths, not the capture protocol. A newly installed master cannot
-checksum a leftover frame or use a no-op writeback commit to observe the
-previous master's residual composition. It may use them after its atomic state
-establishes content owned by that master.
+export paths, not the capture protocol. They reject a leftover frame and a
+no-op writeback commit until the new master's atomic state establishes content
+owned by that master.
+
+This restriction is scoped to CastKMS's pixel-export paths. Generic DRM
+intentionally lets a current master inspect and adopt retained scanout through
+`CLOSEFB`/`GETFB2`, which enables flicker-free compositor handoff. Grant files
+never become master and cannot call `GETFB2`. They may discover a global
+framebuffer ID through read-only modeset queries, but capture registration
+accepts only a framebuffer in the grant file's own framebuffer namespace.
 
 ## Grant, attachment, and stream lifetime
 

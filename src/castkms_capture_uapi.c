@@ -6,6 +6,7 @@
 #include <linux/kernel.h>
 #include <linux/kref.h>
 #include <linux/ktime.h>
+#include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/xarray.h>
@@ -77,6 +78,25 @@ static_assert(sizeof(struct drm_castkms_capture_queue_buffer) == 48);
 static_assert(sizeof(struct drm_event_castkms_capture_frame) == 112);
 static_assert(offsetof(struct drm_event_castkms_capture_frame, reserved) == 108);
 static_assert(sizeof(struct drm_castkms_capture_read_cursor_bitmap) == 40);
+
+static bool
+castkms_capture_file_owns_framebuffer(struct drm_file *file_priv,
+				      const struct drm_framebuffer *fb)
+{
+	struct drm_framebuffer *owned_fb;
+	bool found = false;
+
+	mutex_lock(&file_priv->fbs_lock);
+	list_for_each_entry(owned_fb, &file_priv->fbs, filp_head) {
+		if (owned_fb == fb) {
+			found = true;
+			break;
+		}
+	}
+	mutex_unlock(&file_priv->fbs_lock);
+
+	return found;
+}
 
 static void castkms_capture_uapi_stream_release(struct kref *ref)
 {
@@ -480,6 +500,14 @@ int castkms_capture_register_buffer_ioctl(struct drm_device *dev, void *data,
 	if (!fb) {
 		ret = -ENOENT;
 		goto out_unlock;
+	}
+	/*
+	 * Capture destinations must belong to this file, not merely be visible
+	 * through the device-global framebuffer ID namespace.
+	 */
+	if (!castkms_capture_file_owns_framebuffer(file_priv, fb)) {
+		ret = -ENOENT;
+		goto out_put_fb;
 	}
 
 	if (args->flags == DRM_CASTKMS_CAPTURE_BUFFER_EXPLICIT_SYNC) {

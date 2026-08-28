@@ -543,6 +543,56 @@ out_stop:
 	return ret;
 }
 
+static int test_foreign_framebuffer_rejected(
+	int grant_fd, const struct test_display *display)
+{
+	struct drm_mode_crtc crtc = {
+		.crtc_id = display->crtc_id,
+	};
+	struct drm_castkms_capture_start stream;
+	uint32_t buffer_id = 0;
+	int ioctl_ret;
+	int ret = -1;
+
+	if (ioctl(grant_fd, DRM_IOCTL_MODE_GETCRTC, &crtc) < 0) {
+		perror("grant DRM_IOCTL_MODE_GETCRTC");
+		return -1;
+	}
+	if (!crtc.fb_id || crtc.fb_id != display->source.fb_id) {
+		fprintf(stderr,
+			"grant GETCRTC reported framebuffer %u, expected %u\n",
+			crtc.fb_id, display->source.fb_id);
+		return -1;
+	}
+
+	ioctl_ret = start_capture(grant_fd, display->crtc_id, &stream);
+	if (ioctl_ret) {
+		errno = -ioctl_ret;
+		perror("foreign-buffer CAPTURE_START");
+		return -1;
+	}
+
+	ioctl_ret = register_capture_buffer(
+		grant_fd, stream.stream_id, crtc.fb_id,
+		stream.mode_generation, &buffer_id);
+	if (ioctl_ret != -ENOENT) {
+		fprintf(stderr,
+			"foreign framebuffer registration returned %d, expected -%d\n",
+			ioctl_ret, ENOENT);
+		goto out_stop;
+	}
+	ret = 0;
+
+out_stop:
+	ioctl_ret = stop_capture(grant_fd, stream.stream_id);
+	if (ioctl_ret && ioctl_ret != -ENOENT) {
+		errno = -ioctl_ret;
+		perror("foreign-buffer CAPTURE_STOP");
+		ret = -1;
+	}
+	return ret;
+}
+
 static int prepare_capture_stream(
 	int grant_fd, const struct test_display *display,
 	struct drm_castkms_capture_start *stream,
@@ -1288,6 +1338,9 @@ int main(int argc, char **argv)
 				DRM_CASTKMS_GRANT_STATE_ACTIVE, 0) ||
 	    test_capture_access(normal_fd, &display))
 		goto out;
+	if (test_foreign_framebuffer_rejected(normal_fd, &display))
+		goto out;
+	printf("grant_foreign_framebuffer_denied=pass\n");
 	printf("grant_capture_access=pass\n");
 	if (test_master_cleanup_generation(issuer, normal_fd, &display))
 		goto out;
