@@ -8,6 +8,7 @@
 #include <linux/ktime.h>
 #include <linux/limits.h>
 #include <linux/module.h>
+#include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/user_namespace.h>
 #include <linux/xarray.h>
@@ -64,6 +65,7 @@ castkms_grant_registry(struct drm_device *dev)
  * grant-registry lock
  * @holder_file: Fresh DRM file carrying this grant, valid through cleanup
  * @revoke_event: Pre-reserved terminal event
+ * @control_wait: Grantor-fd wait queue woken by terminal revocation
  * @delegated: Grant is holder-lived and bound to a master selected by an
  * administrator
  *
@@ -82,6 +84,7 @@ struct castkms_capture_grant {
 	struct castkms_file *revoker_file;
 	struct drm_file *holder_file;
 	struct castkms_grant_pending_event *revoke_event;
+	wait_queue_head_t control_wait;
 };
 
 struct castkms_grant_pending_event {
@@ -109,6 +112,18 @@ static_assert(sizeof(struct drm_castkms_get_grant) == 32);
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24);
 static_assert(sizeof(struct drm_event_castkms_grant_state) == 32);
 
+static __poll_t castkms_grant_control_poll(struct file *file,
+					   poll_table *wait)
+{
+	struct castkms_capture_grant *grant = file->private_data;
+
+	poll_wait(file, &grant->control_wait, wait);
+	if (castkms_capture_authority_is_revoked(grant->authority))
+		return EPOLLHUP;
+
+	return 0;
+}
+
 static int castkms_grant_control_release(struct inode *inode,
 					 struct file *file)
 {
@@ -126,6 +141,7 @@ static int castkms_grant_control_release(struct inode *inode,
 
 static const struct file_operations castkms_grant_control_fops = {
 	.owner = THIS_MODULE,
+	.poll = castkms_grant_control_poll,
 	.release = castkms_grant_control_release,
 	.llseek = noop_llseek,
 };
@@ -336,6 +352,7 @@ static void castkms_grant_revoked(
 	}
 	mutex_unlock(&grant->lock);
 
+	wake_up_poll(&grant->control_wait, EPOLLHUP);
 	if (pending)
 		drm_send_event(dev, &pending->pending);
 }
@@ -596,6 +613,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 		goto out_put_connector;
 	}
 	mutex_init(&grant->lock);
+	init_waitqueue_head(&grant->control_wait);
 	grant->dev = dev;
 	grant->delegated = delegated;
 	authority = castkms_capture_authority_create(

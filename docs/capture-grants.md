@@ -13,9 +13,12 @@ the same capability, and closing the last copy ends it.
 
 Creating a grant returns a second descriptor, the **grantor fd**. Keep it in
 the compositor or other component responsible for the grant; do not pass it to
-the capture agent. Closing the grantor fd revokes the holder capability. Like
-any file descriptor, it may be duplicated or passed with `SCM_RIGHTS`;
-revocation happens when its final file reference closes.
+the capture agent. Closing the grantor fd revokes the holder capability, while
+polling it reports `POLLHUP` after any terminal revocation. This makes the
+lifetime relationship observable in both directions without a separate
+userspace liveness pipe. Like any file descriptor, it may be duplicated or
+passed with `SCM_RIGHTS`; revocation happens when its final file reference
+closes.
 
 The grant is how a capture agent reads pixels. Do not use the DRM writeback
 connector for that. Writeback is a master-side test copy, off by default, and
@@ -95,8 +98,11 @@ no association after the ioctl returns.
 ## The grantor file
 
 The grantor fd is a close-to-revoke anonymous file, not a DRM client. It is
-always close-on-exec. Closing its final reference revokes the grant
-synchronously.
+always close-on-exec and has two operations:
+
+- close its final reference to revoke the grant synchronously;
+- poll it for `POLLHUP`, which remains set after the holder's final close,
+  explicit or creator-file revocation, or device teardown.
 
 The grantor fd retains the underlying DRM device until it closes, so a
 compositor can safely observe terminal holder lifetime even when the card has
@@ -300,8 +306,9 @@ The fd is an adapter around a kernel-native capture authority. The authority
 contains connector scope, rights, and revocation state, and evaluates them
 against snapshots supplied by the DRM/content ownership tracker. The adapter
 contains only UAPI concerns: grant ID, optional creator-file revocation,
-holder and grantor fd lifetime, and DRM events. Capture streams, connector
-attachments, and CEC transports retain the authority rather than the adapter.
+holder and grantor fd lifetime, grantor polling, and DRM events. Capture
+streams, connector attachments, and CEC transports retain the authority
+rather than the adapter.
 
 Trusted code linked into the driver may create an authority directly and use
 the same core lifecycle without fabricating a `drm_file`. The constructor is

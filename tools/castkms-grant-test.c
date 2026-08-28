@@ -115,6 +115,66 @@ static int create_grant(int issuer_fd, uint32_t connector_id, uint32_t rights,
 	return 0;
 }
 
+static int expect_control_pending(int control_fd)
+{
+	struct pollfd poll_fd = {
+		.fd = control_fd,
+		.events = POLLIN,
+	};
+	int ret;
+
+	ret = poll(&poll_fd, 1, 0);
+	if (ret < 0) {
+		perror("poll grant control fd");
+		return -1;
+	}
+	if (ret || poll_fd.revents) {
+		fprintf(stderr,
+			"live grant control fd unexpectedly reported events %#x\n",
+			poll_fd.revents);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int expect_control_revoked(int control_fd)
+{
+	struct pollfd poll_fd = {
+		.fd = control_fd,
+		.events = POLLIN,
+	};
+	int ret;
+
+	ret = poll(&poll_fd, 1, 1000);
+	if (ret < 0) {
+		perror("poll revoked grant control fd");
+		return -1;
+	}
+	if (ret != 1 || !(poll_fd.revents & POLLHUP)) {
+		fprintf(stderr,
+			"revoked grant control fd reported events %#x\n",
+			poll_fd.revents);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int test_control_duplicate_lifetime(int control_fd)
+{
+	int duplicate_fd;
+
+	duplicate_fd = fcntl(control_fd, F_DUPFD_CLOEXEC, 0);
+	if (duplicate_fd < 0) {
+		perror("duplicate grant control fd");
+		return -1;
+	}
+	close(duplicate_fd);
+
+	return expect_control_pending(control_fd);
+}
+
 static int expect_create_grant_errno(int issuer_fd, uint32_t connector_id,
 				     uint32_t flags, int expected,
 				     const char *operation)
@@ -1358,6 +1418,10 @@ int main(int argc, char **argv)
 	if (create_grant(issuer, connector_id, full_rights, 0,
 			 &created_fd, &normal_control_fd, &normal_id))
 		goto out;
+	if (expect_control_pending(normal_control_fd) ||
+	    test_control_duplicate_lifetime(normal_control_fd))
+		goto out;
+	printf("grant_control_dup_lifetime=pass\n");
 	normal_fd = pass_fd(created_fd);
 	if (normal_fd < 0)
 		goto out;
@@ -1376,6 +1440,7 @@ int main(int argc, char **argv)
 		if (create_grant(issuer, foreign_connector_id, full_rights, 0,
 				 &foreign_grant_fd, &foreign_grant_control_fd,
 				 &foreign_grant_id) ||
+		    expect_control_pending(foreign_grant_control_fd) ||
 		    expect_holder_state(foreign_grant_fd, foreign_grant_id,
 					DRM_CASTKMS_GRANT_STATE_PENDING, 0) ||
 		    expect_foreign_connector_denied(normal_fd,
@@ -1417,6 +1482,7 @@ int main(int argc, char **argv)
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_DELEGATED,
 			 &delegated_fd, &delegated_control_fd, &delegated_id) ||
+	    expect_control_pending(delegated_control_fd) ||
 	    expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_DELEGATED) ||
@@ -1466,6 +1532,7 @@ int main(int argc, char **argv)
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
 			 &admin_fd, &admin_control_fd, &admin_id) ||
+	    expect_control_pending(admin_control_fd) ||
 	    expect_holder_state(admin_fd, admin_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN) ||
@@ -1496,6 +1563,7 @@ int main(int argc, char **argv)
 			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
 			 &masterless_admin_fd, &masterless_admin_control_fd,
 			 &masterless_admin_id) ||
+	    expect_control_pending(masterless_admin_control_fd) ||
 	    expect_holder_state(masterless_admin_fd, masterless_admin_id,
 				DRM_CASTKMS_GRANT_STATE_SUSPENDED_NO_MASTER,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN))
@@ -1550,6 +1618,7 @@ int main(int argc, char **argv)
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS, 0,
 			 &master_b_grant_fd, &master_b_grant_control_fd,
 			 &master_b_grant_id) ||
+	    expect_control_pending(master_b_grant_control_fd) ||
 	    expect_holder_state(
 		    master_b_grant_fd, master_b_grant_id,
 		    DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT, 0) ||
@@ -1585,6 +1654,8 @@ int main(int argc, char **argv)
 
 	close(master_b_grant_fd);
 	master_b_grant_fd = -1;
+	if (expect_control_revoked(master_b_grant_control_fd))
+		goto out;
 	close(master_b_grant_control_fd);
 	master_b_grant_control_fd = -1;
 	close(master_b);
@@ -1622,7 +1693,8 @@ int main(int argc, char **argv)
 	    expect_revoke_event(delegated_fd, delegated_id, -EKEYREVOKED) ||
 	    expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_REVOKED,
-				DRM_CASTKMS_GRANT_FLAG_DELEGATED))
+				DRM_CASTKMS_GRANT_FLAG_DELEGATED) ||
+	    expect_control_revoked(delegated_control_fd))
 		goto out;
 	close(delegated_fd);
 	delegated_fd = -1;
@@ -1655,6 +1727,8 @@ int main(int argc, char **argv)
 		goto out;
 	close(detached_delegated_fd);
 	detached_delegated_fd = -1;
+	if (expect_control_revoked(detached_delegated_control_fd))
+		goto out;
 	close(detached_delegated_control_fd);
 	detached_delegated_control_fd = -1;
 	if (expect_revoke_grant_errno(
@@ -1666,7 +1740,8 @@ int main(int argc, char **argv)
 	if (revoke_grant(issuer, normal_id) ||
 	    expect_revoke_event(normal_fd, normal_id, -EKEYREVOKED) ||
 	    expect_holder_state(normal_fd, normal_id,
-				DRM_CASTKMS_GRANT_STATE_REVOKED, 0))
+				DRM_CASTKMS_GRANT_STATE_REVOKED, 0) ||
+	    expect_control_revoked(normal_control_fd))
 		goto out;
 	attach = (struct drm_castkms_capture_attach_monitor) {
 		.connector_id = connector_id,
@@ -1695,7 +1770,8 @@ int main(int argc, char **argv)
 		    expect_revoke_event(foreign_grant_fd, foreign_grant_id,
 					-EKEYREVOKED) ||
 		    expect_holder_state(foreign_grant_fd, foreign_grant_id,
-					DRM_CASTKMS_GRANT_STATE_REVOKED, 0))
+					DRM_CASTKMS_GRANT_STATE_REVOKED, 0) ||
+		    expect_control_revoked(foreign_grant_control_fd))
 			goto out;
 		close(foreign_grant_fd);
 		foreign_grant_fd = -1;
@@ -1706,6 +1782,8 @@ int main(int argc, char **argv)
 
 	close(admin_fd);
 	admin_fd = -1;
+	if (expect_control_revoked(admin_control_fd))
+		goto out;
 	close(admin_control_fd);
 	admin_control_fd = -1;
 	issuer_query = (struct drm_castkms_get_grant) {
@@ -1738,7 +1816,8 @@ int main(int argc, char **argv)
 				-EKEYREVOKED) ||
 	    expect_holder_state(issuer_close_holder, issuer_close_id,
 				DRM_CASTKMS_GRANT_STATE_REVOKED,
-				DRM_CASTKMS_GRANT_FLAG_ADMIN))
+				DRM_CASTKMS_GRANT_FLAG_ADMIN) ||
+	    expect_control_revoked(issuer_close_control_fd))
 		goto out;
 	close(issuer_close_holder);
 	issuer_close_holder = -1;

@@ -14,7 +14,8 @@ identification, capture, cursor data, and HDMI remote-control for one
 connector. Pass that fd to the capture agent.
 
 Grant creation also returns a grantor fd. The compositor keeps that descriptor
-private: closing it revokes the holder.
+private: closing it revokes the holder, and polling it reports `POLLHUP` when
+the holder or any other terminal event ends the grant.
 
 The VKMS baseline is recorded in [`UPSTREAM.md`](UPSTREAM.md). People writing
 a compositor or capture agent should read

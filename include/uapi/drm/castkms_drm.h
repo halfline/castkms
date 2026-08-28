@@ -63,7 +63,8 @@ extern "C" {
  *
  * DRM_IOCTL_CASTKMS_CREATE_GRANT returns a private grantor descriptor in
  * addition to the holder descriptor. Closing the final grantor-file reference
- * revokes the grant.
+ * revokes the grant. Polling it reports POLLHUP after the grant becomes
+ * terminal, including when the final holder reference closes.
  */
 #define DRM_CASTKMS_CAPTURE_CAP_GRANT_CONTROL_FD	(1ULL << 4)
 
@@ -174,7 +175,8 @@ extern "C" {
  * Closing the final holder reference permanently revokes every grant. Closing
  * the creating file also revokes normal and administrative grants, but not a
  * delegated grant. Closing the final reference to @control_fd revokes every
- * grant mode. The kernel
+ * grant mode. The grantor descriptor permanently reports POLLHUP once the
+ * grant is revoked, including after the final @fd reference closes. The kernel
  * always creates both output descriptors with close-on-exec set, independently
  * of @fd_flags.
  */
