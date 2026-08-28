@@ -266,8 +266,10 @@ revoke the grant. A modeset increments `mode_generation`, returns queued work
 with `-ESTALE` and `MODE_CHANGED`, and requires a replacement stream and
 mode-sized buffers on the same grant fd.
 
-Detaching a monitor stops capture streams on that connector but does not
-revoke the grant. The holder may attach it again.
+Detaching a monitor stops streams on that connector but does not revoke the
+grant. The holder may attach it again. Detach also invalidates the CEC
+physical address and cancels an outstanding CEC transmit without discarding
+the durable transport binding.
 
 ## Revocation and events
 
@@ -280,7 +282,7 @@ happening before or after CEC cleanup. The complete sequence is:
 1. Walk that list. Cleaning a stream cancels queued and in-flight work and
    places an error on each producer fence. Cleaning a CEC binding aborts and
    unbinds its transport work.
-2. Detach the grant-owned monitor and clear its EDID state.
+2. Detach the grant-owned monitor and clear its EDID and ELD state.
 3. Send the pre-reserved `GRANT_REVOKED` event.
 
 The first step finishes every registered entry before monitor detachment or
