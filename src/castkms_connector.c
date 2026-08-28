@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_crtc.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_encoder.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_modes.h>
+#include <drm/drm_modeset_lock.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_property.h>
 #include <drm/drm_sysfs.h>
@@ -19,6 +21,7 @@
 #include "castkms_connector.h"
 #include "castkms_device.h"
 #include "castkms_limits.h"
+#include "castkms_output.h"
 
 static enum drm_connector_status castkms_connector_detect(struct drm_connector *connector,
 						       bool force)
@@ -323,6 +326,21 @@ bool castkms_connector_authority_is_attached(
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_connector_authority_is_attached);
 
+bool castkms_connector_is_attached(struct drm_connector *connector)
+{
+	struct drm_device *dev = connector->dev;
+	struct castkms_device *castkmsdev = drm_device_to_castkms_device(dev);
+	struct castkms_connector *castkms_connector =
+		drm_connector_to_castkms_connector(connector);
+	bool attached;
+
+	mutex_lock(&castkmsdev->attach_lock);
+	attached = castkms_connector->monitor_attached;
+	mutex_unlock(&castkmsdev->attach_lock);
+
+	return attached;
+}
+
 int castkms_connector_require_authority_attached(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority)
@@ -341,6 +359,27 @@ int castkms_connector_require_authority_attached(
 	mutex_unlock(&castkmsdev->attach_lock);
 
 	return ret;
+}
+
+int castkms_connector_get_routed_output(
+	struct drm_connector *connector, struct castkms_output **output)
+{
+	struct drm_modeset_lock *connection_lock =
+		&connector->dev->mode_config.connection_mutex;
+	struct drm_crtc *crtc = NULL;
+	int ret;
+
+	*output = NULL;
+	ret = drm_modeset_lock_single_interruptible(connection_lock);
+	if (ret)
+		return ret;
+	if (connector->state)
+		crtc = connector->state->crtc;
+	drm_modeset_unlock(connection_lock);
+
+	if (crtc)
+		*output = drm_crtc_to_castkms_output(crtc);
+	return 0;
 }
 
 int castkms_connector_update_authority_edid(

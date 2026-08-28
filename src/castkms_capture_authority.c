@@ -254,27 +254,6 @@ bool castkms_capture_authority_is_active(
 	return !castkms_capture_authority_status(authority);
 }
 
-static int castkms_capture_authority_get_routed_output(
-	struct drm_connector *connector, struct castkms_output **output)
-{
-	struct drm_modeset_lock *connection_lock =
-		&connector->dev->mode_config.connection_mutex;
-	struct drm_crtc *crtc = NULL;
-	int ret;
-
-	*output = NULL;
-	ret = drm_modeset_lock_single_interruptible(connection_lock);
-	if (ret)
-		return ret;
-	if (connector->state)
-		crtc = connector->state->crtc;
-	drm_modeset_unlock(connection_lock);
-
-	if (crtc)
-		*output = drm_crtc_to_castkms_output(crtc);
-	return 0;
-}
-
 int castkms_capture_authority_get_state(
 	const struct castkms_capture_authority *authority,
 	enum castkms_capture_authority_state *state)
@@ -286,16 +265,20 @@ int castkms_capture_authority_get_state(
 	bool connector_ready;
 	int ret;
 
-	ret = castkms_capture_authority_get_routed_output(authority->connector,
+	connector_ready = castkms_connector_is_attached(authority->connector);
+	if (connector_ready) {
+		ret = castkms_connector_get_routed_output(authority->connector,
 							  &output);
-	if (ret)
-		return ret;
-	connector_ready = !!output;
+		if (ret)
+			return ret;
+	}
+	connector_ready = false;
 
 	if (output) {
 		spin_lock_irqsave(&output->lock, flags);
 		castkms_capture_owner_take_output_snapshot(
 			output, authority->bound_master, &ownership);
+		connector_ready = output->capture.active;
 		spin_unlock_irqrestore(&output->lock, flags);
 	} else {
 		castkms_capture_owner_snapshot(&castkmsdev->drm,
@@ -373,7 +356,7 @@ int castkms_capture_authority_capture_status(
 	status = castkms_capture_authority_status(authority);
 	if (status)
 		return status;
-	status = castkms_capture_authority_get_routed_output(
+	status = castkms_connector_get_routed_output(
 		authority->connector, &routed_output);
 	if (status)
 		return status;
@@ -477,7 +460,7 @@ int castkms_capture_authority_stream_status(
 	unsigned long flags;
 	int status;
 
-	status = castkms_capture_authority_get_routed_output(
+	status = castkms_connector_get_routed_output(
 		authority->connector, &routed_output);
 	if (status)
 		return status;

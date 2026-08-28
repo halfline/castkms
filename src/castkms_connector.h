@@ -10,6 +10,7 @@
 struct castkms_capture_authority;
 struct castkms_cec_output;
 struct castkms_device;
+struct castkms_output;
 struct drm_edid;
 
 #define drm_connector_to_castkms_connector(target) \
@@ -68,9 +69,12 @@ int castkms_connector_detach_monitor(
 bool castkms_connector_authority_is_attached(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority);
+bool castkms_connector_is_attached(struct drm_connector *connector);
 int castkms_connector_require_authority_attached(
 	struct drm_connector *connector,
 	struct castkms_capture_authority *authority);
+int castkms_connector_get_routed_output(
+	struct drm_connector *connector, struct castkms_output **output);
 bool castkms_connector_detach_authority(
 	struct castkms_capture_authority *authority);
 void castkms_connector_set_capture_active(struct drm_connector *connector,
