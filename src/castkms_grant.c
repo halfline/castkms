@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
+#include <linux/anon_inodes.h>
 #include <linux/build_bug.h>
 #include <linux/capability.h>
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/ktime.h>
 #include <linux/limits.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/user_namespace.h>
 #include <linux/xarray.h>
@@ -53,6 +55,7 @@ castkms_grant_registry(struct drm_device *dev)
 /**
  * struct castkms_capture_grant - grant-fd UAPI wrapper
  * @authority: Kernel-native authorization and security state
+ * @dev: Owning DRM device, pinned separately by each live grantor file
  * @lock: Protects UAPI file associations, event state, and reported state
  * @id: Device-unique UAPI grant ID
  * @reported_state: Latest state reported through the grant fd
@@ -70,6 +73,7 @@ castkms_grant_registry(struct drm_device *dev)
  */
 struct castkms_capture_grant {
 	struct castkms_capture_authority *authority;
+	struct drm_device *dev;
 	struct mutex lock; /* Protects UAPI associations and event state. */
 	u32 id;
 	enum castkms_capture_authority_state reported_state;
@@ -90,11 +94,58 @@ struct castkms_grant_state_pending_event {
 	struct drm_event_castkms_grant_state event;
 };
 
-static_assert(sizeof(struct drm_castkms_create_grant) == 24);
+static_assert(sizeof(struct drm_castkms_create_grant) == 32);
+static_assert(offsetof(struct drm_castkms_create_grant, connector_id) == 0);
+static_assert(offsetof(struct drm_castkms_create_grant, rights) == 4);
+static_assert(offsetof(struct drm_castkms_create_grant, flags) == 8);
+static_assert(offsetof(struct drm_castkms_create_grant, fd) == 12);
+static_assert(offsetof(struct drm_castkms_create_grant, grant_id) == 16);
+static_assert(offsetof(struct drm_castkms_create_grant, fd_flags) == 20);
+static_assert(offsetof(struct drm_castkms_create_grant, control_fd) == 24);
+static_assert(offsetof(struct drm_castkms_create_grant, reserved) == 28);
+static_assert(_IOC_SIZE(DRM_IOCTL_CASTKMS_CREATE_GRANT) == 32);
 static_assert(sizeof(struct drm_castkms_revoke_grant) == 16);
 static_assert(sizeof(struct drm_castkms_get_grant) == 32);
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24);
 static_assert(sizeof(struct drm_event_castkms_grant_state) == 32);
+
+static int castkms_grant_control_release(struct inode *inode,
+					 struct file *file)
+{
+	struct castkms_capture_grant *grant = file->private_data;
+	struct castkms_capture_authority *authority = grant->authority;
+	struct drm_device *dev = grant->dev;
+
+	file->private_data = NULL;
+	castkms_capture_authority_revoke(authority, -EKEYREVOKED);
+	castkms_capture_authority_put(authority);
+	drm_dev_put(dev);
+
+	return 0;
+}
+
+static const struct file_operations castkms_grant_control_fops = {
+	.owner = THIS_MODULE,
+	.release = castkms_grant_control_release,
+	.llseek = noop_llseek,
+};
+
+static struct file *castkms_grant_control_file_create(
+	struct castkms_capture_grant *grant)
+{
+	struct file *file;
+
+	drm_dev_get(grant->dev);
+	castkms_capture_authority_get(grant->authority);
+	file = anon_inode_getfile("castkms-grant-control",
+				  &castkms_grant_control_fops, grant, O_RDONLY);
+	if (IS_ERR(file)) {
+		castkms_capture_authority_put(grant->authority);
+		drm_dev_put(grant->dev);
+	}
+
+	return file;
+}
 
 static u32 castkms_grant_state_to_uapi(
 	enum castkms_capture_authority_state state)
@@ -273,8 +324,7 @@ static void castkms_grant_revoked(
 {
 	struct castkms_capture_grant *grant = data;
 	struct castkms_grant_pending_event *pending;
-	struct drm_device *dev =
-		castkms_capture_authority_connector(authority)->dev;
+	struct drm_device *dev = grant->dev;
 
 	mutex_lock(&grant->lock);
 	pending = grant->revoke_event;
@@ -456,6 +506,7 @@ static int castkms_grant_register(
 	ret = xa_alloc_cyclic(&registry->grants, &grant->id, grant,
 			      XA_LIMIT(1, INT_MAX),
 			      &registry->next_id, GFP_KERNEL);
+	/* xa_alloc_cyclic() returns 1 when allocation succeeds after wrapping. */
 	if (ret < 0) {
 		castkms_capture_authority_put(grant->authority);
 		goto out_unlock;
@@ -496,15 +547,20 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	struct drm_connector *connector;
 	struct drm_master *bound_master = NULL;
 	struct drm_file *holder_file;
+	struct file *control_file = NULL;
 	struct file *grant_file = NULL;
 	bool holder_ref = false;
 	bool administrative;
 	bool delegated;
 	bool privileged;
+	int control_fd = -1;
 	int fd = -1;
 	int ret;
 
+	if (args->control_fd != -1 || args->reserved)
+		return -EINVAL;
 	args->fd = -1;
+	args->control_fd = -1;
 	args->grant_id = 0;
 	if (!args->rights || (args->rights & ~DRM_CASTKMS_GRANT_RIGHTS_MASK) ||
 	    (args->flags & ~DRM_CASTKMS_GRANT_CREATE_FLAGS_MASK) ||
@@ -540,6 +596,7 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 		goto out_put_connector;
 	}
 	mutex_init(&grant->lock);
+	grant->dev = dev;
 	grant->delegated = delegated;
 	authority = castkms_capture_authority_create(
 		core_device, connector, bound_master,
@@ -564,12 +621,17 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 		ret = fd;
 		goto out_revoke_authority;
 	}
+	control_fd = get_unused_fd_flags(O_CLOEXEC);
+	if (control_fd < 0) {
+		ret = control_fd;
+		goto out_put_fd;
+	}
 
 	grant_file = castkms_grant_file_create(dev, args->fd_flags);
 	if (IS_ERR(grant_file)) {
 		ret = PTR_ERR(grant_file);
 		grant_file = NULL;
-		goto out_put_fd;
+		goto out_put_control_fd;
 	}
 	holder_file = grant_file->private_data;
 	grant_file->f_flags &= ~O_NONBLOCK;
@@ -601,13 +663,22 @@ int castkms_grant_create_ioctl(struct drm_device *dev, void *data,
 	holder_ref = true;
 	holder_file_state->holder_grant = grant;
 
+	control_file = castkms_grant_control_file_create(grant);
+	if (IS_ERR(control_file)) {
+		ret = PTR_ERR(control_file);
+		control_file = NULL;
+		goto out_clear_holder;
+	}
+
 	ret = castkms_grant_register(registry, grant, revoker_file);
 	if (ret)
 		goto out_clear_holder;
 
 	args->fd = fd;
+	args->control_fd = control_fd;
 	args->grant_id = grant->id;
 	fd_install(fd, grant_file);
+	fd_install(control_fd, control_file);
 	drm_connector_put(connector);
 	if (bound_master)
 		drm_master_put(&bound_master);
@@ -632,6 +703,10 @@ out_free_pending:
 	kfree(pending);
 out_fput:
 	fput(grant_file);
+	if (control_file)
+		fput(control_file);
+out_put_control_fd:
+	put_unused_fd(control_fd);
 out_put_fd:
 	put_unused_fd(fd);
 out_revoke_authority:

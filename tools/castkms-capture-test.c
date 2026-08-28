@@ -1243,6 +1243,11 @@ static int validate_query(const struct drm_castkms_capture_query_caps *query,
 		fprintf(stderr, "capture query lacks grant-fd support\n");
 		return -1;
 	}
+	if (!(query->flags & DRM_CASTKMS_CAPTURE_CAP_GRANT_CONTROL_FD)) {
+		fprintf(stderr,
+			"capture query lacks grant-control-fd support\n");
+		return -1;
+	}
 
 	return 0;
 }

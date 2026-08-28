@@ -166,7 +166,7 @@ and unplugs the device before its configuration is detached, even when ioctl
 and debugfs calls fail on file descriptors left open across the removal.
 
 **capture** creates a default card with a color pipeline, writeback, and frame
-checksums. It consumes a `0.9` grant fd, checks that an ordinary card fd
+checksums. It consumes a `0.10` grant fd, checks that an ordinary card fd
 remains unauthorized, and exercises monitor attach, EDID, implicit and
 explicit buffer synchronization, DMA-BUF fence reuse, completion metadata,
 composed pixels, a vsynced `800x600` page-flip that advances the capture

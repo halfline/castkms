@@ -13,6 +13,9 @@ for it, issues a **grant**: a file descriptor that authorizes attachment,
 identification, capture, cursor data, and HDMI remote-control for one
 connector. Pass that fd to the capture agent.
 
+Grant creation also returns a grantor fd. The compositor keeps that descriptor
+private: closing it revokes the holder.
+
 The VKMS baseline is recorded in [`UPSTREAM.md`](UPSTREAM.md). People writing
 a compositor or capture agent should read
 [`docs/capture-grants.md`](docs/capture-grants.md). People changing the driver
@@ -28,8 +31,9 @@ should read [`docs/architecture.md`](docs/architecture.md).
 2. A compositor opens the card and becomes **DRM master**, the process
    allowed to **modeset**, that is, to pick a resolution and refresh rate and
    turn the output on.
-3. That compositor creates a grant for a connector and passes the fd to the
-   capture agent. For lab work, `castkms-grant-launch` can issue an
+3. That compositor creates a grant for a connector, retains the grantor fd,
+   and passes the holder fd to the capture agent. For lab work,
+   `castkms-grant-launch` can issue an
    administrative grant instead; a production compositor should issue a
    **normal** grant bound to itself. See
    [`docs/capture-grants.md`](docs/capture-grants.md) for the delegated and
@@ -45,7 +49,7 @@ Rights on a grant independently cover monitor attachment, EDID, pixels, cursor
 data, and HDMI-CEC. A DRM **lease** (a client given only a subset of the
 card's resources) cannot create grants.
 
-The capture protocol is experimental version `0.9` (read as major.minor;
+The capture protocol is experimental version `0.10` (read as major.minor;
 major `0` means it may still change incompatibly). Each stream carries a
 single mode's frames: after a modeset the agent stops the stream, starts a
 new one, and registers fresh buffers for the new mode. Those buffers are
@@ -140,7 +144,7 @@ over the card as DRM master and become the owner of on-screen content.
 
 ## PipeWire video
 
-`tools/pw-castkms/pw-castkms` is a small example consumer. It takes a `0.9`
+`tools/pw-castkms/pw-castkms` is a small example consumer. It takes a `0.10`
 grant through `--grant-fd` or `CASTKMS_GRANT_FD`, creates destination buffers
 on that fd, and publishes a PipeWire source. It stops when the grant or mode
 generation changes so a supervisor can restart it. Publication uses a

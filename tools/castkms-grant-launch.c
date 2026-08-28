@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +18,12 @@
 
 #include "castkms-test-drm.h"
 
-static_assert(sizeof(struct drm_castkms_create_grant) == 24,
+static_assert(sizeof(struct drm_castkms_create_grant) == 32,
 	      "create-grant ABI size changed");
+static_assert(offsetof(struct drm_castkms_create_grant, control_fd) == 24,
+	      "create-grant control-fd offset changed");
+static_assert(offsetof(struct drm_castkms_create_grant, reserved) == 28,
+	      "create-grant reserved offset changed");
 
 static volatile sig_atomic_t child_pid = -1;
 
@@ -71,8 +76,8 @@ int main(int argc, char **argv)
 		.flags = DRM_CASTKMS_GRANT_CREATE_ADMIN,
 		.fd = -1,
 		.fd_flags = O_NONBLOCK,
+		.control_fd = -1,
 	};
-	struct drm_castkms_revoke_grant revoke;
 	struct sigaction action = {
 		.sa_handler = forward_signal,
 	};
@@ -111,8 +116,10 @@ int main(int argc, char **argv)
 		perror("DRM_IOCTL_CASTKMS_CREATE_GRANT (admin)");
 		goto fail;
 	}
-	if (create.fd < 0 || !create.grant_id ||
-	    !(fcntl(create.fd, F_GETFD) & FD_CLOEXEC)) {
+	if (create.fd < 0 || create.control_fd < 0 ||
+	    create.fd == create.control_fd || !create.grant_id ||
+	    !(fcntl(create.fd, F_GETFD) & FD_CLOEXEC) ||
+	    !(fcntl(create.control_fd, F_GETFD) & FD_CLOEXEC)) {
 		fprintf(stderr, "CREATE_GRANT returned invalid outputs\n");
 		goto fail_grant;
 	}
@@ -136,6 +143,7 @@ int main(int argc, char **argv)
 	}
 	if (child_pid == 0) {
 		close(issuer_fd);
+		close(create.control_fd);
 		if (fcntl(create.fd, F_SETFD, 0) < 0) {
 			perror("make grant fd inheritable");
 			_exit(EXIT_FAILURE);
@@ -157,12 +165,8 @@ int main(int argc, char **argv)
 	} while (waited < 0 && errno == EINTR);
 	child_pid = -1;
 
-	revoke = (struct drm_castkms_revoke_grant) {
-		.grant_id = create.grant_id,
-	};
-	if (ioctl(issuer_fd, DRM_IOCTL_CASTKMS_REVOKE_GRANT, &revoke) < 0 &&
-	    errno != ENOENT)
-		perror("DRM_IOCTL_CASTKMS_REVOKE_GRANT");
+	close(create.control_fd);
+	create.control_fd = -1;
 	close(issuer_fd);
 
 	if (waited < 0) {
@@ -178,6 +182,8 @@ int main(int argc, char **argv)
 fail_grant:
 	if (create.fd >= 0)
 		close(create.fd);
+	if (create.control_fd >= 0)
+		close(create.control_fd);
 fail:
 	close(issuer_fd);
 	return EXIT_FAILURE;

@@ -272,7 +272,8 @@ int castkms_capture_query_caps_ioctl(struct drm_device *dev, void *data,
 	args->uapi_major = DRM_CASTKMS_CAPTURE_UAPI_MAJOR;
 	args->uapi_minor = DRM_CASTKMS_CAPTURE_UAPI_MINOR;
 	args->flags = DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC |
-		      DRM_CASTKMS_CAPTURE_CAP_GRANT_FD;
+		      DRM_CASTKMS_CAPTURE_CAP_GRANT_FD |
+		      DRM_CASTKMS_CAPTURE_CAP_GRANT_CONTROL_FD;
 	if (drm_core_check_feature(dev, DRIVER_SYNCOBJ_TIMELINE))
 		args->flags |= DRM_CASTKMS_CAPTURE_CAP_SYNCOBJ_TIMELINE;
 	args->max_registered_buffers = CASTKMS_CAPTURE_MAX_BUFFERS;

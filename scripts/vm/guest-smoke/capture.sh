@@ -164,7 +164,7 @@ run_capture_scenario()
 	grep -Fx 'drm_cap_syncobj_timeline=1' \
 		"$result_dir/capture-test.txt" >/dev/null
 	grep -Fx 'capture_grant_fd=1' "$result_dir/capture-test.txt" >/dev/null
-	grep -Fx 'capture_uapi=0.9' "$result_dir/capture-test.txt" >/dev/null
+	grep -Fx 'capture_uapi=0.10' "$result_dir/capture-test.txt" >/dev/null
 	grep -Fx 'capture_format=XRGB8888:LINEAR' \
 		"$result_dir/capture-test.txt" >/dev/null
 	grep -Fx 'capture_max_registered_buffers=8' \

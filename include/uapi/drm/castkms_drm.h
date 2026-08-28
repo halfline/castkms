@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 #define DRM_CASTKMS_CAPTURE_UAPI_MAJOR	0
-#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	9
+#define DRM_CASTKMS_CAPTURE_UAPI_MINOR	10
 
 /* Immutable capture-protocol limits shared by the driver and clients. */
 #define DRM_CASTKMS_CAPTURE_MIN_WIDTH		10U
@@ -57,6 +57,15 @@ extern "C" {
  * node does not confer those rights.
  */
 #define DRM_CASTKMS_CAPTURE_CAP_GRANT_FD		(1ULL << 3)
+
+/**
+ * DRM_CASTKMS_CAPTURE_CAP_GRANT_CONTROL_FD:
+ *
+ * DRM_IOCTL_CASTKMS_CREATE_GRANT returns a private grantor descriptor in
+ * addition to the holder descriptor. Closing the final grantor-file reference
+ * revokes the grant.
+ */
+#define DRM_CASTKMS_CAPTURE_CAP_GRANT_CONTROL_FD	(1ULL << 4)
 
 /**
  * DRM_CASTKMS_GRANT_CAPTURE_PIXELS:
@@ -145,6 +154,8 @@ extern "C" {
  * @fd: output file descriptor carrying the grant
  * @grant_id: output device-unique grant identifier
  * @fd_flags: flags for the returned file; only O_NONBLOCK is accepted
+ * @control_fd: output close-to-revoke grantor descriptor; must be -1 on input
+ * @reserved: must be zero
  *
  * With no creation flags, this operation requires the device's current
  * top-level DRM owner master and creates a normal grant revoked when that
@@ -162,8 +173,10 @@ extern "C" {
  * administrative grant follows current safe content across master changes.
  * Closing the final holder reference permanently revokes every grant. Closing
  * the creating file also revokes normal and administrative grants, but not a
- * delegated grant. The kernel always creates @fd with close-on-exec set,
- * independently of @fd_flags.
+ * delegated grant. Closing the final reference to @control_fd revokes every
+ * grant mode. The kernel
+ * always creates both output descriptors with close-on-exec set, independently
+ * of @fd_flags.
  */
 struct drm_castkms_create_grant {
 	__u32 connector_id;
@@ -172,6 +185,8 @@ struct drm_castkms_create_grant {
 	__s32 fd;
 	__u32 grant_id;
 	__u32 fd_flags;
+	__s32 control_fd;
+	__u32 reserved;
 };
 
 /**

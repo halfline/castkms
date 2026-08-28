@@ -334,11 +334,15 @@ static int query_capture_caps(struct pw_castkms *bridge, uint32_t crtc_id)
 	if (query.uapi_major != DRM_CASTKMS_CAPTURE_UAPI_MAJOR ||
 	    query.uapi_minor < DRM_CASTKMS_CAPTURE_UAPI_MINOR ||
 	    !(query.flags & DRM_CASTKMS_CAPTURE_CAP_GRANT_FD) ||
+	    !(query.flags & DRM_CASTKMS_CAPTURE_CAP_GRANT_CONTROL_FD) ||
 	    !(query.flags & DRM_CASTKMS_CAPTURE_CAP_IMPLICIT_SYNC) ||
 	    !query.format_count || query.format_count > 256 ||
 	    query.max_registered_buffers < 2 || query.reserved) {
 		fprintf(stderr,
-			"CastKMS capture UAPI 0.9 with GRANT_FD and implicit sync is required\n");
+			"CastKMS capture UAPI %u.%u with GRANT_FD, "
+			"GRANT_CONTROL_FD, and implicit sync is required\n",
+			DRM_CASTKMS_CAPTURE_UAPI_MAJOR,
+			DRM_CASTKMS_CAPTURE_UAPI_MINOR);
 		return -EPROTO;
 	}
 

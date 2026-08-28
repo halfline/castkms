@@ -21,7 +21,7 @@ other DRM-backed video nodes.
 1. [`pw-castkms.c`](pw-castkms.c) is the application. Its `main()` shows the
    complete sequence: adopt a holder grant, configure the output, start a
    capture stream, and publish it.
-2. [`castkms.c`](castkms.c) validates the `0.9` grant and capabilities,
+2. [`castkms.c`](castkms.c) validates the `0.10` grant and capabilities,
    manages connector attachment, starts and stops capture, and validates DRM
    events.
 3. [`castkms-buffer.c`](castkms-buffer.c) creates the destination pool in the
@@ -52,9 +52,9 @@ PipeWire pool gets a new CastKMS stream and fresh registrations and syncobjs.
 - Receive a grant holder fd from the compositor or broker. Opening the
   primary node does not authorize capture, and the consumer never needs DRM
   master.
-- Require capture UAPI `0.9`, `DRM_CASTKMS_CAPTURE_CAP_GRANT_FD`, an advertised
-  format/modifier pair, and all rights needed by the operations the consumer
-  performs.
+- Require capture UAPI `0.10`, `DRM_CASTKMS_CAPTURE_CAP_GRANT_FD`,
+  `DRM_CASTKMS_CAPTURE_CAP_GRANT_CONTROL_FD`, an advertised format/modifier
+  pair, and all rights needed by the operations the consumer performs.
 - Discover only the connector named by `GET_GRANT`. Treat its CRTC route as
   compositor-owned state.
 - Create GEM objects, framebuffer IDs, syncobjs, registrations, and queues on

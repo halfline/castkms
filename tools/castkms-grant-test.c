@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,8 +24,12 @@
 
 #include "castkms-test-drm.h"
 
-static_assert(sizeof(struct drm_castkms_create_grant) == 24,
+static_assert(sizeof(struct drm_castkms_create_grant) == 32,
 	      "create-grant ABI size changed");
+static_assert(offsetof(struct drm_castkms_create_grant, control_fd) == 24,
+	      "create-grant control-fd offset changed");
+static_assert(offsetof(struct drm_castkms_create_grant, reserved) == 28,
+	      "create-grant reserved offset changed");
 static_assert(sizeof(struct drm_castkms_revoke_grant) == 16,
 	      "revoke-grant ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
@@ -71,32 +76,41 @@ static int expect_ioctl_errno(int fd, unsigned long request, void *arg,
 }
 
 static int create_grant(int issuer_fd, uint32_t connector_id, uint32_t rights,
-			uint32_t flags, int *grant_fd, uint32_t *grant_id)
+			uint32_t flags, int *grant_fd, int *control_fd,
+			uint32_t *grant_id)
 {
 	struct drm_castkms_create_grant create = {
 		.connector_id = connector_id,
 		.rights = rights,
 		.flags = flags,
+		.fd = -1,
 		.fd_flags = O_NONBLOCK,
+		.control_fd = -1,
 	};
 
 	if (ioctl(issuer_fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create) < 0) {
 		perror("DRM_IOCTL_CASTKMS_CREATE_GRANT");
 		return -1;
 	}
-	if (create.fd < 0 || !create.grant_id) {
+	if (create.fd < 0 || create.control_fd < 0 ||
+	    create.fd == create.control_fd || !create.grant_id) {
 		fprintf(stderr, "create grant returned invalid outputs\n");
 		if (create.fd >= 0)
 			close(create.fd);
+		if (create.control_fd >= 0)
+			close(create.control_fd);
 		return -1;
 	}
-	if (!(fcntl(create.fd, F_GETFD) & FD_CLOEXEC)) {
-		fprintf(stderr, "grant fd is missing FD_CLOEXEC\n");
+	if (!(fcntl(create.fd, F_GETFD) & FD_CLOEXEC) ||
+	    !(fcntl(create.control_fd, F_GETFD) & FD_CLOEXEC)) {
+		fprintf(stderr, "grant output fd is missing FD_CLOEXEC\n");
 		close(create.fd);
+		close(create.control_fd);
 		return -1;
 	}
 
 	*grant_fd = create.fd;
+	*control_fd = create.control_fd;
 	*grant_id = create.grant_id;
 	return 0;
 }
@@ -109,12 +123,16 @@ static int expect_create_grant_errno(int issuer_fd, uint32_t connector_id,
 		.connector_id = connector_id,
 		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 		.flags = flags,
+		.fd = -1,
+		.control_fd = -1,
 	};
 
 	if (ioctl(issuer_fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create) == 0) {
 		fprintf(stderr, "%s unexpectedly succeeded\n", operation);
 		if (create.fd >= 0)
 			close(create.fd);
+		if (create.control_fd >= 0)
+			close(create.control_fd);
 		return -1;
 	}
 	if (errno != expected) {
@@ -960,6 +978,8 @@ static int expect_holder_cannot_create_grant(int fd, uint32_t connector_id)
 	struct drm_castkms_create_grant create = {
 		.connector_id = connector_id,
 		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+		.fd = -1,
+		.control_fd = -1,
 	};
 	struct drm_castkms_get_output output = {
 		.connector_id = connector_id,
@@ -1058,6 +1078,8 @@ static int expect_create_flag_namespaces(int fd, uint32_t connector_id)
 		.connector_id = connector_id,
 		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 		.flags = O_CLOEXEC,
+		.fd = -1,
+		.control_fd = -1,
 	};
 
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
@@ -1068,6 +1090,8 @@ static int expect_create_flag_namespaces(int fd, uint32_t connector_id)
 		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 		.flags = DRM_CASTKMS_GRANT_CREATE_ADMIN |
 			 DRM_CASTKMS_GRANT_CREATE_DELEGATED,
+		.fd = -1,
+		.control_fd = -1,
 	};
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
 			       EINVAL, "CREATE_GRANT conflicting grant flags"))
@@ -1076,10 +1100,33 @@ static int expect_create_flag_namespaces(int fd, uint32_t connector_id)
 	create = (struct drm_castkms_create_grant) {
 		.connector_id = connector_id,
 		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+		.fd = -1,
 		.fd_flags = O_WRONLY,
+		.control_fd = -1,
+	};
+	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
+			       EINVAL, "CREATE_GRANT access mode in fd flags"))
+		return -1;
+
+	create = (struct drm_castkms_create_grant) {
+		.connector_id = connector_id,
+		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+		.fd = -1,
+		.control_fd = 0,
+	};
+	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
+			       EINVAL, "CREATE_GRANT nonnegative control fd"))
+		return -1;
+
+	create = (struct drm_castkms_create_grant) {
+		.connector_id = connector_id,
+		.rights = DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
+		.fd = -1,
+		.control_fd = -1,
+		.reserved = 1,
 	};
 	return expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CREATE_GRANT, &create,
-				  EINVAL, "CREATE_GRANT access mode in fd flags");
+				  EINVAL, "CREATE_GRANT reserved field");
 }
 
 static int expect_foreign_connector_denied(int grant_fd,
@@ -1252,6 +1299,14 @@ int main(int argc, char **argv)
 	uint32_t admin_id = 0;
 	uint32_t foreign_connector_id = 0;
 	uint32_t connector_id;
+	int masterless_admin_control_fd = -1;
+	int issuer_close_control_fd = -1;
+	int detached_delegated_control_fd = -1;
+	int delegated_control_fd = -1;
+	int foreign_grant_control_fd = -1;
+	int master_b_grant_control_fd = -1;
+	int admin_control_fd = -1;
+	int normal_control_fd = -1;
 	int masterless_admin_fd = -1;
 	int issuer_close_holder = -1;
 	int detached_delegated_fd = -1;
@@ -1301,7 +1356,7 @@ int main(int argc, char **argv)
 	printf("grant_flag_namespaces=pass\n");
 
 	if (create_grant(issuer, connector_id, full_rights, 0,
-			 &created_fd, &normal_id))
+			 &created_fd, &normal_control_fd, &normal_id))
 		goto out;
 	normal_fd = pass_fd(created_fd);
 	if (normal_fd < 0)
@@ -1319,7 +1374,8 @@ int main(int argc, char **argv)
 	printf("grant_syncobj_eventfd=pass\n");
 	if (foreign_connector_id) {
 		if (create_grant(issuer, foreign_connector_id, full_rights, 0,
-				 &foreign_grant_fd, &foreign_grant_id) ||
+				 &foreign_grant_fd, &foreign_grant_control_fd,
+				 &foreign_grant_id) ||
 		    expect_holder_state(foreign_grant_fd, foreign_grant_id,
 					DRM_CASTKMS_GRANT_STATE_PENDING, 0) ||
 		    expect_foreign_connector_denied(normal_fd,
@@ -1360,7 +1416,7 @@ int main(int argc, char **argv)
 	    create_grant(delegated_creator, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_DELEGATED,
-			 &delegated_fd, &delegated_id) ||
+			 &delegated_fd, &delegated_control_fd, &delegated_id) ||
 	    expect_holder_state(delegated_fd, delegated_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_DELEGATED) ||
@@ -1409,7 +1465,7 @@ int main(int argc, char **argv)
 	if (create_grant(issuer, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
-			 &admin_fd, &admin_id) ||
+			 &admin_fd, &admin_control_fd, &admin_id) ||
 	    expect_holder_state(admin_fd, admin_id,
 				DRM_CASTKMS_GRANT_STATE_ACTIVE,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN) ||
@@ -1438,7 +1494,8 @@ int main(int argc, char **argv)
 	if (create_grant(issuer, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
-			 &masterless_admin_fd, &masterless_admin_id) ||
+			 &masterless_admin_fd, &masterless_admin_control_fd,
+			 &masterless_admin_id) ||
 	    expect_holder_state(masterless_admin_fd, masterless_admin_id,
 				DRM_CASTKMS_GRANT_STATE_SUSPENDED_NO_MASTER,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN))
@@ -1458,9 +1515,18 @@ int main(int argc, char **argv)
 			       &detach, EACCES,
 			       "capture-only grant DETACH_MONITOR"))
 		goto out;
+	close(masterless_admin_control_fd);
+	masterless_admin_control_fd = -1;
+	if (expect_revoke_event(masterless_admin_fd, masterless_admin_id,
+				-EKEYREVOKED) ||
+	    expect_holder_state(masterless_admin_fd, masterless_admin_id,
+				DRM_CASTKMS_GRANT_STATE_REVOKED,
+				DRM_CASTKMS_GRANT_FLAG_ADMIN))
+		goto out;
 	close(masterless_admin_fd);
 	masterless_admin_fd = -1;
 	printf("grant_admin_masterless_create=pass\n");
+	printf("grant_control_close_revoke=pass\n");
 
 	master_b = open(argv[1], O_RDWR | O_CLOEXEC);
 	if (master_b < 0) {
@@ -1482,7 +1548,8 @@ int main(int argc, char **argv)
 
 	if (create_grant(master_b, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS, 0,
-			 &master_b_grant_fd, &master_b_grant_id) ||
+			 &master_b_grant_fd, &master_b_grant_control_fd,
+			 &master_b_grant_id) ||
 	    expect_holder_state(
 		    master_b_grant_fd, master_b_grant_id,
 		    DRM_CASTKMS_GRANT_STATE_SUSPENDED_FOREIGN_CONTENT, 0) ||
@@ -1518,6 +1585,8 @@ int main(int argc, char **argv)
 
 	close(master_b_grant_fd);
 	master_b_grant_fd = -1;
+	close(master_b_grant_control_fd);
+	master_b_grant_control_fd = -1;
 	close(master_b);
 	master_b = -1;
 	master_b_source = (struct castkms_test_framebuffer) {};
@@ -1557,6 +1626,8 @@ int main(int argc, char **argv)
 		goto out;
 	close(delegated_fd);
 	delegated_fd = -1;
+	close(delegated_control_fd);
+	delegated_control_fd = -1;
 	if (expect_revoke_grant_errno(
 		    issuer, delegated_id, ENOENT,
 		    "root REVOKE_GRANT after delegated holder close"))
@@ -1571,7 +1642,9 @@ int main(int argc, char **argv)
 	if (create_grant(delegated_creator, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_DELEGATED,
-			 &detached_delegated_fd, &detached_delegated_id))
+			 &detached_delegated_fd,
+			 &detached_delegated_control_fd,
+			 &detached_delegated_id))
 		goto out;
 	close(delegated_creator);
 	delegated_creator = -1;
@@ -1582,6 +1655,8 @@ int main(int argc, char **argv)
 		goto out;
 	close(detached_delegated_fd);
 	detached_delegated_fd = -1;
+	close(detached_delegated_control_fd);
+	detached_delegated_control_fd = -1;
 	if (expect_revoke_grant_errno(
 		    issuer, detached_delegated_id, ENOENT,
 		    "root REVOKE_GRANT after final delegated holder close"))
@@ -1611,6 +1686,8 @@ int main(int argc, char **argv)
 	printf("grant_explicit_revoke=pass\n");
 	close(normal_fd);
 	normal_fd = -1;
+	close(normal_control_fd);
+	normal_control_fd = -1;
 	if (foreign_grant_fd >= 0) {
 		if (test_attachment_lifecycle(foreign_grant_fd,
 					      foreign_connector_id) ||
@@ -1622,11 +1699,15 @@ int main(int argc, char **argv)
 			goto out;
 		close(foreign_grant_fd);
 		foreign_grant_fd = -1;
+		close(foreign_grant_control_fd);
+		foreign_grant_control_fd = -1;
 		printf("grant_cross_connector_independent=pass\n");
 	}
 
 	close(admin_fd);
 	admin_fd = -1;
+	close(admin_control_fd);
+	admin_control_fd = -1;
 	issuer_query = (struct drm_castkms_get_grant) {
 		.grant_id = admin_id,
 	};
@@ -1644,7 +1725,8 @@ int main(int argc, char **argv)
 	if (create_grant(issuer2, connector_id,
 			 DRM_CASTKMS_GRANT_CAPTURE_PIXELS,
 			 DRM_CASTKMS_GRANT_CREATE_ADMIN,
-			 &issuer_close_holder, &issuer_close_id))
+			 &issuer_close_holder, &issuer_close_control_fd,
+			 &issuer_close_id))
 		goto out;
 	if (expect_holder_state(issuer_close_holder, issuer_close_id,
 				DRM_CASTKMS_GRANT_STATE_PENDING,
@@ -1658,6 +1740,10 @@ int main(int argc, char **argv)
 				DRM_CASTKMS_GRANT_STATE_REVOKED,
 				DRM_CASTKMS_GRANT_FLAG_ADMIN))
 		goto out;
+	close(issuer_close_holder);
+	issuer_close_holder = -1;
+	close(issuer_close_control_fd);
+	issuer_close_control_fd = -1;
 	printf("grant_issuer_close_revoke=pass\n");
 
 	printf("grant_lifecycle=pass\n");
@@ -1668,10 +1754,16 @@ out:
 		close(created_fd);
 	if (masterless_admin_fd >= 0)
 		close(masterless_admin_fd);
+	if (masterless_admin_control_fd >= 0)
+		close(masterless_admin_control_fd);
 	if (issuer_close_holder >= 0)
 		close(issuer_close_holder);
+	if (issuer_close_control_fd >= 0)
+		close(issuer_close_control_fd);
 	if (detached_delegated_fd >= 0)
 		close(detached_delegated_fd);
+	if (detached_delegated_control_fd >= 0)
+		close(detached_delegated_control_fd);
 	if (delegated_creator >= 0)
 		close(delegated_creator);
 	if (delegated_stream_prepared && delegated_fd >= 0)
@@ -1681,22 +1773,32 @@ out:
 					   &delegated_destination);
 	if (delegated_fd >= 0)
 		close(delegated_fd);
+	if (delegated_control_fd >= 0)
+		close(delegated_control_fd);
 	if (master_b_grant_fd >= 0)
 		close(master_b_grant_fd);
+	if (master_b_grant_control_fd >= 0)
+		close(master_b_grant_control_fd);
 	if (foreign_grant_fd >= 0)
 		close(foreign_grant_fd);
+	if (foreign_grant_control_fd >= 0)
+		close(foreign_grant_control_fd);
 	if (master_b >= 0)
 		destroy_test_framebuffer(master_b, &master_b_source);
 	if (master_b >= 0)
 		close(master_b);
 	if (normal_fd >= 0)
 		close(normal_fd);
+	if (normal_control_fd >= 0)
+		close(normal_control_fd);
 	if (admin_stream_prepared && admin_fd >= 0)
 		stop_capture(admin_fd, admin_stream.stream_id);
 	if (admin_fd >= 0)
 		destroy_test_framebuffer(admin_fd, &admin_destination);
 	if (admin_fd >= 0)
 		close(admin_fd);
+	if (admin_control_fd >= 0)
+		close(admin_control_fd);
 	if (issuer2 >= 0)
 		close(issuer2);
 	if (issuer >= 0)

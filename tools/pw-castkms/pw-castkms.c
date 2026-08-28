@@ -82,7 +82,7 @@ static void usage(const char *program)
 	fprintf(stderr,
 		"Usage: %s -g GRANT-FD [-p PIPEWIRE-FD | -U] [OPTIONS]\n"
 		"\n"
-		"  -g, --grant-fd FD     inherited CastKMS 0.9 grant fd\n"
+		"  -g, --grant-fd FD     inherited CastKMS 0.10 grant fd\n"
 		"                         (or CASTKMS_GRANT_FD)\n"
 		"  -p, --pipewire-fd FD  restricted PipeWire socket fd\n"
 		"                         (or PIPEWIRE_REMOTE_FD)\n"

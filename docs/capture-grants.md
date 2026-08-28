@@ -11,6 +11,12 @@ require the grant fd, which is a newly created DRM file. The fd can be
 duplicated or passed over a Unix socket (`SCM_RIGHTS`); all copies represent
 the same capability, and closing the last copy ends it.
 
+Creating a grant returns a second descriptor, the **grantor fd**. Keep it in
+the compositor or other component responsible for the grant; do not pass it to
+the capture agent. Closing the grantor fd revokes the holder capability. Like
+any file descriptor, it may be duplicated or passed with `SCM_RIGHTS`;
+revocation happens when its final file reference closes.
+
 The grant is how a capture agent reads pixels. Do not use the DRM writeback
 connector for that. Writeback is a master-side test copy, off by default, and
 is not part of this contract.
@@ -34,8 +40,9 @@ the compositor.
 - Writing a compositor that owns the output? Create a **normal** grant. No
   root helper is required. Closing the compositor's DRM file revokes it.
 - Writing a one-shot root helper that should outlive the helper but die with
-  that compositor? Create a **delegated** grant. The helper can exit; the
-  grant stays bound to the current compositor's master identity.
+  that compositor? Create a **delegated** grant. Pass the holder fd to the
+  agent and the grantor fd to the compositor before the helper exits; the
+  grant stays bound to that compositor's master identity.
 - Writing a lab or diagnostic tool that should follow whichever compositor is
   current? Create an **administrative** grant. Keep the creating file open as
   the revoker.
@@ -47,11 +54,11 @@ handed an administrative grant that follows whichever compositor is current.
 Host root here means `CAP_SYS_ADMIN` in the initial user namespace (true host
 root, not a container).
 
-| Creation flags | Required caller | Master binding | Creator-file close |
-|---|---|---|---|
-| none | Current top-level DRM owner master | Caller's `drm_master` | Revokes |
-| `CREATE_DELEGATED` | Host root, not current master | Current top-level owner master | No effect |
-| `CREATE_ADMIN` | Host root | None; follows current safe owner | Revokes |
+| Creation flags | Required caller | Master binding | Creator-file close | Grantor-fd close |
+|---|---|---|---|---|
+| none | Current top-level DRM owner master | Caller's `drm_master` | Revokes | Revokes |
+| `CREATE_DELEGATED` | Host root, not current master | Current top-level owner master | No effect | Revokes |
+| `CREATE_ADMIN` | Host root | None; follows current safe owner | Revokes | Revokes |
 
 Delegated creation returns `-EAGAIN` if there is no current owner master or
 the caller is itself current. Opening a masterless card implicitly makes the
@@ -77,11 +84,24 @@ that accidental master immediately while retaining the same file as revoker.
 Grant-creation policy flags and returned-file flags use separate fields.
 `flags` accepts either `DRM_CASTKMS_GRANT_CREATE_DELEGATED` or
 `DRM_CASTKMS_GRANT_CREATE_ADMIN`; `fd_flags` accepts only `O_NONBLOCK`.
-Close-on-exec is unconditional and is not requested through either field.
+`control_fd` must be `-1` and `reserved` must be zero on input. The kernel
+returns both `fd` and `control_fd` close-on-exec; close-on-exec is unconditional
+and is not requested through either flag field.
 
 The creator file for a normal or administrative grant retains revocation
 authority even while its DRM master is inactive. A delegated creator retains
 no association after the ioctl returns.
+
+## The grantor file
+
+The grantor fd is a close-to-revoke anonymous file, not a DRM client. It is
+always close-on-exec. Closing its final reference revokes the grant
+synchronously.
+
+The grantor fd retains the underlying DRM device until it closes, so a
+compositor can safely observe terminal holder lifetime even when the card has
+already been unplugged or unregistered. It conveys no holder rights and is
+not a replacement for the holder fd.
 
 ## The grant file
 
@@ -129,13 +149,14 @@ Permanent validity and temporary pixel activation are separate.
 A grant remains valid until one of these terminal events:
 
 - explicit revoker-file or administrative revocation;
+- grantor-fd close;
 - creator/revoker DRM file close for a normal or administrative grant;
 - final holder-file close;
 - connector/device teardown or unplug.
 
-A delegated grant omits the second event. Its terminal lifetime is holder
-close, explicit revocation by its bound current owner or root, or device
-teardown.
+A delegated grant omits creator-file revocation. Its terminal lifetime is
+grantor close, holder close, explicit revocation by its bound current owner or
+root, or device teardown.
 
 `GET_GRANT.state` reports whether pixel capture may proceed. Several states
 turn on *capture-safe content*, pixels the current master owns and may safely
@@ -278,9 +299,9 @@ the intended client and destroy or revoke them with the grant.
 The fd is an adapter around a kernel-native capture authority. The authority
 contains connector scope, rights, and revocation state, and evaluates them
 against snapshots supplied by the DRM/content ownership tracker. The adapter
-contains only UAPI concerns: grant ID, optional close-to-revoke file, holder
-DRM file, fd lifetime, and DRM events. Capture streams, connector attachments,
-and CEC transports retain the authority rather than the adapter.
+contains only UAPI concerns: grant ID, optional creator-file revocation,
+holder and grantor fd lifetime, and DRM events. Capture streams, connector
+attachments, and CEC transports retain the authority rather than the adapter.
 
 Trusted code linked into the driver may create an authority directly and use
 the same core lifecycle without fabricating a `drm_file`. The constructor is
