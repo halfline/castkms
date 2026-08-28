@@ -139,7 +139,10 @@ IDLE -> PREPARING -> WAITING_REUSE -> QUEUED -> IN_FLIGHT -> COMPLETING -> IDLE
 ```
 
 The driver puts the buffer in `PREPARING` while it gathers and installs the
-fences or timeline points needed for the request.
+fences or timeline points needed for the request. That state is also a
+lifetime barrier: stream teardown waits for preparation to finish, allowing
+the UAPI adapter to release authority and file-namespace locks before a
+reservation-object lock can sleep.
 
 `WAITING_REUSE` means that a previous reader or writer still owns the buffer;
 it is skipped when there is no dependency to wait on. In `COMPLETING`, the

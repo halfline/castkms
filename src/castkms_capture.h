@@ -194,6 +194,18 @@ bool castkms_capture_buffer_uses_syncobj(const struct castkms_capture_buffer *bu
 					 const struct drm_syncobj *syncobj);
 enum castkms_capture_sync_mode
 castkms_capture_buffer_sync_mode(const struct castkms_capture_buffer *buffer);
+
+/*
+ * A successful prepare places the buffer in PREPARING. Stream teardown then
+ * waits for submission to finish, so the caller may release locks protecting
+ * the stream namespace before doing potentially blocking fence preparation.
+ * The caller must pair success with exactly one submit_prepared() call.
+ */
+int castkms_capture_buffer_prepare_submit(
+	struct castkms_capture_buffer *buffer);
+int castkms_capture_buffer_submit_prepared(
+	struct castkms_capture_buffer *buffer,
+	struct castkms_capture_request *request);
 int castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 				  struct castkms_capture_request *request);
 int castkms_capture_buffer_get_cursor_data(struct castkms_capture_buffer *buffer,

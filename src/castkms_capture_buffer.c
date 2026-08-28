@@ -628,8 +628,8 @@ enum castkms_capture_sync_mode castkms_capture_buffer_sync_mode(
 	return buffer->sync_mode;
 }
 
-static int
-castkms_capture_buffer_begin_submit(struct castkms_capture_buffer *buffer)
+int castkms_capture_buffer_prepare_submit(
+	struct castkms_capture_buffer *buffer)
 {
 	struct castkms_capture_output *capture = &buffer->stream->output->capture;
 	unsigned long flags;
@@ -665,9 +665,23 @@ castkms_capture_buffer_abort_submit(struct castkms_capture_buffer *buffer)
 	spin_unlock_irqrestore(&capture->state_lock, flags);
 }
 
-int
-castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
-			      struct castkms_capture_request *request)
+static int
+castkms_capture_buffer_validate_request(
+	const struct castkms_capture_buffer *buffer,
+	const struct castkms_capture_request *request)
+{
+	if (!request || !request->complete)
+		return -EINVAL;
+	if (buffer->sync_mode == CASTKMS_CAPTURE_SYNC_IMPLICIT &&
+	    (request->ready_point || request->reuse_point))
+		return -EINVAL;
+
+	return 0;
+}
+
+int castkms_capture_buffer_submit_prepared(
+	struct castkms_capture_buffer *buffer,
+	struct castkms_capture_request *request)
 {
 	struct castkms_capture_stream *stream = buffer->stream;
 	struct castkms_capture_output *capture = &stream->output->capture;
@@ -680,14 +694,9 @@ castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
 	bool remove_callback = false;
 	int ret;
 
-	if (!request || !request->complete)
-		return -EINVAL;
-	if (buffer->sync_mode == CASTKMS_CAPTURE_SYNC_IMPLICIT &&
-	    (request->ready_point || request->reuse_point))
-		return -EINVAL;
-	ret = castkms_capture_buffer_begin_submit(buffer);
+	ret = castkms_capture_buffer_validate_request(buffer, request);
 	if (ret)
-		return ret;
+		goto out_abort_submit;
 
 	if (buffer->sync_mode == CASTKMS_CAPTURE_SYNC_IMPLICIT)
 		ret = castkms_capture_prepare_implicit_sync(buffer, &dependency,
@@ -831,5 +840,21 @@ out_signal_fence:
 out_abort_submit:
 	castkms_capture_buffer_abort_submit(buffer);
 	return ret;
+}
+
+int
+castkms_capture_buffer_submit(struct castkms_capture_buffer *buffer,
+			      struct castkms_capture_request *request)
+{
+	int ret;
+
+	ret = castkms_capture_buffer_validate_request(buffer, request);
+	if (ret)
+		return ret;
+	ret = castkms_capture_buffer_prepare_submit(buffer);
+	if (ret)
+		return ret;
+
+	return castkms_capture_buffer_submit_prepared(buffer, request);
 }
 EXPORT_SYMBOL_IF_KUNIT(castkms_capture_buffer_submit);

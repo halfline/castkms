@@ -667,11 +667,31 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 	    (args->ready_point || args->reuse_point))
 		return -EINVAL;
 
+	uapi_request = kzalloc_obj(*uapi_request);
+	if (!uapi_request)
+		return -ENOMEM;
+	uapi_request->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_FRAME;
+	uapi_request->event.base.length = sizeof(uapi_request->event);
+	uapi_request->request.complete = castkms_capture_uapi_request_complete;
+	uapi_request->request.ready_point = args->ready_point;
+	uapi_request->request.reuse_point = args->reuse_point;
+	uapi_request->dev = dev;
+	uapi_request->user_data = args->user_data;
+	uapi_request->stream_id = args->stream_id;
+	uapi_request->buffer_id = args->buffer_id;
+
+	ret = drm_event_reserve_init(dev, file_priv, &uapi_request->pending,
+				     &uapi_request->event.base);
+	if (ret) {
+		kfree(uapi_request);
+		return ret;
+	}
+
 	ret = castkms_grant_begin(file_priv, NULL,
 				  CASTKMS_CAPTURE_AUTHORITY_CAPTURE_PIXELS,
 				  &authority);
 	if (ret)
-		return ret;
+		goto out_cancel_event;
 
 	mutex_lock(&file_state->capture_lock);
 	uapi_stream = xa_load(&file_state->capture_streams, args->stream_id);
@@ -700,35 +720,25 @@ int castkms_capture_queue_buffer_ioctl(struct drm_device *dev, void *data,
 		goto out_unlock;
 	}
 
-	uapi_request = kzalloc_obj(*uapi_request);
-	if (!uapi_request) {
-		ret = -ENOMEM;
-		goto out_unlock;
-	}
-	uapi_request->event.base.type = DRM_CASTKMS_CAPTURE_EVENT_FRAME;
-	uapi_request->event.base.length = sizeof(uapi_request->event);
-	uapi_request->request.complete = castkms_capture_uapi_request_complete;
-	uapi_request->request.ready_point = args->ready_point;
-	uapi_request->request.reuse_point = args->reuse_point;
-	uapi_request->dev = dev;
-	uapi_request->user_data = args->user_data;
-	uapi_request->stream_id = args->stream_id;
-	uapi_request->buffer_id = args->buffer_id;
-
-	ret = drm_event_reserve_init(dev, file_priv, &uapi_request->pending,
-				     &uapi_request->event.base);
-	if (ret) {
-		kfree(uapi_request);
-		goto out_unlock;
-	}
-
-	ret = castkms_capture_buffer_submit(buffer, &uapi_request->request);
-	if (ret)
-		drm_event_cancel_free(dev, &uapi_request->pending);
+	/* PREPARING pins the stream and buffer across authority release. */
+	ret = castkms_capture_buffer_prepare_submit(buffer);
 
 out_unlock:
 	mutex_unlock(&file_state->capture_lock);
 	castkms_grant_end(authority);
+	if (ret)
+		goto out_cancel_event;
+
+	/* Fence preparation may wait on a reservation object. */
+	ret = castkms_capture_buffer_submit_prepared(
+		buffer, &uapi_request->request);
+	if (ret)
+		goto out_cancel_event;
+
+	return 0;
+
+out_cancel_event:
+	drm_event_cancel_free(dev, &uapi_request->pending);
 	return ret;
 }
 
