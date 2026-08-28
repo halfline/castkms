@@ -34,6 +34,8 @@ static_assert(sizeof(struct drm_castkms_revoke_grant) == 16,
 	      "revoke-grant ABI size changed");
 static_assert(sizeof(struct drm_castkms_get_grant) == 32,
 	      "get-grant ABI size changed");
+static_assert(offsetof(struct drm_castkms_get_grant, output_index) == 20,
+	      "get-grant output-index offset changed");
 static_assert(sizeof(struct drm_castkms_get_output) == 16,
 	      "get-output ABI size changed");
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24,
@@ -379,6 +381,22 @@ static int expect_holder_state(int grant_fd, uint32_t grant_id,
 			"grant %u query: id=%u state=%u flags=%#x, expected state=%u flags=%#x\n",
 			grant_id, grant.grant_id, grant.state, grant.flags,
 			expected_state, expected_flags);
+		return -1;
+	}
+	return 0;
+}
+
+static int expect_holder_output_index(int grant_fd,
+				      uint32_t expected_output_index)
+{
+	struct drm_castkms_get_grant grant;
+
+	if (get_holder_grant(grant_fd, &grant))
+		return -1;
+	if (grant.output_index != expected_output_index) {
+		fprintf(stderr,
+			"grant output index %u, expected %u\n",
+			grant.output_index, expected_output_index);
 		return -1;
 	}
 	return 0;
@@ -980,12 +998,31 @@ out:
 	return ret;
 }
 
-static int expect_plain_capture_denied(int fd, uint32_t connector_id)
+static int get_output_index(int fd, uint32_t connector_id,
+			    uint32_t *output_index)
 {
 	struct drm_castkms_get_output output = {
 		.connector_id = connector_id,
 		.output_index = UINT32_MAX,
 	};
+
+	if (ioctl(fd, DRM_IOCTL_CASTKMS_GET_OUTPUT, &output) < 0) {
+		perror("plain-fd GET_OUTPUT");
+		return -1;
+	}
+	if (output.connector_id != connector_id || output.flags ||
+	    output.output_index == UINT32_MAX || output.reserved) {
+		fprintf(stderr, "plain-fd GET_OUTPUT returned invalid metadata\n");
+		return -1;
+	}
+	*output_index = output.output_index;
+	return 0;
+}
+
+static int expect_plain_capture_denied(int fd, uint32_t connector_id,
+				       uint32_t *output_index)
+{
+	uint32_t discovered_output_index;
 	struct drm_castkms_capture_attach_monitor attach = {
 		.connector_id = connector_id,
 	};
@@ -1006,15 +1043,10 @@ static int expect_plain_capture_denied(int fd, uint32_t connector_id)
 	};
 	struct drm_castkms_get_grant get_grant = {};
 
-	if (ioctl(fd, DRM_IOCTL_CASTKMS_GET_OUTPUT, &output) < 0) {
-		perror("plain-fd GET_OUTPUT");
+	if (get_output_index(fd, connector_id, &discovered_output_index))
 		return -1;
-	}
-	if (output.connector_id != connector_id || output.flags ||
-	    output.output_index == UINT32_MAX || output.reserved) {
-		fprintf(stderr, "plain-fd GET_OUTPUT returned invalid metadata\n");
-		return -1;
-	}
+	if (output_index)
+		*output_index = discovered_output_index;
 	if (expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_GET_GRANT, &get_grant,
 			       ENODATA, "plain-fd GET_GRANT") ||
 	    expect_ioctl_errno(fd, DRM_IOCTL_CASTKMS_CAPTURE_ATTACH_MONITOR,
@@ -1357,7 +1389,9 @@ int main(int argc, char **argv)
 	uint32_t admin_buffer_id = 0;
 	uint32_t normal_id = 0;
 	uint32_t admin_id = 0;
+	uint32_t foreign_output_index = UINT32_MAX;
 	uint32_t foreign_connector_id = 0;
+	uint32_t output_index = UINT32_MAX;
 	uint32_t connector_id;
 	int masterless_admin_control_fd = -1;
 	int issuer_close_control_fd = -1;
@@ -1407,9 +1441,8 @@ int main(int argc, char **argv)
 		perror("issuer DRM_IOCTL_SET_MASTER");
 		goto out;
 	}
-	if (expect_plain_capture_denied(issuer, connector_id))
+	if (expect_plain_capture_denied(issuer, connector_id, &output_index))
 		goto out;
-	printf("output_identity_query=pass\n");
 	printf("grant_plain_fd_denied=pass\n");
 	if (expect_create_flag_namespaces(issuer, connector_id))
 		goto out;
@@ -1430,19 +1463,25 @@ int main(int argc, char **argv)
 	if (!(fcntl(normal_fd, F_GETFD) & FD_CLOEXEC) ||
 	    expect_holder_state(normal_fd, normal_id,
 				DRM_CASTKMS_GRANT_STATE_PENDING, 0) ||
+	    expect_holder_output_index(normal_fd, output_index) ||
 	    expect_holder_cannot_create_grant(normal_fd, connector_id) ||
 	    expect_holder_cannot_become_master(normal_fd) ||
 	    test_holder_syncobj_eventfd(normal_fd))
 		goto out;
+	printf("output_identity_query=pass\n");
 	printf("grant_scm_rights=pass\n");
 	printf("grant_syncobj_eventfd=pass\n");
 	if (foreign_connector_id) {
-		if (create_grant(issuer, foreign_connector_id, full_rights, 0,
+		if (get_output_index(issuer, foreign_connector_id,
+				     &foreign_output_index) ||
+		    create_grant(issuer, foreign_connector_id, full_rights, 0,
 				 &foreign_grant_fd, &foreign_grant_control_fd,
 				 &foreign_grant_id) ||
 		    expect_control_pending(foreign_grant_control_fd) ||
 		    expect_holder_state(foreign_grant_fd, foreign_grant_id,
 					DRM_CASTKMS_GRANT_STATE_PENDING, 0) ||
+		    expect_holder_output_index(foreign_grant_fd,
+					       foreign_output_index) ||
 		    expect_foreign_connector_denied(normal_fd,
 						    foreign_connector_id) ||
 		    expect_foreign_connector_denied(foreign_grant_fd,
@@ -1601,7 +1640,7 @@ int main(int argc, char **argv)
 		perror("open replacement master");
 		goto out;
 	}
-	if (expect_plain_capture_denied(master_b, connector_id) ||
+	if (expect_plain_capture_denied(master_b, connector_id, NULL) ||
 	    expect_holder_state(normal_fd, normal_id,
 					DRM_CASTKMS_GRANT_STATE_SUSPENDED_OTHER_MASTER,
 					0) ||

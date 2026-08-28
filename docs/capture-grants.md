@@ -125,6 +125,11 @@ Create GEM objects, framebuffer IDs, syncobjs, registrations, and queues on
 this file. Handles from an independently opened DRM fd are in the wrong
 namespace.
 
+`GET_GRANT` returns both the authorized connector ID and its stable,
+device-local output index. Ordinary primary-node discovery uses `GET_OUTPUT`;
+the grant holder does not need a second DRM open or optional CEC support to
+publish the same identity.
+
 ## Rights
 
 Rights are immutable and connector-scoped:

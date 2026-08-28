@@ -162,7 +162,7 @@ static int open_capture_grant(int inherited_fd, uint32_t required_rights,
 	    grant.flags & ~DRM_CASTKMS_GRANT_FLAGS_MASK ||
 	    grant.state == DRM_CASTKMS_GRANT_STATE_REVOKED ||
 	    grant.state > DRM_CASTKMS_GRANT_STATE_REVOKED ||
-	    grant.reserved || grant.reserved2) {
+	    grant.reserved) {
 		fprintf(stderr, "inherited fd is not a usable capture grant\n");
 		goto fail;
 	}

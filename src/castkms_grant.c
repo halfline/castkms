@@ -25,6 +25,7 @@
 #include <kunit/visibility.h>
 
 #include "castkms_capture_authority.h"
+#include "castkms_connector.h"
 #include "castkms_file.h"
 #include "castkms_grant.h"
 #include "castkms_grant_file.h"
@@ -109,6 +110,7 @@ static_assert(offsetof(struct drm_castkms_create_grant, reserved) == 28);
 static_assert(_IOC_SIZE(DRM_IOCTL_CASTKMS_CREATE_GRANT) == 32);
 static_assert(sizeof(struct drm_castkms_revoke_grant) == 16);
 static_assert(sizeof(struct drm_castkms_get_grant) == 32);
+static_assert(offsetof(struct drm_castkms_get_grant, output_index) == 20);
 static_assert(sizeof(struct drm_event_castkms_grant_revoked) == 24);
 static_assert(sizeof(struct drm_event_castkms_grant_state) == 32);
 
@@ -770,7 +772,7 @@ int castkms_grant_get_ioctl(struct drm_device *dev, void *data,
 	enum castkms_capture_authority_state state;
 	int ret;
 
-	if (args->flags || args->reserved || args->reserved2)
+	if (args->flags || args->output_index || args->reserved)
 		return -EINVAL;
 	if (!file_state)
 		return -ENODATA;
@@ -809,8 +811,9 @@ int castkms_grant_get_ioctl(struct drm_device *dev, void *data,
 		args->flags |= DRM_CASTKMS_GRANT_FLAG_ADMIN;
 	if (grant->delegated)
 		args->flags |= DRM_CASTKMS_GRANT_FLAG_DELEGATED;
+	args->output_index = drm_connector_to_castkms_connector(
+		castkms_capture_authority_connector(authority))->output_index;
 	args->reserved = 0;
-	args->reserved2 = 0;
 	mutex_unlock(&grant->lock);
 	castkms_capture_authority_put(authority);
 

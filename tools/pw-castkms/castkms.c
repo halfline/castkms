@@ -85,7 +85,7 @@ static int query_grant(struct pw_castkms *bridge)
 	    (grant.rights & required_grant_rights) != required_grant_rights ||
 	    (grant.flags & ~DRM_CASTKMS_GRANT_FLAGS_MASK) ||
 	    grant.state > DRM_CASTKMS_GRANT_STATE_REVOKED ||
-	    grant.reserved || grant.reserved2)
+	    grant.reserved)
 		return -EPROTO;
 	if (grant.state == DRM_CASTKMS_GRANT_STATE_REVOKED)
 		return -EKEYREVOKED;
@@ -94,6 +94,7 @@ static int query_grant(struct pw_castkms *bridge)
 	bridge->connector_id = grant.connector_id;
 	bridge->grant_rights = grant.rights;
 	bridge->grant_state = grant.state;
+	bridge->output_index = grant.output_index;
 	return 0;
 }
 
@@ -199,49 +200,11 @@ static uint32_t first_compatible_crtc(int fd, const drmModeRes *resources,
 	return 0;
 }
 
-static int connector_output_index(int fd, uint32_t connector_id,
-				  uint32_t *output_index)
-{
-	drmModeObjectProperties *properties;
-	int status = -ENOENT;
-	uint32_t i;
-
-	properties = drmModeObjectGetProperties(fd, connector_id,
-						DRM_MODE_OBJECT_CONNECTOR);
-	if (!properties)
-		return errno ? -errno : -EIO;
-
-	for (i = 0; i < properties->count_props; i++) {
-		drmModePropertyRes *property =
-			drmModeGetProperty(fd, properties->props[i]);
-
-		if (!property)
-			continue;
-		if (!strcmp(property->name, "output_index")) {
-			uint64_t value = properties->prop_values[i];
-
-			if (value > UINT32_MAX) {
-				status = -EOVERFLOW;
-			} else {
-				*output_index = (uint32_t)value;
-				status = 0;
-			}
-			drmModeFreeProperty(property);
-			break;
-		}
-		drmModeFreeProperty(property);
-	}
-
-	drmModeFreeObjectProperties(properties);
-	return status;
-}
-
 static int describe_grant_connector(struct pw_castkms *bridge,
 				    uint32_t preferred_crtc,
 				    uint32_t *candidate_crtc)
 {
 	drmModeRes *resources = drmModeGetResources(bridge->grant_fd);
-	uint32_t output_index;
 	int status = -ENOENT;
 	int i;
 
@@ -284,15 +247,6 @@ static int describe_grant_connector(struct pw_castkms *bridge,
 			goto out_connector;
 		}
 
-		status = connector_output_index(bridge->grant_fd,
-					connector->connector_id, &output_index);
-		if (status) {
-			fprintf(stderr,
-				"grant connector has no valid CastKMS output index\n");
-			goto out_connector;
-		}
-
-		bridge->output_index = output_index;
 		(void)snprintf(
 			bridge->connector_name, sizeof(bridge->connector_name),
 			"%s-%u",

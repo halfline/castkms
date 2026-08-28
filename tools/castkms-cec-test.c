@@ -122,7 +122,7 @@ static int open_grant(int inherited_fd, uint32_t *connector_id)
 	    (grant.rights & rights) != rights ||
 	    grant.state == DRM_CASTKMS_GRANT_STATE_REVOKED ||
 	    grant.state > DRM_CASTKMS_GRANT_STATE_REVOKED ||
-	    grant.reserved || grant.reserved2) {
+	    grant.reserved) {
 		fprintf(stderr, "inherited fd is not a usable CEC grant\n");
 		close(fd);
 		return -1;

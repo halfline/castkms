@@ -223,8 +223,8 @@ struct drm_castkms_revoke_grant {
  * @rights: output DRM_CASTKMS_GRANT_* mask
  * @state: output DRM_CASTKMS_GRANT_STATE_* value
  * @flags: must be zero on input; output DRM_CASTKMS_GRANT_FLAG_* mask
+ * @output_index: must be zero on input; output stable device-local identity
  * @reserved: must be zero on input and is zero on output
- * @reserved2: must be zero on input and is zero on output
  *
  * A holder queries its own grant with @grant_id zero. A revoker file queries a
  * grant by ID. The current top-level owner master may query a delegated grant
@@ -243,8 +243,8 @@ struct drm_castkms_get_grant {
 	__u32 rights;
 	__u32 state;
 	__u32 flags;
-	__u32 reserved;
-	__u64 reserved2;
+	__u32 output_index;
+	__u64 reserved;
 };
 
 /**
@@ -258,8 +258,8 @@ struct drm_castkms_get_grant {
  * a connector-scoped grant exists. The index is assigned once when CastKMS
  * creates the output and is independent of DRM connector type IDs, resource
  * array positions, CEC support, and primary-node numbering. Grant-bearing
- * files reject this ioctl because their connector identity is already fixed by
- * DRM_IOCTL_CASTKMS_GET_GRANT.
+ * files reject this ioctl because DRM_IOCTL_CASTKMS_GET_GRANT returns both
+ * their authorized connector and its output index.
  */
 struct drm_castkms_get_output {
 	__u32 connector_id;
