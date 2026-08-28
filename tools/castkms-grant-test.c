@@ -402,6 +402,67 @@ static int expect_holder_output_index(int grant_fd,
 	return 0;
 }
 
+static int test_holder_fdinfo(int grant_fd, uint32_t grant_id)
+{
+	char path[64];
+	char line[256];
+	FILE *fdinfo;
+	bool saw_driver = false;
+	bool saw_grant_id = false;
+
+	if (snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", grant_fd) >=
+	    (int)sizeof(path)) {
+		fprintf(stderr, "grant fdinfo path is too long\n");
+		return -1;
+	}
+	fdinfo = fopen(path, "r");
+	if (!fdinfo) {
+		perror("open grant fdinfo");
+		return -1;
+	}
+
+	while (fgets(line, sizeof(line), fdinfo)) {
+		char driver[64];
+		unsigned int parsed_grant_id;
+
+		if (sscanf(line, "drm-driver:\t%63s", driver) == 1) {
+			if (strcmp(driver, "castkms")) {
+				fprintf(stderr, "grant fdinfo reported driver %s\n",
+					driver);
+				goto fail;
+			}
+			saw_driver = true;
+		}
+		if (sscanf(line, "castkms-grant-id:\t%u", &parsed_grant_id) == 1) {
+			if (parsed_grant_id != grant_id) {
+				fprintf(stderr,
+					"grant fdinfo reported id %u, expected %u\n",
+					parsed_grant_id, grant_id);
+				goto fail;
+			}
+			saw_grant_id = true;
+		}
+	}
+	if (ferror(fdinfo)) {
+		perror("read grant fdinfo");
+		goto fail;
+	}
+	if (!saw_driver || !saw_grant_id) {
+		if (!saw_driver)
+			fprintf(stderr, "grant fdinfo omitted driver metadata\n");
+		if (!saw_grant_id)
+			fprintf(stderr, "grant fdinfo omitted grant-id metadata\n");
+		goto fail;
+	}
+
+	fclose(fdinfo);
+	return 0;
+
+fail:
+	fclose(fdinfo);
+	return -1;
+}
+
 static int revoke_grant(int issuer_fd, uint32_t grant_id)
 {
 	struct drm_castkms_revoke_grant revoke = {
@@ -1466,11 +1527,13 @@ int main(int argc, char **argv)
 	    expect_holder_output_index(normal_fd, output_index) ||
 	    expect_holder_cannot_create_grant(normal_fd, connector_id) ||
 	    expect_holder_cannot_become_master(normal_fd) ||
-	    test_holder_syncobj_eventfd(normal_fd))
+	    test_holder_syncobj_eventfd(normal_fd) ||
+	    test_holder_fdinfo(normal_fd, normal_id))
 		goto out;
 	printf("output_identity_query=pass\n");
 	printf("grant_scm_rights=pass\n");
 	printf("grant_syncobj_eventfd=pass\n");
+	printf("grant_fdinfo=pass\n");
 	if (foreign_connector_id) {
 		if (get_output_index(issuer, foreign_connector_id,
 				     &foreign_output_index) ||

@@ -207,6 +207,7 @@ static const struct file_operations castkms_driver_fops = {
 	.compat_ioctl = CASTKMS_DRM_COMPAT_IOCTL,
 	.poll = drm_poll,
 	.read = drm_read,
+	.show_fdinfo = drm_show_fdinfo,
 	.llseek = noop_llseek,
 	.get_unmapped_area = drm_gem_get_unmapped_area,
 	.mmap = drm_gem_mmap,

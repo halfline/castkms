@@ -928,7 +928,7 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 	u32 rights;
 	bool administrative;
 	bool delegated;
-	bool attached = false;
+	bool attached;
 
 	if (!grant)
 		return;
@@ -958,7 +958,8 @@ void castkms_grant_show_fdinfo(struct drm_printer *p, struct drm_file *file)
 		state_name = "suspended-foreign-content";
 	else
 		state_name = "revoked";
-	/* Grant-owned attachment arrives with the attachment UAPI. */
+	attached = castkms_connector_authority_is_attached(
+		castkms_capture_authority_connector(authority), authority);
 	drm_printf(p, "castkms-grant-id:\t%u\n", grant_id);
 	drm_printf(p, "castkms-grant-connector:\t%u\n", connector_id);
 	drm_printf(p, "castkms-grant-rights:\t0x%x\n", rights);
